@@ -1,0 +1,229 @@
+/* ==========================================================================
+   Phase 3 — Tablet (768–1199px) & large screens (1200–2000px+)
+   Global rules for all pages using .main-page-content; desktop ≥1200px unchanged
+   ========================================================================== */
+
+.custom-app-layout {
+  width: 100%;
+  max-width: 100%;
+}
+
+.custom-content {
+  min-width: 0;
+}
+
+.main-page-content {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Table wrapper (CustomTable) */
+.custom-table-wrapper {
+  border: 1px solid var(--txtfld-border);
+  border-radius: 10px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.custom-table-wrapper--scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ----- Narrow desktop with sidebar (992–1199px) ----- */
+@media (min-width: 992px) and (max-width: 1199.98px) {
+  .with-sidebar {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+
+  #sidebar,
+  .custom-sidebar .sidebar {
+    min-width: 220px;
+    max-width: 220px;
+  }
+
+  .main-page-content {
+    padding: 16px;
+  }
+
+  .custom-page-header__franchise {
+    min-width: 160px;
+    max-width: 200px;
+  }
+}
+
+/* ----- Tablet & narrow content (≤1199px) — filters, tables, modals, grids ----- */
+@media (max-width: 1199.98px) {
+  .main-page-content {
+    padding: 16px;
+  }
+
+  /* Utility / filter bars (list pages) */
+  .custom-utilty-box:not(.custom-utilty-box--title-only) {
+    flex-direction: column;
+    align-items: start;
+    gap: 12px;
+  }
+
+  .custom-utilty-box:not(.custom-utilty-box--title-only) .custom-utilty-tools-inline {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .custom-utilty-tools-inline .custom-utility-control-slot {
+    flex: 1 1 calc(50% - 6px);
+    min-width: min(100%, 160px);
+  }
+
+  .custom-utilty-tools-inline .custom-search-container {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 100%;
+  }
+
+  .custom-utilty-tools-inline.custom-utilty-tools-inline--expenses-wide-search
+    .custom-search-container,
+  .custom-utilty-tools-inline.custom-utilty-tools-inline--orders-wide-search
+    .custom-search-container {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .custom-utilty-box .custom-form-input[type="text"] {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .custom-icon-container {
+    flex-wrap: wrap;
+  }
+
+  .order-payments-filters-row {
+    flex-wrap: wrap !important;
+  }
+
+  .order-payments-filters-row > [class*="col"] {
+    flex: 1 1 10rem !important;
+    max-width: 100% !important;
+  }
+
+  .financial-toolbar-filters .row {
+    row-gap: 0.75rem;
+  }
+
+  .filters-container .row {
+    row-gap: 0.75rem;
+  }
+
+  /* Summary stat boxes */
+  .main-page-content .box-container {
+    gap: 12px;
+  }
+
+  .main-page-content .box-container .box {
+    width: auto;
+    flex: 1 1 calc(33% - 6px);
+    min-width: min(100%, 220px);
+    max-width: 100%;
+    flex-grow: 0;
+  }
+
+  /* Tables — scroll when content is wider than viewport */
+  .main-page-content .custom-table-wrapper:not(.custom-table-wrapper--scroll) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .main-page-content .custom-table-wrapper:not(.custom-table-wrapper--scroll) table {
+    min-width: 640px;
+  }
+
+  /* Modals */
+  .custom-model-detail,
+  .custom-order-model-detail {
+    min-width: 0 !important;
+    width: min(94vw, 100%) !important;
+    max-width: 94vw !important;
+  }
+
+  .modal-dialog {
+    max-width: min(94vw, 600px);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .modal-dialog.modal-lg,
+  .modal-dialog.modal-xl {
+    max-width: min(96vw, 900px);
+  }
+
+  /* Detail / form rows */
+  .custom-other-details .row > [class*="col-"],
+  .user-detail-container .row > [class*="col-"] {
+    margin-bottom: 0.5rem;
+  }
+
+  /* Chat */
+  .normal-chat-page {
+    min-height: 0;
+  }
+
+  /* Settings & franchise grids */
+  .settings-role-box-container {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .my-franchise-box-container {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767.98px) {
+  .main-page-content .box-container .box {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .settings-role-box-container {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 576px) and (max-width: 767.98px) {
+  .settings-role-box-container {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ----- Large desktop (1200–1999px) — light spacing only ----- */
+@media (min-width: 1200px) and (max-width: 1999.98px) {
+  .main-page-content {
+    padding: 20px 24px;
+  }
+
+  .custom-utilty-tools-inline .custom-search-container {
+    width: 16rem;
+  }
+}
+
+/* ----- Ultra-wide (≥2000px) — padding only; layout unchanged ----- */
+@media (min-width: 2000px) {
+  .main-page-content {
+    padding: 24px 40px;
+  }
+
+  .custom-content {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+
+  .modal-dialog.modal-xl {
+    max-width: min(1200px, 80vw);
+  }
+
+  .modal-dialog.add-quote-modal-dialog {
+    max-width: min(1100px, 85vw);
+  }
+}

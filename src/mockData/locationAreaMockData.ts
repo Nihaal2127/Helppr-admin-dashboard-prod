@@ -1,0 +1,48 @@
+// Standard mock JSON-style rows for Areas.
+// These are later enriched with real state / city IDs in the service layer.
+export const locationAreaSeeds = [
+  {
+    _id: "mock-area-benz-circle",
+    name: "Benz Circle",
+    state_label: "Andhra Pradesh",
+    city_label: "Vijayawada",
+    pincodes: ["520010", "520008"],
+    is_active: true,
+    deleted_at: null,
+    created_at: null,
+    updated_at: null,
+  },
+  {
+    _id: "Auto Nagar",
+    name: "Auto Nagar",
+    state_label: "Andhra Pradesh",
+    city_label: "Vijayawada",
+    pincodes: ["530017", "530013"],
+    is_active: false,
+    deleted_at: null,
+    created_at: null,
+    updated_at: null,
+  },
+  {
+    _id: "mock-area-gachibowli",
+    name: "Gachibowli",
+    state_label: "Telangana",
+    city_label: "Warangal",
+    pincodes: ["500032", "500081"],
+    is_active: true,
+    deleted_at: null,
+    created_at: null,
+    updated_at: null,
+  },
+  {
+    _id: "mock-area-hanamkonda",
+    name: "Hanamkonda",
+    state_label: "Telangana",
+    city_label: "Hanamkonda",
+    pincodes: ["506001", "506009"],
+    is_active: false,
+    deleted_at: null,
+    created_at: null,
+    updated_at: null,
+  },
+];
