@@ -10,8 +10,9 @@ const Financials = () => {
   const [tiles] = useState<{ title: string; route: string }[]>([
     { title: "Order\nPayments", route: ROUTES.ORDER_PAYMENTS.path },
     { title: "Partner\nPayout", route: ROUTES.PARTNER_PAYOUT.path },
-    { title: "Refunds", route: ROUTES.FINANCIAL_REFUNDS.path },
+    { title: "Refund", route: ROUTES.FINANCIAL_REFUNDS.path },
   ]);
+
 
   const { register, setValue } = useForm({
     defaultValues: franchiseHeaderFormDefaults(),
