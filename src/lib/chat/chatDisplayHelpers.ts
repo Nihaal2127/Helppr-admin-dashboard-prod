@@ -1,4 +1,4 @@
-import { AppConstant } from "../global/AppConstant";
+import { AppConstant, getChatServiceUrl } from "../global/AppConstant";
 import { resolveMediaAssetSrc } from "../../services/documentUploadService";
 import {
   ChatMessageModel,
@@ -221,7 +221,7 @@ export function resolveChatMediaUrlCandidates(fileUrl?: string | null): string[]
   }
 
   const urls: string[] = [];
-  const chatBase = AppConstant.CHAT_SERVICE_URL.replace(/\/$/, "");
+  const chatBase = getChatServiceUrl().replace(/\/$/, "");
   const normalized = raw.replace(/^\//, "");
 
   if (raw.startsWith(chatBase)) {

@@ -39,7 +39,9 @@ import EditPartnerCategoriesServicesDialog from "../../pages/userManagement/Edit
 import AddEditUserDialog from "../../pages/userManagement/AddEditUserDialog";
 import {
   partnerBankAccountsFromUser,
-  partnerDocumentDisplayTitle,
+  PARTNER_VERIFICATION_DOCUMENT_SLOTS,
+  findPartnerDocumentForSlot,
+  partnerDocumentHasUploadedImage,
 } from "../../lib/partner/partnerFormDocuments";
 import { resolvePartnerFranchiseFieldsFromUser } from "../../lib/partner/partnerFranchiseDisplay";
 import PartnerSubscriptionDetailsRows from "./PartnerSubscriptionDetailsRows";
@@ -536,23 +538,31 @@ function PartnerDetailsDialogView({
                 {!userDetails?.documents?.length ? (
                   <div className="text-muted small py-2">No documents</div>
                 ) : (
-                  userDetails.documents.map((document) => (
-                    <DetailsRowLinkDocument
-                      key={
-                        document._id ??
-                        document.document_id ??
-                        document.name ??
-                        ""
-                      }
-                      title={partnerDocumentDisplayTitle(document.name)}
-                      isEditable={
-                        document.document_image === "" ? false : true
-                      }
-                      onViewClick={() => CustomImagePreviewDialog(document)}
-                      onAddClick={() => addDocument(document)}
-                      // onDeleteClick={() => addDocument(document)}
-                    />
-                  ))
+                  PARTNER_VERIFICATION_DOCUMENT_SLOTS.map((slot) => {
+                    const document = findPartnerDocumentForSlot(
+                      userDetails.documents,
+                      slot
+                    );
+                    return (
+                      <DetailsRowLinkDocument
+                        key={slot.id}
+                        title={slot.title}
+                        isEditable={partnerDocumentHasUploadedImage(document)}
+                        onViewClick={() =>
+                          document && CustomImagePreviewDialog(document)
+                        }
+                        onAddClick={() => {
+                          if (document) {
+                            addDocument(document);
+                          } else {
+                            showErrorAlert(
+                              "No document record for this type yet."
+                            );
+                          }
+                        }}
+                      />
+                    );
+                  })
                 )}
                 </div>
               </section>

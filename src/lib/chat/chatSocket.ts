@@ -1,5 +1,5 @@
 import { io, Socket } from "socket.io-client";
-import { AppConstant } from "../global/AppConstant";
+import { AppConstant, getChatServiceUrl } from "../global/AppConstant";
 import { mapChatMessage, ChatMessageModel } from "../models/ChatModel";
 
 export type ChatSocketSendPayload = {
@@ -37,6 +37,7 @@ type PresenceUpdatedHandler = (payload: {
 }) => void;
 
 let socket: Socket | null = null;
+let socketBaseUrl: string | null = null;
 let connected = false;
 let lastConnectError = "";
 let socketConsumers = 0;
@@ -277,6 +278,15 @@ export function connectChatSocket(): Socket | null {
   const token = getToken();
   if (!token) return null;
 
+  const chatServiceUrl = getChatServiceUrl();
+
+  if (socket && socketBaseUrl && socketBaseUrl !== chatServiceUrl) {
+    socket.removeAllListeners();
+    socket.disconnect();
+    socket = null;
+    socketBaseUrl = null;
+  }
+
   if (socket?.connected) return socket;
 
   if (socket) {
@@ -287,7 +297,8 @@ export function connectChatSocket(): Socket | null {
     return socket;
   }
 
-  socket = io(AppConstant.CHAT_SERVICE_URL, {
+  socketBaseUrl = chatServiceUrl;
+  socket = io(chatServiceUrl, {
     auth: { token },
     transports: ["polling", "websocket"],
     autoConnect: true,
@@ -339,6 +350,7 @@ export function disconnectChatSocket() {
   if (socket) {
     socket.disconnect();
     socket = null;
+    socketBaseUrl = null;
   }
 }
 

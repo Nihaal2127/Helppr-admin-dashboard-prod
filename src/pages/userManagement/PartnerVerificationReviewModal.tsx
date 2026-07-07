@@ -41,7 +41,12 @@ import {
 } from "../../lib/partner/partnerCategoryServiceView";
 import EditPartnerCategoriesServicesDialog from "./EditPartnerCategoriesServicesDialog";
 import AddEditUserDialog from "./AddEditUserDialog";
-import { partnerBankAccountsFromUser } from "../../lib/partner/partnerFormDocuments";
+import {
+  partnerBankAccountsFromUser,
+  PARTNER_VERIFICATION_DOCUMENT_SLOTS,
+  findPartnerDocumentForSlot,
+  partnerDocumentHasUploadedImage,
+} from "../../lib/partner/partnerFormDocuments";
 import { resolvePartnerFranchiseFieldsFromUser } from "../../lib/partner/partnerFranchiseDisplay";
 import { formatGenderLabel } from "../../lib/user/genderOptions";
 import PartnerSubscriptionDetailsRows from "../../components/partner/PartnerSubscriptionDetailsRows";
@@ -56,60 +61,6 @@ type CatalogServiceLite = {
   desc?: string;
   price?: number | null;
 };
-
-type PartnerVerificationDocSlot = {
-  id: string;
-  title: string;
-  match: (normalizedName: string) => boolean;
-};
-
-/** Fixed rows; matched to `documents[].name` from the API (case-insensitive). */
-const PARTNER_VERIFICATION_DOCUMENT_SLOTS: PartnerVerificationDocSlot[] = [
-  {
-    id: "pan_card",
-    title: "PAN Card",
-    match: (n) => n.includes("pan") && n.includes("card"),
-  },
-  {
-    id: "aadhar_card",
-    title: "Aadhar Card",
-    match: (n) => n.includes("aadhar") || n.includes("aadhaar"),
-  },
-  {
-    id: "driving_license", 
-    title: "Driving License",
-    match: (n) => n.includes("driving") && n.includes("license"),
-  },
-  {
-    id: "vehicle_registration",
-    title: "Vehicle Registration",
-    match: (n) => n.includes("vehicle") && n.includes("registration"),
-  },
-  {
-    id: "police_verification",
-    title: "Others",
-    match: (n) =>
-      (n.includes("police") && n.includes("verification")) ||
-      n.includes("police_verification_certificate"),
-  },
-];
-
-function normalizePartnerDocName(name: string | null | undefined): string {
-  return String(name ?? "")
-    .trim()
-    .toLowerCase();
-}
-
-function findPartnerVerificationDocForSlot(
-  documents: DocumentModel[] | undefined,
-  slot: PartnerVerificationDocSlot
-): DocumentModel | undefined {
-  if (!documents?.length) return undefined;
-  return documents.find((d) => {
-    const n = normalizePartnerDocName(d.name);
-    return Boolean(n) && slot.match(n);
-  });
-}
 
 type PartnerVerificationReviewModalProps = {
   userId: string;
@@ -357,11 +308,11 @@ function PartnerVerificationReviewModalView({
           (s) => s.id === slotId
         );
         if (!slot) continue;
-        const doc = findPartnerVerificationDocForSlot(
+        const doc = findPartnerDocumentForSlot(
           userDetails?.documents,
           slot
         );
-        if (!String(doc?.document_image ?? "").trim()) {
+        if (!partnerDocumentHasUploadedImage(doc)) {
           missingMandatoryDocs.push(slot.title);
         }
       }
@@ -782,13 +733,11 @@ function PartnerVerificationReviewModalView({
               </div>
               <div className="d-flex flex-column gap-1 mt-2">
                 {PARTNER_VERIFICATION_DOCUMENT_SLOTS.map((slot) => {
-                  const doc = findPartnerVerificationDocForSlot(
+                  const doc = findPartnerDocumentForSlot(
                     userDetails?.documents,
                     slot
                   );
-                  const hasFile = Boolean(
-                    String(doc?.document_image ?? "").trim()
-                  );
+                  const hasFile = partnerDocumentHasUploadedImage(doc);
                   const canAct = Boolean(pendingOrRejected);
 
                   return (
