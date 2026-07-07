@@ -1,11 +1,24 @@
 import { CURRENCY } from "./paymentAndCurrency";
 
+/** Avoid mixed-content blocks when the app is served over HTTPS. */
+function resolveChatServiceUrl(): string {
+  const configured =
+    process.env.REACT_APP_CHAT_SERVICE_URL?.trim() || "https://chat.helppr.in";
+  if (
+    typeof window !== "undefined" &&
+    window.location.protocol === "https:" &&
+    configured.startsWith("http://")
+  ) {
+    return configured.replace(/^http:\/\//i, "https://");
+  }
+  return configured;
+}
+
 export const AppConstant = {
   BASE_URL:
     "https://app.helppr.in/api", //Help Pr Live
   /** Chat Service VPS — REST + Socket.IO (see CHAT_MODULE_FRONTEND.md). */
-  CHAT_SERVICE_URL:
-    process.env.REACT_APP_CHAT_SERVICE_URL?.trim() || "http://chat.helppr.in",
+  CHAT_SERVICE_URL: resolveChatServiceUrl(),
   IMAGE_BASE_URL: "", //Help Pr Live
   // BASE_URL: "http://localhost:5001/api",
   // BASE_URL: "https://raamisegei.execute-api.us-east-1.amazonaws.com/dev/api",
