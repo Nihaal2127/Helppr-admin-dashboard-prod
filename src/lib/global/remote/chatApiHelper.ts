@@ -31,7 +31,7 @@ export const chatApiRequest = async (
       "Content-Type": "application/json",
     };
 
-    const requestUrl = `${getChatServiceUrl()}${endpoint}`;
+    const requestUrl = `${getChatServiceUrl().replace(/^http:\/\//i, "https://")}${endpoint}`;
 
     const response = await fetch(requestUrl, {
       method,

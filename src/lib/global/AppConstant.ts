@@ -1,17 +1,18 @@
 import { CURRENCY } from "./paymentAndCurrency";
 
-const CHAT_SERVICE_URL_DEFAULT = "https://chat.helppr.in";
+const CHAT_SERVICE_URL = "https://chat.helppr.in";
 
-/** Chat base URL for REST + Socket.IO — always HTTPS. */
+/**
+ * Chat base URL for REST + Socket.IO.
+ * Hard-coded HTTPS — CRA bakes REACT_APP_* at build time; ignoring env avoids
+ * stale `http://` values from server CI/.env in production bundles.
+ */
 export function getChatServiceUrl(): string {
-  const configured =
-    process.env.REACT_APP_CHAT_SERVICE_URL?.trim() || CHAT_SERVICE_URL_DEFAULT;
-
-  if (/^http:\/\//i.test(configured)) {
-    return configured.replace(/^http:\/\//i, "https://");
+  const fromEnv = process.env.REACT_APP_CHAT_SERVICE_URL?.trim();
+  if (fromEnv && /^https:\/\//i.test(fromEnv)) {
+    return fromEnv.replace(/\/$/, "");
   }
-
-  return configured;
+  return CHAT_SERVICE_URL;
 }
 
 export const AppConstant = {

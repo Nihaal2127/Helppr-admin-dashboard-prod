@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Row, Col, Button } from "react-bootstrap";
+import { Row, Col, Button, Modal } from "react-bootstrap";
 import { Link } from "react-router-dom";
 import circleEdit from "../../assets/icons/circle_edit.svg";
 import loginLogo from "../../assets/icons/login_logo.svg";
@@ -7,7 +7,8 @@ import EditProfile from "./EditProfile";
 import { UserModel } from "../../lib/models/UserModel";
 import { getCreatedById } from "../../lib/global/localStorageHelper";
 import { fetchById, createOrUpdateUser } from "../../services/adminService";
-import CustomPhotoUpload from "../../components/CustomPhotoUpload";
+import CustomImageUploader from "../../components/CustomImageUploader";
+import CustomCloseButton from "../../components/CustomCloseButton";
 import {
   createOrUpdateDocument,
   normalizeReplaceStoragePaths,
@@ -15,7 +16,6 @@ import {
 import { showErrorAlert } from "../../lib/global/alertHelper";
 import { AppConstant } from "../../lib/global/AppConstant";
 import { showLog } from "../../helper/utility";
-import { ROUTES } from "../../routes/Routes";
 
 const Profile = () => {
   const [fileInputs, setFileInputs] = useState<File[]>([]);
@@ -258,7 +258,7 @@ const Profile = () => {
                 Policies
               </span>
               <Link
-                to={ROUTES.TERMS_CONDITIONS.path}
+                to="/terms-conditions"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="custom-profile-link"
@@ -266,7 +266,7 @@ const Profile = () => {
                 Terms & Conditions
               </Link>
               <Link
-                to={ROUTES.PRIVACY_POLICY.path}
+                to="/privacy-policy"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="custom-profile-link"
@@ -328,20 +328,46 @@ const Profile = () => {
       )}
 
       {uploadShow && (
-        <CustomPhotoUpload
-          isOpen={uploadShow}
-          onClose={onUploadCloseModal}
-          onUploadSave={onUploadSave}
-          {...(userDetails?.profile_url
-            ? { existingImages: [userDetails.profile_url] }
-            : [])}
-          onFileChange={(files, replaceUrlsFromUploader) => {
-            setFileInputs(files);
-            setReplaceUrl(
-              normalizeReplaceStoragePaths(replaceUrlsFromUploader)
-            );
-          }}
-        />
+        <Modal
+          show={uploadShow}
+          onHide={onUploadCloseModal}
+          centered
+          dialogClassName="custom-big-modal"
+        >
+          <Modal.Header className="py-3 px-4 border-bottom-0">
+            <Modal.Title as="h5" className="custom-modal-title mb-0">
+              Profile Photo
+            </Modal.Title>
+            <CustomCloseButton onClose={onUploadCloseModal} />
+          </Modal.Header>
+          <Modal.Body className="px-4 pb-4 pt-0">
+            <CustomImageUploader
+              label="Profile photo"
+              maxFiles={1}
+              isEditable={Boolean(userDetails?.profile_url)}
+              {...(userDetails?.profile_url
+                ? { existingImages: [userDetails.profile_url] }
+                : {})}
+              onFileChange={(files, replaceUrlsFromUploader) => {
+                setFileInputs(files);
+                setReplaceUrl(
+                  normalizeReplaceStoragePaths(replaceUrlsFromUploader)
+                );
+              }}
+            />
+            <Row className="mt-4">
+              <Col>
+                <Button
+                  type="button"
+                  className="custom-btn-primary w-100"
+                  onClick={() => void onUploadSave()}
+                >
+                  Save
+                </Button>
+              </Col>
+            </Row>
+          </Modal.Body>
+        </Modal>
       )}
     </>
   );
