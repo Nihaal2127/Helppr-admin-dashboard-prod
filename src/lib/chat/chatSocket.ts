@@ -298,8 +298,10 @@ export function connectChatSocket(): Socket | null {
   }
 
   socketBaseUrl = chatServiceUrl;
+  const useSecure = /^https:\/\//i.test(chatServiceUrl);
   socket = io(chatServiceUrl, {
     auth: { token },
+    secure: useSecure,
     transports: ["polling", "websocket"],
     autoConnect: true,
     reconnection: true,
