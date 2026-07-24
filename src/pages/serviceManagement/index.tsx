@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Form } from "react-bootstrap";
+import { useSearchParams } from "react-router-dom";
 import CustomHeader from "../../components/CustomHeader";
 import CustomSummaryBox from "../../components/CustomSummaryBox";
 import CustomUtilityBox from "../../components/CustomUtilityBox";
@@ -149,6 +150,8 @@ const requestStatusCell = () => ({ row }: { row: any }) => {
 
 
 const ServiceManagement = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const notificationDeepLinkHandledRef = useRef("");
   const { register, setValue, franchiseId: headerFranchiseId } =
     useFranchiseHeaderForm();
   const { countModel, refresh: refreshSummaryCounts } =
@@ -463,6 +466,70 @@ const ServiceManagement = () => {
     setCurrentPage(1);
     setSortBy([]);
   }, []);
+
+  useEffect(() => {
+    const requested = String(searchParams.get("requested") ?? "")
+      .trim()
+      .toLowerCase();
+    const openId = String(searchParams.get("openId") ?? "").trim();
+    if (!requested && !openId) return;
+
+    const linkKey = `${requested}|${openId}`;
+    if (notificationDeepLinkHandledRef.current === linkKey) return;
+    notificationDeepLinkHandledRef.current = linkKey;
+
+    const isCategory =
+      requested === "category" || requested === "categories";
+    const isService = requested === "service" || requested === "services";
+
+    if (isCategory) {
+      openRequestedCategory();
+    } else if (isService) {
+      openRequestedService();
+    }
+
+    const clearParams = () => {
+      const next = new URLSearchParams(searchParams);
+      next.delete("requested");
+      next.delete("openId");
+      setSearchParams(next, { replace: true });
+    };
+
+    if (!openId) {
+      clearParams();
+      return;
+    }
+
+    void (async () => {
+      if (isCategory) {
+        const { response, category } = await fetchCategoryById(openId);
+        if (response && category) {
+          AddEditCategoryDialog.show(
+            true,
+            category,
+            openRequestedCategory,
+            true
+          );
+        }
+      } else if (isService) {
+        const { response, service } = await fetchServiceById(openId);
+        if (response && service) {
+          AddEditServiceDialog.show(
+            true,
+            service,
+            openRequestedService,
+            true
+          );
+        }
+      }
+      clearParams();
+    })();
+  }, [
+    searchParams,
+    setSearchParams,
+    openRequestedCategory,
+    openRequestedService,
+  ]);
 
   const categoryColumns = React.useMemo(
     () => [

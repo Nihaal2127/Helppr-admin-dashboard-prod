@@ -524,8 +524,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     return buildQuotePrefilledServiceOptions(
       quoteCatalogServices,
       String(form.requested_services ?? quoteRow?.service_id ?? ""),
-      quoteRow?.requested_services,
-      String(form.category_id ?? quoteRow?.category_id ?? "")
+      quoteRow?.service_name ?? quoteRow?.requested_services,
+      String(form.category_id ?? quoteRow?.category_id ?? ""),
+      [quoteRow?.services, apiServiceFees?.label]
     );
   }, [
     isNewTabQuoteEdit,
@@ -534,8 +535,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     form.requested_services,
     form.category_id,
     quoteRow?.service_id,
+    quoteRow?.service_name,
     quoteRow?.requested_services,
+    quoteRow?.services,
     quoteRow?.category_id,
+    apiServiceFees?.label,
   ]);
 
   const editPartnerOptions = useMemo(() => {
@@ -764,12 +768,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       if (!isNewTabQuoteEdit) {
         setValue("category_id", "", { shouldValidate: false });
         setValue("requested_services", "", { shouldValidate: false });
+        setValue("service_price", "", { shouldValidate: false });
       }
-      clearScheduleAndPriceFields();
     },
     [
       applySelectFieldValue,
-      clearScheduleAndPriceFields,
       getValues,
       isNewTabQuoteEdit,
       setValue,
@@ -1028,6 +1031,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
   const lockedFields = catalogBusy || !quoteRow;
   const quoteStatusKey = normalizeQuoteApiStatus(quoteRow?.status) || "new";
+  const isPendingQuoteEdit = quoteStatusKey === "pending";
+  const isAcceptedQuoteEdit = quoteStatusKey === "accepted";
+  const isCatalogFieldsReadOnly = isPendingQuoteEdit || isAcceptedQuoteEdit;
   const isTerminalQuoteStatus =
     quoteStatusKey === "success" || quoteStatusKey === "failed";
   const categoryFieldDisabled =
@@ -1202,8 +1208,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                             : "Search partner name"
                         }
                         menuPortal
-                        isClearable
-                        isDisabled={lockedFields}
+                        isClearable={!isCatalogFieldsReadOnly}
+                        isDisabled={lockedFields || isCatalogFieldsReadOnly}
                       />
                     </Col>
                   </Row>
@@ -1219,7 +1225,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         error={errors.category_id}
                         requiredMessage="Please select a category"
                         defaultValue={form.category_id}
-                        isClearable={!isNewTabQuoteEdit}
+                        isClearable={!isNewTabQuoteEdit && !isCatalogFieldsReadOnly}
                         setValue={(name, value) => {
                           if (name === "category_id") {
                             const prev = getValues("category_id");
@@ -1248,12 +1254,16 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                               : "Select partner first"
                         }
                         menuPortal
-                        isDisabled={categoryFieldDisabled || isNewTabQuoteEdit}
+                        isDisabled={
+                          categoryFieldDisabled ||
+                          isNewTabQuoteEdit ||
+                          isCatalogFieldsReadOnly
+                        }
                       />
                     </Col>
                     <Col xs={12} md={6}>
                       <CustomTextFieldSelect
-                        key={`edit-quote-svc-${form.category_id || "none"}`}
+                        key={`edit-quote-svc-${form.category_id || "none"}-${quoteRow?.service_name || form.requested_services || ""}`}
                         label="Service"
                         controlId="edit-quote-service"
                         asCol={false}
@@ -1294,8 +1304,12 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                                 : "Search service name"
                         }
                         menuPortal
-                        isClearable={!isNewTabQuoteEdit}
-                        isDisabled={serviceFieldDisabled || isNewTabQuoteEdit}
+                        isClearable={!isNewTabQuoteEdit && !isCatalogFieldsReadOnly}
+                        isDisabled={
+                          serviceFieldDisabled ||
+                          isNewTabQuoteEdit ||
+                          isCatalogFieldsReadOnly
+                        }
                       />
                     </Col>
                   </Row>
@@ -1329,8 +1343,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                           : "Search partner name"
                       }
                       menuPortal
-                      isClearable
-                      isDisabled={lockedFields}
+                      isClearable={!isCatalogFieldsReadOnly}
+                      isDisabled={lockedFields || isCatalogFieldsReadOnly}
                     />
                   </Col>
                   <Col xs={12} md={6}>
@@ -1344,7 +1358,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                       error={errors.category_id}
                       requiredMessage="Please select a category"
                       defaultValue={form.category_id}
-                      isClearable={!isNewTabQuoteEdit}
+                      isClearable={!isNewTabQuoteEdit && !isCatalogFieldsReadOnly}
                       setValue={(name, value) => {
                         if (name === "category_id") {
                           const prev = getValues("category_id");
@@ -1373,12 +1387,16 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                             : "Select partner first"
                       }
                       menuPortal
-                      isDisabled={categoryFieldDisabled || isNewTabQuoteEdit}
+                      isDisabled={
+                        categoryFieldDisabled ||
+                        isNewTabQuoteEdit ||
+                        isCatalogFieldsReadOnly
+                      }
                     />
                   </Col>
                   <Col xs={12} md={6}>
                     <CustomTextFieldSelect
-                      key={`edit-quote-svc-${form.category_id || "none"}`}
+                      key={`edit-quote-svc-${form.category_id || "none"}-${quoteRow?.service_name || form.requested_services || ""}`}
                       label="Service"
                       controlId="edit-quote-service"
                       asCol={false}
@@ -1419,8 +1437,12 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                               : "Search service name"
                       }
                       menuPortal
-                      isClearable={!isNewTabQuoteEdit}
-                      isDisabled={serviceFieldDisabled || isNewTabQuoteEdit}
+                      isClearable={!isNewTabQuoteEdit && !isCatalogFieldsReadOnly}
+                      isDisabled={
+                        serviceFieldDisabled ||
+                        isNewTabQuoteEdit ||
+                        isCatalogFieldsReadOnly
+                      }
                     />
                   </Col>
                 </Row>

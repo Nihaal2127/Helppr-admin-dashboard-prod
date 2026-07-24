@@ -14,13 +14,10 @@ import CustomTable from "../../../components/CustomTable";
 import ViewPortfolioManagementDialog from "./ViewPortfolioManagementDialog";
 import CustomActionColumn from "../../../components/CustomActionColumn";
 import CustomFormSelect from "../../../components/CustomFormSelect";
-import { openConfirmDialog } from "../../../components/CustomConfirmDialog";
 import { statusCell } from "../../../helper/utility";
 import {
   fetchPortfolios,
   fetchPortfolioProfile,
-  USE_MOCK_PARTNER_PORTFOLIOS_API,
-  voidPortfolio,
 } from "../../../services/partnerManagementService";
 import { useFranchiseHeaderForm } from "../../../lib/global/hooks/useFranchiseScopedGetCount";
 import {
@@ -295,21 +292,7 @@ const PortfolioManagement = ({ onBack }: PortfolioManagementProps) => {
                 );
               })();
             }}
-            onDelete={
-              USE_MOCK_PARTNER_PORTFOLIOS_API
-                ? async () => {
-                    openConfirmDialog(
-                      "Are you sure you want to void this portfolio?",
-                      "Void",
-                      "Cancel",
-                      async () => {
-                        await voidPortfolio(String(row.original._id));
-                        refreshData();
-                      }
-                    );
-                  }
-                : undefined
-            }
+            onDelete={undefined}
           />
         ),
       },

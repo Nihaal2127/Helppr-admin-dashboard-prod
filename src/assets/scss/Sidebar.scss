@@ -44,6 +44,21 @@
 #sidebar h1 .logo {
   color: #fff;
 }
+.sidebar-logo {
+  width: 100%;
+  display: flex;
+  justify-content: left;
+  margin-left:30px;
+  align-items: center;
+  padding: 10px 0;
+  
+}
+
+.sidebar-logo img {
+  width: 60px; /* Change to 70px or 80px if you want */
+  height: auto;
+  display: block;
+}
 
 #sidebar ul.components {
   padding: 0;

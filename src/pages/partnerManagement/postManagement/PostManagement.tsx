@@ -10,7 +10,6 @@ import {
   fetchPostManagementSummary,
   postStatusDisplayLabel,
   postStatusTextClass,
-  USE_MOCK_PARTNER_POSTS_API,
 } from "../../../services/partnerManagementService";
 import type { PostManagementStats } from "../../../services/partnerManagementService";
 import { useFranchiseHeaderForm } from "../../../lib/global/hooks/useFranchiseScopedGetCount";
@@ -212,7 +211,7 @@ const PostManagement = ({ onBack }: PostManagementProps) => {
         isSelected={true}
         onFilterChange={() => {}}
         onItemClick={handleSummaryClick}
-        isAddShow={USE_MOCK_PARTNER_POSTS_API}
+        isAddShow={false}
         addButtonLable="Add post"
         onAddClick={() =>
           AddEditPostManagementDialog.show(true, null, () => {

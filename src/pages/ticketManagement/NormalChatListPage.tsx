@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ROUTES } from "../../routes/Routes";
 import { useChatContext } from "../../lib/chat/ChatProvider";
@@ -19,8 +19,13 @@ const NormalChatListPage = () => {
   const [searchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const { register, setValue, franchiseId } = useFranchiseHeaderForm();
-  const { inbox, inboxLoading, socketConnected, socketError, typingByChatId, isChatParticipantOnline } = useChatContext();
+  const { inbox, inboxLoading, socketConnected, socketError, typingByChatId, isChatParticipantOnline, enrichInboxFranchiseIdsIfNeeded } = useChatContext();
   const filter = searchParams.get("filter") === "unread" ? "unread" : "all";
+
+  useEffect(() => {
+    if (!inbox.length) return;
+    void enrichInboxFranchiseIdsIfNeeded();
+  }, [enrichInboxFranchiseIdsIfNeeded, franchiseId, inbox.length]);
 
   const chats = useMemo(() => {
     const keyword = search.trim().toLowerCase();

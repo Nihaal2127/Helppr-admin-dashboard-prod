@@ -202,77 +202,41 @@ const ChatConversationCore: React.FC<ChatConversationCoreProps> = ({
 }) => {
 
   const navigate = useNavigate();
-
   const [chatMeta, setChatMeta] = useState<ChatRecordModel | null>(null);
-
-  const [messageDraft, setMessageDraft] = useState("");
-
+  const [messageDraft, setMessageDraft] = useState("")
   const [pendingFiles, setPendingFiles] = useState<PendingAttachment[]>([]);
-
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
-
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [chatStatusPending, setChatStatusPending] = useState(false);
-
   const [galleryOpen, setGalleryOpen] = useState(false);
-
   const [galleryIndex, setGalleryIndex] = useState(0);
-
   const [assigneeOptions, setAssigneeOptions] = useState<
-
     { value: string; label: string }[]
-
   >([]);
-
   const [transferSubmitting, setTransferSubmitting] = useState(false);
-
   const [customerEmail, setCustomerEmail] = useState("");
-
   const [employeeEmail, setEmployeeEmail] = useState("");
-
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
-
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
-
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const { socketConnected, socketError, subscribeChatUpdated, refreshInbox } =
     useChatContext();
-
-
-
   const {
-
     messages,
-
     loading,
-
     sendTextMessage,
-
     retryMessage,
-
     loadOlder,
-
     loadingMore,
-
     hasMore,
-
     loadError,
-
     typingLabel,
-
   } = useChatThread(chatId);
 
-
-
   const chatKind = chatKindProp ?? inferChatKind(chatMeta?.type, chatMeta?.isGroup);
-
   const isGroup = chatKind === "group";
-
   const showSenderNames = isGroup;
-
   const resolvedFranchiseId = useMemo(
     () =>
       String(
@@ -287,7 +251,6 @@ const ChatConversationCore: React.FC<ChatConversationCoreProps> = ({
   );
 
   const messagingLocked = inputDisabled || chatClosed;
-
   const canCloseChat = useMemo(
     () => canStaffCloseChat(chatMeta),
     [chatMeta]
@@ -312,7 +275,6 @@ const ChatConversationCore: React.FC<ChatConversationCoreProps> = ({
   );
 
   const composerDisabled = !canSendMessages;
-
   const viewOnlyMode = useMemo(
     () =>
       Boolean(
@@ -333,20 +295,13 @@ const ChatConversationCore: React.FC<ChatConversationCoreProps> = ({
 
 
   useEffect(() => {
-
     if (!chatId) return;
-
     fetchChatById(chatId, { skipLoader: true }).then((res) => {
-
       if (res.response && res.chat) {
         setChatMeta(enrichChatFranchiseFromCache(res.chat));
       }
-
     });
-
   }, [chatId]);
-
-
 
   const customerId = useMemo(
     () =>
@@ -366,43 +321,25 @@ const ChatConversationCore: React.FC<ChatConversationCoreProps> = ({
   );
 
   useEffect(() => {
-
     let cancelled = false;
-
     if (customerId) {
-
       fetchUserById(customerId).then((res) => {
-
         if (!cancelled && res.user?.email) setCustomerEmail(res.user.email);
-
       });
-
     } else {
-
       setCustomerEmail("");
-
     }
-
     if (employeeId) {
-
       fetchUserById(employeeId).then((res) => {
-
         if (!cancelled && res.user?.email) setEmployeeEmail(res.user.email);
-
       });
-
     } else {
-
       setEmployeeEmail("");
-
     }
 
     return () => {
-
       cancelled = true;
-
     };
-
   }, [customerId, employeeId]);
 
 

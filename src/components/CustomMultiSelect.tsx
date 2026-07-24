@@ -210,11 +210,15 @@ const CustomMultiSelect: React.FC<CustomMultiSelectProps> = ({
 
     const selectedValues = new Set(selectedOptions.map((o) => String(o.value)));
     const ignoreLogic = new Set(logicIgnoreOptionValues ?? []);
+    const isLogicExcludedValue = (v: string) => {
+      const s = String(v);
+      return s === "select-all" || s === "all" || ignoreLogic.has(s);
+    };
     const nonSelectAllOptions = options.filter(
-      (o) =>
-        String(o.value) !== "select-all" && !ignoreLogic.has(String(o.value))
+      (o) => !isLogicExcludedValue(String(o.value))
     );
-    const hasSelectAll = selectedValues.has("select-all");
+    const hasSelectAll =
+      selectedValues.has("select-all") || selectedValues.has("all");
     const allConcreteSelected =
       nonSelectAllOptions.length > 0 &&
       nonSelectAllOptions.every((o) => selectedValues.has(String(o.value)));

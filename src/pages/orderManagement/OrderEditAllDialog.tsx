@@ -64,7 +64,6 @@ import {
 } from "../../lib/order/orders";
 import type { EditOrderFormValues, OrderPaymentExtV1 } from "../../lib/order/orders";
 import OrderAmountSummaryPanel from "../../components/order/OrderAmountSummaryPanel";
-import OrderCouponAction from "../../components/order/OrderCouponAction";
 import { buildOrderAmountSummaryFromOrder } from "../../lib/order/orderAmountSummary";
 import { partnerCatalogControlStyle } from "../../components/partnerCatalogBlockUi";
 import { FieldLabelText } from "../../components/RequiredFieldMark";
@@ -1920,24 +1919,6 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                     background: "transparent",
                   }}
                 >
-                  {!lockedFields && !isTerminalOrderStatus ? (
-                    <OrderCouponAction
-                      hasCoupon={Boolean(offerIdWatch)}
-                      onApply={() => {
-                        offerIdBeforeCouponModalRef.current = String(
-                          offerIdWatch ?? ""
-                        ).trim();
-                        setModalCouponOfferId(
-                          offerIdBeforeCouponModalRef.current
-                        );
-                        setCouponModalError("");
-                        setOfferModalOpen(true);
-                      }}
-                      onRemove={() =>
-                        setValue("offer_id", "", { shouldValidate: false })
-                      }
-                    />
-                  ) : null}
                 </OrderAmountSummaryPanel>
               </section>
             ) : null}

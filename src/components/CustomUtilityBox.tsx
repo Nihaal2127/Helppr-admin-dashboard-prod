@@ -21,6 +21,10 @@ type CustomUtilityBoxProps = {
    * cleared filters or switched tabs). Omit for purely local search state.
    */
   syncKeyword?: string;
+  /** Increment to force-clear the search input (e.g. parent Clear button). */
+  searchClearVersion?: number;
+  /** Fired on every keystroke so parents can track unsubmitted search text. */
+  onSearchInputChange?: (value: string) => void;
   hideMoreIcon?: boolean;
   /** When true, download / sort / more icons are hidden (search + optional slots only). */
   hideUtilityActions?: boolean;
@@ -43,6 +47,8 @@ const CustomUtilityBox: React.FC<CustomUtilityBoxProps> = ({
   searchHint = "",
   onSearch = () => {},
   syncKeyword,
+  searchClearVersion,
+  onSearchInputChange,
   onDownloadClick,
   onSortClick,
   onMoreClick,
@@ -63,9 +69,16 @@ const CustomUtilityBox: React.FC<CustomUtilityBoxProps> = ({
     setSearchValue(syncKeyword);
   }, [syncKeyword]);
 
+  useEffect(() => {
+    if (searchClearVersion === undefined) return;
+    setSearchValue(syncKeyword ?? "");
+    onSearchInputChange?.("");
+  }, [searchClearVersion, syncKeyword, onSearchInputChange]);
+
   const showSearchClear = searchValue.trim().length > 0;
   const clearSearch = () => {
     setSearchValue("");
+    onSearchInputChange?.("");
     onSearch("");
   };
 
@@ -136,7 +149,11 @@ const CustomUtilityBox: React.FC<CustomUtilityBoxProps> = ({
               type="text"
               placeholder={searchHint}
               value={searchValue}
-              onChange={(e) => setSearchValue(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setSearchValue(next);
+                onSearchInputChange?.(next);
+              }}
               style={{
                 width: toolsInlineRow ? "100%" : "24.25rem",
                 maxWidth: toolsInlineRow ? "100%" : undefined,

@@ -141,6 +141,8 @@ const MyCalendar: React.FC<MyCalendarProps> = ({ franchiseId = "all" }) => {
   });
 
   const [searchKeyword, setSearchKeyword] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchClearVersion, setSearchClearVersion] = useState(0);
   const [debouncedKeyword, setDebouncedKeyword] = useState("");
   const [utilitySearchKey, setUtilitySearchKey] = useState(0);
 
@@ -448,10 +450,13 @@ const MyCalendar: React.FC<MyCalendarProps> = ({ franchiseId = "all" }) => {
     [loadAppointmentsForRange]
   );
 
-  const clearFiltersDisabled = !searchKeyword.trim();
+  const clearFiltersDisabled =
+    !searchKeyword.trim() && !searchDraft.trim();
 
   const clearCalendarFilters = () => {
     setSearchKeyword("");
+    setSearchDraft("");
+    setSearchClearVersion((v) => v + 1);
     setUtilitySearchKey((k) => k + 1);
   };
 
@@ -511,8 +516,13 @@ const MyCalendar: React.FC<MyCalendarProps> = ({ franchiseId = "all" }) => {
               </Button>
             }
             hideUtilityActions
-            onSearch={(value) => setSearchKeyword(value)}
+            onSearch={(value) => {
+              setSearchKeyword(value);
+              setSearchDraft(value);
+            }}
+            onSearchInputChange={setSearchDraft}
             syncKeyword={searchKeyword}
+            searchClearVersion={searchClearVersion}
           />
         </div>
      
@@ -529,7 +539,7 @@ const MyCalendar: React.FC<MyCalendarProps> = ({ franchiseId = "all" }) => {
         <FullCalendar
           ref={calendarRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-          initialView="timeGridWeek"
+          initialView="dayGridMonth"
           selectable
           scrollTimeReset={false}
           nowIndicator

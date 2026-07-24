@@ -6,6 +6,7 @@ import React, {
   useState,
 } from "react";
 import { Form } from "react-bootstrap";
+import { useSearchParams } from "react-router-dom";
 import CustomHeader from "../../components/CustomHeader";
 import CustomSummaryBox from "../../components/CustomSummaryBox";
 import CustomUtilityBox from "../../components/CustomUtilityBox";
@@ -17,7 +18,7 @@ import {
   showInfoAlert,
   showSuccessAlert,
 } from "../../lib/global/alertHelper";
-import { statusCell } from "../../helper/utility";
+import { statusCell, mapApprovalStatusFromRecord } from "../../helper/utility";
 import { useForm } from "react-hook-form";
 import type { ServerTableSortBy } from "../../lib/global/serverTableSort";
 import type {
@@ -283,6 +284,8 @@ function serviceRowMatchesCatalogueId(row: ServiceRow, catalogueId: string) {
 }
 
 const MyFranchise = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const notificationDeepLinkHandledRef = useRef("");
   const { register, setValue } = useForm();
   /** Employees section is selected on first paint so the list loads with the page. */
   const [selectedBox, setSelectedBox] = useState<BoxId>("box-employees");
@@ -484,6 +487,91 @@ const MyFranchise = () => {
     refreshMyFranchiseCountSummaries,
     slicesForCurrentSelection,
   ]);
+
+  useEffect(() => {
+    const section = String(searchParams.get("section") ?? "")
+      .trim()
+      .toLowerCase();
+    const view = String(searchParams.get("view") ?? "").trim().toLowerCase();
+    const openId = String(searchParams.get("openId") ?? "").trim();
+    if (!section && !view && !openId) return;
+
+    const linkKey = `${section}|${view}|${openId}`;
+    if (notificationDeepLinkHandledRef.current === linkKey) return;
+    notificationDeepLinkHandledRef.current = linkKey;
+
+    const isCategorySection =
+      section === "categories" || section === "category";
+    const isServiceSection = section === "services" || section === "service";
+
+    if (isCategorySection) {
+      for (const k of Array.from(loadedKeysRef.current)) {
+        if (k.startsWith("requested_categories|")) {
+          loadedKeysRef.current.delete(k);
+        }
+      }
+      setSelectedBox("box-categories");
+      if (view === "requested") setCategoriesViewMode("requested");
+    } else if (isServiceSection) {
+      for (const k of Array.from(loadedKeysRef.current)) {
+        if (k.startsWith("requested_services|")) {
+          loadedKeysRef.current.delete(k);
+        }
+      }
+      setSelectedBox("box-services");
+      if (view === "requested") setServicesViewMode("requested");
+    }
+
+    const clearParams = () => {
+      const next = new URLSearchParams(searchParams);
+      next.delete("section");
+      next.delete("view");
+      next.delete("openId");
+      setSearchParams(next, { replace: true });
+    };
+
+    if (!openId) {
+      clearParams();
+      return;
+    }
+
+    void (async () => {
+      if (isCategorySection) {
+        const { response, category } = await fetchCategoryById(openId);
+        if (response && category) {
+          RequestedCategoryDialog.showView(
+            {
+              _id: String(category._id ?? openId),
+              name: String(category.name ?? ""),
+              service_ids: [],
+              service_names: [],
+              description: String(category.desc ?? "").trim(),
+              image_url: category.image_url,
+              status: mapApprovalStatusFromRecord(
+                category as unknown as Record<string, unknown>
+              ),
+              rejection_reason: String(category.rejection_reason ?? ""),
+            },
+            () => {
+              void reloadFranchiseData();
+            }
+          );
+        }
+      } else if (isServiceSection) {
+        const { response, service } = await fetchServiceById(openId);
+        if (response && service) {
+          RequestedServiceDialog.showView(
+            service as unknown as RequestedServiceRow,
+            [],
+            () => {
+              void reloadFranchiseData();
+            }
+          );
+        }
+      }
+      clearParams();
+    })();
+  }, [searchParams, setSearchParams, reloadFranchiseData]);
 
   /** Load table data only for the active section (and catalog vs requested sub-mode). */
   useEffect(() => {

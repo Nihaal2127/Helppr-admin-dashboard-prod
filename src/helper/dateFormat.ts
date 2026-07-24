@@ -50,17 +50,22 @@ export const formatDate = (isoString: string): string => {
   return `${day}-${month}-${year}`;
 };
 
-/** Localized date + time (e.g. for ledgers, activity rows). */
+/** Local date + time, e.g. `8-jul-2026, 6:30PM`. */
 export const formatDateTime = (isoString: string): string => {
   const date = new Date(isoString);
   if (isNaN(date.getTime())) {
     return "—";
   }
-  return date.toLocaleString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+
+  const day = date.getDate();
+  const month = date.toLocaleString("en-GB", { month: "short" }).toLowerCase();
+  const year = date.getFullYear();
+
+  let hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const period = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12;
+  if (hours === 0) hours = 12;
+
+  return `${day}-${month}-${year}, ${hours}:${minutes}${period}`;
 };

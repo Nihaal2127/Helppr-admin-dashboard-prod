@@ -12,10 +12,6 @@ import { DocumentModel } from "../../lib/models/DocumentModel";
 import { openConfirmDialog } from "../../components/CustomConfirmDialog";
 import { updateStatusDocument } from "../../services/partnerDocumentService";
 import { AppConstant } from "../../lib/global/AppConstant";
-import {
-  partnerDocumentDisplayTitle,
-  partnerDocumentHasUploadedImage,
-} from "../../lib/partner/partnerFormDocuments";
 import { CustomImagePreviewDialog } from "../../components/CustomImagePreview";
 import RejectDocumentDialog from "./RejectDocumentDialog";
 import { openDialog } from "../../lib/global/DialogManager";
@@ -92,7 +88,7 @@ const VerificationDetailsDialog: React.FC<VerificationDetailsDialogProps> & {
               {userDetails?.documents?.map((document) => (
                 <section className="custom-other-details">
                   <h3 className="d-flex justify-content-center mt-2">
-                    {partnerDocumentDisplayTitle(document.name)}
+                    {document.name}
                   </h3>
                   <DetailsRow
                     title="Date"
@@ -112,7 +108,7 @@ const VerificationDetailsDialog: React.FC<VerificationDetailsDialogProps> & {
                       value={document.rejected_reasone}
                     />
                   )}
-                  {!partnerDocumentHasUploadedImage(document) ? (
+                  {document.document_image === "" ? (
                     <h3 className="d-flex justify-content-center mt-2">
                       {" "}
                       Document Not Provide

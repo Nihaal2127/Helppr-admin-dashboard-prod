@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Row, Col } from "react-bootstrap";
 import { useSidebar } from "../context/SidebarContext";
@@ -9,9 +9,11 @@ import {
   fetchRecentNotifications,
   getUnreadNotificationCount,
   markAllNotificationsAsRead,
-  markNotificationAsRead,
+  resolveNotificationFranchiseScope,
 } from "../services/notificationService";
-import { formatDate } from "../helper/utility";
+import { activateNotification } from "../lib/notifications/notificationNavigation";
+import type { NotificationModel } from "../lib/models/NotificationModel";
+import { formatDateTime } from "../helper/utility";
 import { getLocalStorage } from "../lib/global/localStorageHelper";
 import {
   HEADER_FRANCHISE_CHANGED_EVENT,
@@ -70,8 +72,11 @@ const CustomHeader = ({
   >([{ value: "all", label: "All Franchises" }]);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [recentNotifications, setRecentNotifications] = useState<any[]>([]);
+  const [recentNotifications, setRecentNotifications] = useState<
+    NotificationModel[]
+  >([]);
   const notificationRef = useRef<HTMLDivElement | null>(null);
+  const notifyRefreshGenRef = useRef(0);
   const [mobileTopBarSlot, setMobileTopBarSlot] = useState<HTMLElement | null>(
     null
   );
@@ -90,15 +95,38 @@ const CustomHeader = ({
     onLocationChange?.(value);
   };
 
-  const refreshNotifications = () => {
-    setUnreadCount(getUnreadNotificationCount());
-    setRecentNotifications(fetchRecentNotifications(6));
-  };
+  const refreshNotifications = useCallback(async () => {
+    const generation = ++notifyRefreshGenRef.current;
+    const scope = {
+      franchise_id: resolveNotificationFranchiseScope(),
+    };
+    const [count, recent] = await Promise.all([
+      getUnreadNotificationCount(scope),
+      fetchRecentNotifications(6, scope),
+    ]);
+    if (generation !== notifyRefreshGenRef.current) return;
+    setUnreadCount(count);
+    setRecentNotifications(recent);
+  }, []);
 
   useEffect(() => {
-    refreshNotifications();
-    const onUpdated = () => refreshNotifications();
-    const onStorage = () => refreshNotifications();
+    void refreshNotifications();
+  }, [refreshNotifications, selectedFranchise]);
+
+  useEffect(() => {
+    if (!isNotificationOpen) return;
+    void refreshNotifications();
+  }, [isNotificationOpen, refreshNotifications]);
+
+  useEffect(() => {
+    const onUpdated = () => {
+      void refreshNotifications();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refreshNotifications();
+      }
+    };
     const onClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
       if (!notificationRef.current?.contains(target)) {
@@ -107,15 +135,23 @@ const CustomHeader = ({
     };
 
     window.addEventListener("notifications-updated", onUpdated);
-    window.addEventListener("storage", onStorage);
+    window.addEventListener(
+      HEADER_FRANCHISE_CHANGED_EVENT,
+      onUpdated as EventListener
+    );
+    document.addEventListener("visibilitychange", onVisibility);
     document.addEventListener("mousedown", onClickOutside);
 
     return () => {
       window.removeEventListener("notifications-updated", onUpdated);
-      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(
+        HEADER_FRANCHISE_CHANGED_EVENT,
+        onUpdated as EventListener
+      );
+      document.removeEventListener("visibilitychange", onVisibility);
       document.removeEventListener("mousedown", onClickOutside);
     };
-  }, []);
+  }, [refreshNotifications]);
 
   useEffect(() => {
     let cancelled = false;
@@ -237,8 +273,10 @@ const CustomHeader = ({
                 type="button"
                 className="btn btn-link p-0"
                 onClick={() => {
-                  markAllNotificationsAsRead();
-                  refreshNotifications();
+                  void (async () => {
+                    await markAllNotificationsAsRead();
+                    await refreshNotifications();
+                  })();
                 }}
               >
                 Mark all read
@@ -259,10 +297,11 @@ const CustomHeader = ({
                       item.status === "unread" ? "is-unread" : ""
                     }`}
                     onClick={() => {
-                      markNotificationAsRead(item.id);
-                      refreshNotifications();
-                      setIsNotificationOpen(false);
-                      navigate(ROUTES.NOTIFICATIONS.path);
+                      void (async () => {
+                        setIsNotificationOpen(false);
+                        await activateNotification(item, navigate);
+                        await refreshNotifications();
+                      })();
                     }}
                   >
                     <div className="custom-notification-item-title-row">
@@ -277,7 +316,7 @@ const CustomHeader = ({
                       {item.message}
                     </div>
                     <div className="custom-notification-item-time">
-                      {formatDate(item.createdAt)}
+                      {formatDateTime(item.createdAt)}
                     </div>
                   </button>
                 ))
@@ -311,21 +350,15 @@ const CustomHeader = ({
 
       <Row className="g-0 p-0 mb-4 align-items-center custom-page-header">
         <Col
-          sm={6}
-          className="p-0 m-0 custom-page-header__title"
+          className="p-0 m-0 custom-page-header__title flex-grow-1 min-w-0"
         >
-          <div className="d-flex align-items-center gap-2 flex-wrap">
+          <div className="custom-page-header__title-row">
             {titlePrefix}
-            <h4 className="m-0 p-0 d-flex align-items-center flex-wrap gap-2">
-              <span>{title}</span>
+            <h4 className="custom-page-header__heading m-0 p-0">
+              {title}
               {franchiseTitleName ? (
-                <span
-                  className="fw-normal"
-                  style={{
-                    fontSize: "1rem",
-                    color: "var(--primary-new-txt-color)",
-                  }}
-                >
+                <span className="custom-page-header__franchise-suffix">
+                  {" "}
                   - {franchiseTitleName}
                 </span>
               ) : null}
@@ -333,8 +366,8 @@ const CustomHeader = ({
           </div>
         </Col>
         <Col
-          sm={6}
-          className="d-none d-lg-flex justify-content-end align-items-center gap-3 p-0 m-0 custom-page-header__actions"
+          xs="auto"
+          className="d-none d-lg-flex justify-content-end align-items-center gap-3 p-0 m-0 flex-shrink-0 custom-page-header__actions"
         >
           {headerToolbar}
         </Col>

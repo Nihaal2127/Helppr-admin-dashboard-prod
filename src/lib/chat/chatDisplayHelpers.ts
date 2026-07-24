@@ -1,4 +1,4 @@
-import { AppConstant, getChatServiceUrl } from "../global/AppConstant";
+import { AppConstant } from "../global/AppConstant";
 import { resolveMediaAssetSrc } from "../../services/documentUploadService";
 import {
   ChatMessageModel,
@@ -157,10 +157,6 @@ export function initialsFromName(name?: string): string {
   return `${parts[0].charAt(0)}${parts[parts.length - 1].charAt(0)}`.toUpperCase();
 }
 
-/** CDN for chat attachments (web uploads via document_upload type 7). */
-const CHAT_MEDIA_CDN_BASE = "https://d2snwgkdggvp65.cloudfront.net/";
-
-/** Document upload `type` → CDN folder(s). Web chat uses type 7; mobile chat uses type 24. */
 const DOCUMENT_UPLOAD_FOLDERS_BY_TYPE: Record<string, string[]> = {
   "2": ["category"],
   "4": ["userinformation", "UserInformation"],
@@ -184,7 +180,7 @@ function pushStorageKey(urls: string[], storageKey: string) {
   const resolved = resolveMediaAssetSrc(key);
   pushUniqueUrl(urls, resolved);
   if (!/^https?:\/\//i.test(resolved)) {
-    pushUniqueUrl(urls, `${CHAT_MEDIA_CDN_BASE}${key}`);
+    pushUniqueUrl(urls, `${AppConstant.CHAT_AVATAR_IMAGE_BASE_URL}${key}`);
   }
 }
 
@@ -221,7 +217,7 @@ export function resolveChatMediaUrlCandidates(fileUrl?: string | null): string[]
   }
 
   const urls: string[] = [];
-  const chatBase = getChatServiceUrl().replace(/\/$/, "");
+  const chatBase = AppConstant.CHAT_SERVICE_URL.replace(/\/$/, "");
   const normalized = raw.replace(/^\//, "");
 
   if (raw.startsWith(chatBase)) {

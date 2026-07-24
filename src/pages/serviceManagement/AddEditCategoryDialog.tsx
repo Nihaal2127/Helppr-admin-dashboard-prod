@@ -22,6 +22,7 @@ import {
 import CustomImageUploader, {
   resolveExistingImageSrc,
 } from "../../components/CustomImageUploader";
+import { FieldLabelText } from "../../components/RequiredFieldMark";
 import { showErrorAlert } from "../../lib/global/alertHelper";
 import {
   createOrUpdateCategory,
@@ -447,7 +448,8 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
         uploadType: "2",
         files: fileInputs,
         isEditMode: isEditable,
-       
+        replaceUrls,
+        existingStoragePaths: category?.image_url ? [category.image_url] : [],
       });
       if (!imageUpload.ok) {
         showErrorAlert(documentUploadFailureMessage(imageUpload.usedReplace));
@@ -894,8 +896,12 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
               ) : null}
 
               <Col md={isRequestCategory ? 12 : 6}>
+                <label className="form-label fw-medium mb-2 d-block">
+                  <FieldLabelText label="Category image" required />
+                </label>
                 <CustomImageUploader
-                  label="Category image"
+                  label=""
+                  hideLabel
                   maxFiles={1}
                   isEditable={isEditable}
                   existingImages={
@@ -911,8 +917,11 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
               </Col>
               {!isRequestCategory ? (
                 <Col md={6}>
+                   <label className="form-label fw-medium mb-2 d-block">
+                  <FieldLabelText label="Services" required />
+                </label>
                   <CustomMultiSelect
-                    label="Services"
+                    label=""
                     controlId="Service"
                     options={serviceOptions}
                     value={selectedServiceOptions}

@@ -1,6 +1,7 @@
 import { CURRENCY } from "./paymentAndCurrency";
 
 const CHAT_SERVICE_URL = "https://chat.helppr.in";
+const CHAT_AVATAR_IMAGE_BASE_URL = "https://d2snwgkdggvp65.cloudfront.net/";
 
 /**
  * Chat base URL for REST + Socket.IO.
@@ -22,6 +23,7 @@ export const AppConstant = {
   get CHAT_SERVICE_URL(): string {
     return getChatServiceUrl();
   },
+   CHAT_AVATAR_IMAGE_BASE_URL,
   IMAGE_BASE_URL: "", //Help Pr Live
   // BASE_URL: "http://localhost:5001/api",
   // BASE_URL: "https://raamisegei.execute-api.us-east-1.amazonaws.com/dev/api",
@@ -59,3 +61,4 @@ export const UserRole = {
   EMPLOYEE: "employee",
   STAFF: "staff",
 } as const;
+

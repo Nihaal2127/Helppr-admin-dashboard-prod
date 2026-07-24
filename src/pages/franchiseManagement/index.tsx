@@ -249,6 +249,8 @@ const FranchiseManagement = () => {
     sort_order?: "asc" | "desc";
   }>({});
   const [sortBy, setSortBy] = useState<ServerTableSortBy>([]);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchClearVersion, setSearchClearVersion] = useState(0);
   const [utilitySearchKey, setUtilitySearchKey] = useState(0);
   const catalogBootstrapStartedRef = useRef(false);
 
@@ -584,7 +586,9 @@ const FranchiseManagement = () => {
   };
 
   const clearFranchiseFiltersDisabled = useMemo(() => {
-    const hasSearch = Boolean(String(filters.search ?? "").trim());
+    const hasSearch =
+      Boolean(String(filters.search ?? "").trim()) ||
+      Boolean(searchDraft.trim());
     const statusRaw = String(filters.status ?? "").trim();
     const hasUtilityStatus = statusRaw !== "" && statusRaw !== "All";
     const hasSummaryFilters =
@@ -599,12 +603,15 @@ const FranchiseManagement = () => {
     filters.search,
     filters.status,
     filters.sort_order,
+    searchDraft,
     sortBy.length,
     headerFranchiseId,
   ]);
 
   const clearFranchiseFilters = () => {
     setFilters({});
+    setSearchDraft("");
+    setSearchClearVersion((v) => v + 1);
     setSortBy([]);
     setCurrentPage(1);
     setHeaderFranchiseId("all");
@@ -769,8 +776,13 @@ const FranchiseManagement = () => {
               />
             </div>
           }
-          onSearch={(value) => handleFilterChange({ search: value })}
+          onSearch={(value) => {
+            setSearchDraft(value);
+            handleFilterChange({ search: value });
+          }}
+          onSearchInputChange={setSearchDraft}
           syncKeyword={String(filters.search ?? "")}
+          searchClearVersion={searchClearVersion}
           afterSearchSlot={
             <Button
               variant="outline-secondary"

@@ -439,6 +439,7 @@ export type QuoteViewData = {
   employee_profile_url?: string | null;
   category_id?: string;
   category_name?: string;
+  service_name?: string;
   requested_date: string;
   requested_time: string;
   from_date?: string;
@@ -699,6 +700,7 @@ export function mergeQuoteViewData(
       keep.requested_partner
     ),
     category_name: coalesceText(fresh.category_name, keep.category_name) || undefined,
+    service_name: coalesceText(fresh.service_name, keep.service_name) || undefined,
     description: coalesceText(fresh.description, keep.description) || undefined,
     admin_description:
       coalesceText(fresh.admin_description, keep.admin_description) || undefined,
@@ -818,6 +820,7 @@ export function toQuoteViewData(row: QuoteRow): QuoteViewData {
     employee_profile_url: row.employee_profile_url,
     category_id: row.category_id,
     category_name: row.category_name,
+    service_name: row.service_name,
     requested_date: row.requested_date,
     requested_time: row.requested_time,
     from_date: row.from_date,

@@ -357,6 +357,7 @@ function mapCustomerPaymentsToApi(
     .filter((r) => paymentRowEffectiveAmount(r) > 0.009)
     .map((r) => {
       const amount = paymentRowEffectiveAmount(r);
+      const paidAt = normalizeOrderApiDateYmd(r.date);
       return {
         payer_type: "customer",
         amount,
@@ -364,7 +365,7 @@ function mapCustomerPaymentsToApi(
         payment_method: normalizePaymentMethod(r.type) || "cash",
         transaction_reference: String(r.description ?? "").trim() || undefined,
         notes: String(r.description ?? "").trim() || undefined,
-        ...(r.date ? { paid_at: r.date } : {}),
+        ...(paidAt ? { paid_at: paidAt } : {}),
       };
     });
 }
@@ -376,13 +377,14 @@ function mapPartnerPaymentsToApi(
     .filter((r) => paymentRowEffectiveAmount(r) > 0.009)
     .map((r) => {
       const amount = paymentRowEffectiveAmount(r);
+      const paidAt = normalizeOrderApiDateYmd(r.date);
       return {
         payer_type: "partner",
         amount,
         status: "completed",
         payment_method: "cash",
         notes: String(r.description ?? "").trim() || undefined,
-        ...(r.date ? { paid_at: r.date } : {}),
+        ...(paidAt ? { paid_at: paidAt } : {}),
       };
     });
 }
@@ -587,12 +589,14 @@ export function buildOrderPaymentUpdatePayload(input: {
   for (const r of extNorm.customerPayments ?? []) {
     const amount = paymentRowEffectiveAmount(r);
     if (amount <= 0.009) continue;
+    const paidAt = normalizeOrderApiDateYmd(r.date);
     const row = {
       payer_type: "customer",
       amount,
       status: "completed",
       payment_method: normalizePaymentMethod(r.type) || "cash",
       notes: String(r.description ?? "").trim() || undefined,
+      ...(paidAt ? { paid_at: paidAt } : {}),
     };
     if (isMongoObjectId(r.id)) payUpdate.push({ _id: r.id, ...row });
     else payCreate.push(row);
@@ -600,12 +604,14 @@ export function buildOrderPaymentUpdatePayload(input: {
   for (const r of extNorm.partnerPayments ?? []) {
     const amount = paymentRowEffectiveAmount(r);
     if (amount <= 0.009) continue;
+    const paidAt = normalizeOrderApiDateYmd(r.date);
     const row = {
       payer_type: "partner",
       amount,
       status: "completed",
       payment_method: "cash",
       notes: String(r.description ?? "").trim() || undefined,
+      ...(paidAt ? { paid_at: paidAt } : {}),
     };
     if (isMongoObjectId(r.id)) payUpdate.push({ _id: r.id, ...row });
     else payCreate.push(row);

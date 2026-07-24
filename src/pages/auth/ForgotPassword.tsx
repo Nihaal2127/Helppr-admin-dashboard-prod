@@ -1,7 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import loginBGLogo from "../../assets/icons/login_bg_logo.svg";
-import loginLogo from "../../assets/icons/login_logo.svg";
+import helperLogo from "../../assets/images/helper-logo.png";
 import { Card, Col, Button } from "react-bootstrap";
 import { CustomFormInput } from "../../components/CustomFormInput";
 import { forgotPassword } from "../../services/adminService";
@@ -56,8 +56,9 @@ const Login = () => {
           }}
         >
           <Card.Body className="d-flex flex-column align-items-center justify-content-center w-100">
-            <img src={loginLogo} alt="Logo" />
-            <h2 className="mb-4 title">helper!</h2>
+            <img src={helperLogo} alt="Logo"
+            style={{width: "90px",height: "90px",objectFit: "contain",marginBottom: "10px",}} />
+            <h2 className="mb-4 title">HelpPR!</h2>
             <h5>Forgot Password</h5>
             <form
               noValidate

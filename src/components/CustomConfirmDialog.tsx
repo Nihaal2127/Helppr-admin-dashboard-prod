@@ -1,6 +1,6 @@
 import { Modal, Button, Row, Col } from "react-bootstrap";
 import CustomCloseButton from "./CustomCloseButton";
-import Logo from "../assets/icons/login_logo.svg";
+import Logo from "../assets/images/helper-logo.png";
 import { openDialog } from "../lib/global/DialogManager";
 
 export const openConfirmDialog = (
@@ -20,12 +20,12 @@ export const openConfirmDialog = (
       <Modal.Header className="py-3 px-4 border-bottom-0">
         <CustomCloseButton onClose={close} />
       </Modal.Header>
-      <Modal.Body className="px-4 pb-4 pt-0 mt-5">
+      <Modal.Body className="px-4 pb-1 pt-0 mt-3">
         <img
           src={iconName ? iconName : Logo}
           alt="logo"
-          width="40px"
-          height="40px"
+          width="70px"
+          height="70px"
           style={{ display: "block", margin: "0 auto" }}
         />
         <label className="custom-dialog-title mt-6">{title}</label>

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ROUTES } from "../../routes/Routes";
 import { useChatContext } from "../../lib/chat/ChatProvider";
@@ -23,11 +23,16 @@ const QuoteChatListPage = () => {
   const [searchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const { register, setValue, franchiseId } = useFranchiseHeaderForm();
-  const { inbox, inboxLoading, socketConnected, socketError, typingByChatId, isChatParticipantOnline } = useChatContext();
+  const { inbox, inboxLoading, socketConnected, socketError, typingByChatId, isChatParticipantOnline, enrichInboxFranchiseIdsIfNeeded } = useChatContext();
 
   const isGroupList = location.pathname.includes("/group-chats");
   const chatType: ChatType = isGroupList ? "order" : "quote";
   const unreadOnly = searchParams.get("filter") === "unread";
+
+  useEffect(() => {
+    if (!inbox.length) return;
+    void enrichInboxFranchiseIdsIfNeeded();
+  }, [enrichInboxFranchiseIdsIfNeeded, franchiseId, inbox.length]);
 
   const chats = useMemo(() => {
     const keyword = search.trim().toLowerCase();

@@ -6,6 +6,7 @@ import {
   isSupported,
 } from "firebase/messaging";
 import { showLog } from "../helper/utility";
+import { storeForegroundNotification } from "./notificationService";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDbvu_VONThJcXYYp_ikMY4_qyXPUVScbE",
@@ -103,6 +104,7 @@ function attachForegroundMessageListener(messaging: MessagingInstance): void {
   if (foregroundMessageListenerAttached) return;
   foregroundMessageListenerAttached = true;
   onMessage(messaging, (payload) => {
+    storeForegroundNotification(payload);
     const { title, body } = payload?.notification || {};
     if (Notification.permission === "granted") {
       new Notification(title || "Notification", {

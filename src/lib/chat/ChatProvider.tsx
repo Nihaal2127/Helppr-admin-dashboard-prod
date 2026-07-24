@@ -59,6 +59,8 @@ type ChatContextValue = {
   typingByChatId: Record<string, string>;
   isChatParticipantOnline: (chat: ChatRecordModel) => boolean;
   refreshInbox: (opts?: { skipLoader?: boolean; force?: boolean }) => Promise<void>;
+  /** Resolve franchise ids for inbox filtering (chat/ticket pages only — avoids N× order/get elsewhere). */
+  enrichInboxFranchiseIdsIfNeeded: () => Promise<void>;
   setActiveChatId: (chatId: string | null) => void;
   joinChat: (chatId: string) => void;
   leaveChat: (chatId: string) => void;
@@ -284,6 +286,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     applyEnrichedInbox(enriched);
   }, [applyEnrichedInbox]);
 
+  const enrichInboxFranchiseIdsIfNeeded = useCallback(async () => {
+    await enrichCurrentInbox();
+  }, [enrichCurrentInbox]);
+
   const refreshInbox = useCallback(async (opts?: { skipLoader?: boolean; force?: boolean }) => {
     const silent = opts?.skipLoader ?? true;
     const force = opts?.force ?? false;
@@ -303,8 +309,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const res = await fetchChatInbox({ skipLoader: silent });
         if (!mountedRef.current || !res.response) return;
         lastInboxFetchAtRef.current = Date.now();
-        const enriched = await enrichChatInboxFranchiseIds(res.chats);
-        applyEnrichedInbox(enriched);
+        const seeded = res.chats.map(enrichChatFranchiseFromCache);
+        applyEnrichedInbox(seeded);
       } finally {
         inboxRefreshInFlightRef.current = null;
         if (mountedRef.current && showLoader) setInboxLoading(false);
@@ -499,6 +505,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       typingByChatId,
       isChatParticipantOnline,
       refreshInbox,
+      enrichInboxFranchiseIdsIfNeeded,
       setActiveChatId,
       joinChat: joinChatRoom,
       leaveChat: leaveChatRoom,
@@ -511,7 +518,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       subscribeChatUpdated: onChatUpdated,
       subscribeConnect: onChatConnect,
     }),
-    [inbox, inboxLoading, socketConnected, socketError, typingByChatId, isChatParticipantOnline, refreshInbox, setActiveChatId]
+    [inbox, inboxLoading, socketConnected, socketError, typingByChatId, isChatParticipantOnline, refreshInbox, enrichInboxFranchiseIdsIfNeeded, setActiveChatId]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

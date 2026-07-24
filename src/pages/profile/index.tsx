@@ -2,20 +2,23 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Row, Col, Button, Modal } from "react-bootstrap";
 import { Link } from "react-router-dom";
 import circleEdit from "../../assets/icons/circle_edit.svg";
-import loginLogo from "../../assets/icons/login_logo.svg";
+import helperLogo from "../../assets/images/helper-logo.png";
 import EditProfile from "./EditProfile";
 import { UserModel } from "../../lib/models/UserModel";
 import { getCreatedById } from "../../lib/global/localStorageHelper";
 import { fetchById, createOrUpdateUser } from "../../services/adminService";
-import CustomImageUploader from "../../components/CustomImageUploader";
+import CustomImageUploader, {
+  resolveExistingImageSrc,
+} from "../../components/CustomImageUploader";
 import CustomCloseButton from "../../components/CustomCloseButton";
 import {
-  createOrUpdateDocument,
+  uploadDocumentImages,
+  documentUploadFailureMessage,
   normalizeReplaceStoragePaths,
 } from "../../services/documentUploadService";
 import { showErrorAlert } from "../../lib/global/alertHelper";
-import { AppConstant } from "../../lib/global/AppConstant";
 import { showLog } from "../../helper/utility";
+import { ROUTES } from "../../routes/Routes";
 
 const Profile = () => {
   const [fileInputs, setFileInputs] = useState<File[]>([]);
@@ -53,72 +56,53 @@ const Profile = () => {
 
   const onUploadCloseModal = () => {
     setUploadShow(false);
+    setFileInputs([]);
+    setReplaceUrl([]);
     fetchData();
   };
 
   const onUploadSave = async () => {
-    if (
-      userDetails?.profile_url &&
-      fileInputs.length > 0 &&
-      replaceUrls.length > 0
-    ) {
-      uploadProfile(true);
-    } else if (
-      userDetails?.profile_url &&
-      fileInputs.length === 0 &&
-      replaceUrls.length === 0
-    ) {
-      //delete profile
-      showLog("Remove Profile");
-    } else {
-      // add profile
-      if (fileInputs.length > 0) {
-        uploadProfile(false);
+    if (fileInputs.length === 0) {
+      if (userDetails?.profile_url && replaceUrls.length === 0) {
+        //delete profile
+        showLog("Remove Profile");
       }
-    }
-  };
-
-  const uploadProfile = async (isEditable: boolean) => {
-    const formData = new FormData();
-    formData.append("type", "4");
-    fileInputs.forEach((file) => formData.append("files", file));
-    const replacePaths = isEditable
-      ? normalizeReplaceStoragePaths(
-          replaceUrls.length > 0
-            ? replaceUrls
-            : userDetails?.profile_url
-              ? [userDetails.profile_url]
-              : []
-        )
-      : [];
-    const useReplaceUpload = replacePaths.length > 0;
-    if (useReplaceUpload) {
-      formData.append("update_file_urls", JSON.stringify(replacePaths));
+      return;
     }
 
-    let { response, fileList } = await createOrUpdateDocument(
-      formData,
-      useReplaceUpload,
-      { replaceFallbackPaths: replacePaths }
+    const imageUpload = await uploadDocumentImages({
+      uploadType: "4",
+      files: fileInputs,
+      isEditMode: Boolean(userDetails?.profile_url),
+      replaceUrls,
+      existingStoragePaths: userDetails?.profile_url
+        ? [userDetails.profile_url]
+        : [],
+    });
+
+    if (!imageUpload.ok) {
+      showErrorAlert(documentUploadFailureMessage(imageUpload.usedReplace));
+      return;
+    }
+
+    const profile_url = imageUpload.paths[0];
+    if (!profile_url) {
+      showErrorAlert(documentUploadFailureMessage(false));
+      return;
+    }
+
+    if (!userDetails?._id) {
+      showErrorAlert("Unable to update. ID is missing.");
+      return;
+    }
+
+    const responseUpdate = await createOrUpdateUser(
+      { profile_url },
+      true,
+      userDetails._id
     );
-
-    if (response) {
-      const payload = {
-        profile_url: fileList[0],
-      };
-      if (!userDetails?._id) {
-        showErrorAlert("Unable to update. ID is missing.");
-        return;
-      }
-
-      let responseUpdate = await createOrUpdateUser(
-        payload,
-        true,
-        userDetails?._id
-      );
-      if (responseUpdate) {
-        onUploadCloseModal();
-      }
+    if (responseUpdate) {
+      onUploadCloseModal();
     }
   };
 
@@ -143,10 +127,8 @@ const Profile = () => {
                 <img
                   src={
                     userDetails?.profile_url
-                      ? `${AppConstant.IMAGE_BASE_URL}${
-                          userDetails?.profile_url
-                        }?t=${Date.now()}`
-                      : loginLogo
+                      ? resolveExistingImageSrc(userDetails.profile_url)
+                      : helperLogo
                   }
                   alt="Profile"
                   style={{
@@ -258,7 +240,7 @@ const Profile = () => {
                 Policies
               </span>
               <Link
-                to="/terms-conditions"
+                to={ROUTES.TERMS_CONDITIONS.path}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="custom-profile-link"
@@ -266,7 +248,7 @@ const Profile = () => {
                 Terms & Conditions
               </Link>
               <Link
-                to="/privacy-policy"
+                to={ROUTES.PRIVACY_POLICY.path}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="custom-profile-link"
@@ -335,14 +317,16 @@ const Profile = () => {
           dialogClassName="custom-big-modal"
         >
           <Modal.Header className="py-3 px-4 border-bottom-0">
-            <Modal.Title as="h5" className="custom-modal-title mb-0">
-              Profile Photo
+            <Modal.Title as="h5" className="custom-modal-title">
+              Profile photo
             </Modal.Title>
             <CustomCloseButton onClose={onUploadCloseModal} />
           </Modal.Header>
           <Modal.Body className="px-4 pb-4 pt-0">
             <CustomImageUploader
+              key={`profile-upload-${userDetails?._id ?? "new"}`}
               label="Profile photo"
+              hideLabel
               maxFiles={1}
               isEditable={Boolean(userDetails?.profile_url)}
               {...(userDetails?.profile_url
@@ -355,17 +339,24 @@ const Profile = () => {
                 );
               }}
             />
-            <Row className="mt-4">
-              <Col>
-                <Button
-                  type="button"
-                  className="custom-btn-primary w-100"
-                  onClick={() => void onUploadSave()}
-                >
-                  Save
-                </Button>
-              </Col>
-            </Row>
+            <div className="d-flex justify-content-end gap-3 mt-4">
+              <Button
+                type="button"
+                className="custom-btn-primary"
+                onClick={() => {
+                  void onUploadSave();
+                }}
+              >
+                Save
+              </Button>
+              <Button
+                type="button"
+                className="custom-btn-secondary"
+                onClick={onUploadCloseModal}
+              >
+                Cancel
+              </Button>
+            </div>
           </Modal.Body>
         </Modal>
       )}

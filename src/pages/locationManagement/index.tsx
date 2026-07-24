@@ -64,6 +64,8 @@ const LocationManagement = () => {
   >(new Map());
   const [selectedAreaFranchiseId, setSelectedAreaFranchiseId] = useState("");
   const [activeFilters, setActiveFilters] = useState<LocationFilters>({});
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchClearVersion, setSearchClearVersion] = useState(0);
   const [utilitySearchKey, setUtilitySearchKey] = useState(0);
   const [stateTableSortBy, setStateTableSortBy] = useState<ServerTableSortBy>(
     []
@@ -295,6 +297,8 @@ const LocationManagement = () => {
   };
 
   const clearCityFilters = () => {
+    setSearchDraft("");
+    setSearchClearVersion((v) => v + 1);
     handleFilterChange({ state_id: "", name: "" });
     setUtilitySearchKey((k) => k + 1);
   };
@@ -302,6 +306,8 @@ const LocationManagement = () => {
   const clearAreaFilters = () => {
     setSelectedAreaFranchiseId("");
     setAreaFilterValue("area_franchise_id", "", { shouldValidate: false });
+    setSearchDraft("");
+    setSearchClearVersion((v) => v + 1);
     handleFilterChange({
       state_id: "",
       city_id: "",
@@ -311,10 +317,12 @@ const LocationManagement = () => {
     setUtilitySearchKey((k) => k + 1);
   };
 
-  const cityClearDisabled = !String(activeFilters.name ?? "").trim();
+  const cityClearDisabled =
+    !String(activeFilters.name ?? "").trim() && !searchDraft.trim();
   const areaClearDisabled =
     !activeFilters.franchise_id &&
-    !String(activeFilters.name ?? "").trim();
+    !String(activeFilters.name ?? "").trim() &&
+    !searchDraft.trim();
 
   const franchiseFilterOptions = [
     { value: "", label: "All" },
@@ -611,9 +619,12 @@ const LocationManagement = () => {
         ) : undefined
       }
       onSearch={(value: string) => {
+        setSearchDraft(value);
         void handleFilterChange({ name: value.trim() });
       }}
+      onSearchInputChange={setSearchDraft}
       syncKeyword={activeFilters.name ?? ""}
+      searchClearVersion={searchClearVersion}
     />
   ) : null;
 

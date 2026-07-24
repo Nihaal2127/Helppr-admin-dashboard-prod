@@ -8,12 +8,9 @@ import { CustomFormInput } from "../../../components/CustomFormInput";
 import { openDialog } from "../../../lib/global/DialogManager";
 import { DetailsRow, WideLabelValueBlock } from "../../../helper/utility";
 import {
-  addPartnerPostMock,
   moderatePartnerPost,
   postStatusDisplayLabel,
   postStatusTextClass,
-  updatePartnerPostStatus,
-  USE_MOCK_PARTNER_POSTS_API,
 } from "../../../services/partnerManagementService";
 import type { PostModel } from "../../../lib/types/partnerManagementTypes";
 
@@ -543,19 +540,7 @@ const AddEditPostManagementDialog: React.FC<
               onClick={() => {
                 const name = (watch("post_partner_name") || "").trim();
                 const desc = (watch("post_description") || "").trim();
-                const mediaType: "image" | "video" = mediaItems.some(
-                  (m) => m.type === "video"
-                )
-                  ? "video"
-                  : "image";
                 if (!name || !desc) return;
-                addPartnerPostMock({
-                  partner_name: name,
-                  description: desc,
-                  media_type: mediaType,
-                  location: "",
-                });
-                onRefreshData();
                 onClose();
               }}
               disabled={!partnerNameVal?.trim() || !descriptionVal?.trim()}
@@ -612,15 +597,11 @@ const AddEditPostManagementDialog: React.FC<
             onClick={() => {
               void (async () => {
                 const postKey = formData._id ?? formData.id;
-                if (USE_MOCK_PARTNER_POSTS_API) {
-                  updatePartnerPostStatus(postKey, statusDraftInModal);
-                } else {
-                  const ok = await moderatePartnerPost(
-                    String(postKey ?? ""),
-                    statusDraftInModal
-                  );
-                  if (!ok) return;
-                }
+                const ok = await moderatePartnerPost(
+                  String(postKey ?? ""),
+                  statusDraftInModal
+                );
+                if (!ok) return;
                 setDisplayStatus(statusDraftInModal);
                 onRefreshData();
                 setStatusModalOpen(false);

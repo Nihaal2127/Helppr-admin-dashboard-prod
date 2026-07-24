@@ -257,6 +257,9 @@ export function mapChatRecord(raw: Record<string, unknown>): ChatRecordModel {
       contextRow?.unique_id ??
       ""
   ).trim();
+  const contextFranchiseId = String(
+    contextRow?.franchiseId ?? contextRow?.franchise_id ?? ""
+  ).trim();
   const rootOrderId = String(raw.orderId ?? raw.order_id ?? "").trim();
   const rootQuoteId = String(raw.quoteId ?? raw.quote_id ?? "").trim();
   const orderId = contextOrderId || rootOrderId;
@@ -298,8 +301,11 @@ export function mapChatRecord(raw: Record<string, unknown>): ChatRecordModel {
             Boolean(entry)
           )
       : undefined,
-    franchise_id: String(raw.franchise_id ?? "").trim() || undefined,
-    franchiseId: String(raw.franchiseId ?? raw.franchise_id ?? "").trim() || undefined,
+    franchise_id:
+      String(raw.franchise_id ?? contextFranchiseId ?? "").trim() || undefined,
+    franchiseId:
+      String(raw.franchiseId ?? raw.franchise_id ?? contextFranchiseId ?? "")
+        .trim() || undefined,
     order_id: orderId || undefined,
     orderId: orderId || undefined,
     quote_id: quoteId || undefined,

@@ -1,7 +1,7 @@
 import { showSuccessAlert, showErrorAlert } from "../alertHelper";
 import { showLoader, hideLoader } from "../../../components/CustomLoader";
 import { ROUTES } from "../../../routes/Routes";
-import { AppConstant, getChatServiceUrl } from "../AppConstant";
+import { AppConstant } from "../AppConstant";
 import { clearLocalStorage } from "../localStorageHelper";
 import { isMockAuthSession } from "../authSessionHelper";
 import { getNavigate } from "../../../helper/navigation";
@@ -31,7 +31,7 @@ export const chatApiRequest = async (
       "Content-Type": "application/json",
     };
 
-    const requestUrl = `${getChatServiceUrl().replace(/^http:\/\//i, "https://")}${endpoint}`;
+    const requestUrl = `${AppConstant.CHAT_SERVICE_URL}${endpoint}`;
 
     const response = await fetch(requestUrl, {
       method,

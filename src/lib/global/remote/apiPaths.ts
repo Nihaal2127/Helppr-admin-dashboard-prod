@@ -243,4 +243,9 @@ export const ApiPaths = {
   APPOINTMENT_CREATE: `/appointment/create`,
   APPOINTMENT_UPDATE: (id: string) => `/appointment/update/${id}`,
   APPOINTMENT_DELETE: (id: string) => `/appointment/delete/${id}`,
+  /** Web inbox — Postman §30 Notifications */
+  GET_NOTIFICATIONS: () => `/notifications`,
+  GET_NOTIFICATIONS_UNREAD_COUNT: () => `/notifications/unread-count`,
+  PUT_NOTIFICATION_READ: (id: string) => `/notifications/${id}/read`,
+  PUT_NOTIFICATIONS_READ_ALL: () => `/notifications/read-all`,
 };

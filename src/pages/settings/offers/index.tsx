@@ -58,6 +58,8 @@ const CouponManagement = () => {
   const { register, setValue } = useForm<any>();
   const [coupons, setCoupons] = useState<CouponModel[]>([]);
   const [keyword, setKeyword] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchClearVersion, setSearchClearVersion] = useState(0);
   const [statusFilter, setStatusFilter] = useState<
     "all" | "active" | "inactive"
   >("all");
@@ -434,13 +436,19 @@ const CouponManagement = () => {
           className="custom-btn-secondary px-3"
           type="button"
           disabled={
-            statusFilter === "all" && !fromDate && !toDate && !keyword.trim()
+            statusFilter === "all" &&
+            !fromDate &&
+            !toDate &&
+            !keyword.trim() &&
+            !searchDraft.trim()
           }
           onClick={() => {
             setStatusFilter("all");
             setFromDate("");
             setToDate("");
             setKeyword("");
+            setSearchDraft("");
+            setSearchClearVersion((v) => v + 1);
             setTablePage(1);
             setValue("coupons_status_filter", "all", { shouldValidate: false });
             setValue("coupons_start_date_filter", "", {
@@ -489,9 +497,12 @@ const CouponManagement = () => {
         searchOnlyToolbar
         onSearch={(value) => {
           setKeyword(value);
+          setSearchDraft(value);
           setTablePage(1);
         }}
+        onSearchInputChange={setSearchDraft}
         syncKeyword={keyword}
+        searchClearVersion={searchClearVersion}
         onSortClick={(value) => {
           setSortBy([{ id: "couponName", desc: value === "-1" }]);
           setTablePage(1);

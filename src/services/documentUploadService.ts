@@ -77,6 +77,12 @@ export type UploadDocumentImagesParams = {
   replaceUrls?: string[];
   /** Fallback storage keys when replacing (e.g. existing `profile_url` / `image_url`). */
   existingStoragePaths?: (string | null | undefined)[];
+  /**
+   * When true (default on edit): `POST` new file only — never `PUT` replace.
+   * PUT `/document_upload/update_files` is unreliable (502); upload a new key and update the entity URL instead.
+   * Pass `alwaysPostNewFile: false` only if you must use in-place replace.
+   */
+  alwaysPostNewFile?: boolean;
 };
 
 export type UploadDocumentImagesResult = {
@@ -95,7 +101,12 @@ export async function uploadDocumentImages(
     isEditMode,
     replaceUrls = [],
     existingStoragePaths = [],
+    alwaysPostNewFile: alwaysPostNewFileParam,
   } = params;
+
+  /** On edit, default to POST (new storage key) — PUT replace often 502s or returns empty `records`. */
+  const forceNewUpload =
+    isEditMode && alwaysPostNewFileParam !== false;
 
   if (files.length === 0) {
     return { ok: true, paths: [], usedReplace: false };
@@ -105,21 +116,29 @@ export async function uploadDocumentImages(
   formData.append("type", String(uploadType));
   files.forEach((file) => formData.append("files", file));
 
-  const replacePaths = isEditMode
-    ? normalizeReplaceStoragePaths(
-        replaceUrls.length > 0 ? replaceUrls : existingStoragePaths
-      )
-    : [];
+  const replacePaths =
+    isEditMode && !forceNewUpload
+      ? normalizeReplaceStoragePaths(
+          replaceUrls.length > 0 ? replaceUrls : existingStoragePaths
+        )
+      : [];
   const usedReplace = replacePaths.length > 0;
   if (usedReplace) {
     formData.append("update_file_urls", JSON.stringify(replacePaths));
   }
 
-  const { response, fileList } = await createOrUpdateDocument(
+  const { response, fileList: rawFileList } = await createOrUpdateDocument(
     formData,
     usedReplace,
-    { replaceFallbackPaths: replacePaths }
+    {
+      replaceFallbackPaths: replacePaths,
+      allowReplaceFallback: !forceNewUpload,
+    }
   );
+
+  const fileList = rawFileList
+    .map((p) => toStorageRelativePath(p) || p)
+    .filter(Boolean);
 
   if (!response || fileList.length === 0) {
     return { ok: false, paths: [], usedReplace };
@@ -137,7 +156,7 @@ export function documentUploadFailureMessage(usedReplace: boolean): string {
 export const createOrUpdateDocument = async (
   data: FormData,
   isEditable: boolean,
-  options?: { replaceFallbackPaths?: string[] }
+  options?: { replaceFallbackPaths?: string[]; allowReplaceFallback?: boolean }
 ): Promise<{ fileList: string[]; response: boolean }> => {
   const path = isEditable
     ? ApiPaths.UPDATE_DOCUMENT_UPLOAD
@@ -147,10 +166,12 @@ export const createOrUpdateDocument = async (
   const response = await apiRequest(path, method, data, true);
   if (response.success) {
     let fileList = extractUploadedFilePaths(response.data);
-    // PUT replace often returns `records: []` — file is overwritten in place at the same key.
+    const allowReplaceFallback = options?.allowReplaceFallback !== false;
+    // PUT replace often returns `records: []` — only reuse old path for profile-style replace.
     if (
       fileList.length === 0 &&
       isEditable &&
+      allowReplaceFallback &&
       (options?.replaceFallbackPaths?.length ?? 0) > 0
     ) {
       fileList = options!.replaceFallbackPaths!

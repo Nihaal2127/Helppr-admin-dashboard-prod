@@ -186,6 +186,8 @@ const OrderPayments = () => {
   const [filterEpoch, setFilterEpoch] = useState(0);
   const [utilitySearchKey, setUtilitySearchKey] = useState(0);
   const [appliedSearchKeyword, setAppliedSearchKeyword] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchClearVersion, setSearchClearVersion] = useState(0);
   const [keywordActive, setKeywordActive] = useState(false);
   const [sortBy, setSortBy] = useState<ServerTableSortBy>([]);
 
@@ -298,6 +300,8 @@ const OrderPayments = () => {
 
   const handleSearch = (value: string) => {
     listParamsRef.current.search = value;
+    setAppliedSearchKeyword(value);
+    setSearchDraft(value);
     setKeywordActive(!!value.trim());
     setCurrentPage(1);
     setFilterEpoch((e) => e + 1);
@@ -402,7 +406,8 @@ const OrderPayments = () => {
             !partnerPaymentScope &&
             !fromDate &&
             !toDate &&
-            !keywordActive
+            !keywordActive &&
+            !searchDraft.trim()
           }
           onClick={() => {
             setOrderStatus("");
@@ -412,6 +417,7 @@ const OrderPayments = () => {
             setToDate("");
             setKeywordActive(false);
             setAppliedSearchKeyword("");
+            setSearchDraft("");
             setSortBy([]);
             listParamsRef.current = {
               search: undefined,
@@ -421,6 +427,7 @@ const OrderPayments = () => {
               fromDate: "",
               toDate: "",
             };
+            setSearchClearVersion((v) => v + 1);
             setUtilitySearchKey((k) => k + 1);
             setCurrentPage(1);
             setFilterEpoch((e) => e + 1);
@@ -783,7 +790,9 @@ const OrderPayments = () => {
         }
         toolsInlineRow
         onSearch={(value) => handleSearch(value)}
+        onSearchInputChange={setSearchDraft}
         syncKeyword={appliedSearchKeyword}
+        searchClearVersion={searchClearVersion}
       />
 
       {filterControls}

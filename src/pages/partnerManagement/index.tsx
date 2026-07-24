@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import CustomHeader from "../../components/CustomHeader";
 import SubscriptionPlans from "./subscriptionPlans/subscriptionPlans";
@@ -8,6 +8,7 @@ import PostManagement from "./postManagement/PostManagement";
 
 const PartnerManagement = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { register, setValue } = useForm<any>();
 
   const [selectedPage, setSelectedPage] = useState<string>("");
@@ -20,6 +21,32 @@ const PartnerManagement = () => {
     { title: "Post\nManagement", action: "post" },
     { title: "Partners", action: "partners" },
   ]);
+
+  useEffect(() => {
+    const section = String(searchParams.get("section") ?? "")
+      .trim()
+      .toLowerCase();
+    if (!section) return;
+
+    if (section === "partners") {
+      navigate("/user-management", {
+        replace: true,
+        state: { initialTab: "partners" },
+      });
+      return;
+    }
+
+    if (
+      section === "subscription" ||
+      section === "portfolio" ||
+      section === "post"
+    ) {
+      setSelectedPage(section);
+      const next = new URLSearchParams(searchParams);
+      next.delete("section");
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams, navigate]);
 
   const handleOnClick = (action: (typeof cardList)[number]["action"]) => {
     if (action === "partners") {

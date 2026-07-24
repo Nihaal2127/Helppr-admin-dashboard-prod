@@ -6,6 +6,7 @@ import React, {
   useMemo,
 } from "react";
 import { Button, Form } from "react-bootstrap";
+import { useSearchParams } from "react-router-dom";
 import CustomHeader from "../../components/CustomHeader";
 import CustomUtilityBox from "../../components/CustomUtilityBox";
 import { OrderModel, OrderStatusEnum } from "../../lib/order/orders";
@@ -34,6 +35,9 @@ import { getCount } from "../../services/getCountService";
 import type { GetCountExtra } from "../../services/getCountService";
 import { useFranchiseHeaderForm } from "../../lib/global/hooks/useFranchiseScopedGetCount";
 import { franchiseIdForApiQuery } from "../../lib/franchise/headerFranchisePreference";
+import {
+  openOrderFromNotification,
+} from "../../lib/notifications/notificationNavigation";
 
 const toIsoCalendarDate = (date: Date | null): string | null => {
   if (!date) return null;
@@ -44,6 +48,8 @@ const toIsoCalendarDate = (date: Date | null): string | null => {
 };
 
 const OrderManagement = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const notificationDeepLinkHandledRef = useRef<string | null>(null);
   const { register, setValue, franchiseId: headerFranchiseId } =
     useFranchiseHeaderForm();
   const { register: dateFilterRegister, setValue: setDateFilterValue } =
@@ -61,6 +67,9 @@ const OrderManagement = () => {
   const [totalPages, setTotalPages] = useState(0);
   const [fromDate, setFromDate] = useState<string | null>(null);
   const [toDate, setToDate] = useState<string | null>(null);
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchClearVersion, setSearchClearVersion] = useState(0);
   const [utilitySearchKey, setUtilitySearchKey] = useState(0);
   const [orderCountsByTab, setOrderCountsByTab] = useState<
     Partial<Record<OrderTabKey, number>>
@@ -69,12 +78,14 @@ const OrderManagement = () => {
 
   const listFilters = useMemo(() => {
     const fid = franchiseIdForApiQuery(headerFranchiseId);
+    const keyword = searchKeyword.trim();
     return {
       from_date: fromDate,
       to_date: toDate,
+      ...(keyword ? { keyword } : {}),
       ...(fid ? { franchise_id: fid } : {}),
     };
-  }, [fromDate, toDate, headerFranchiseId]);
+  }, [fromDate, toDate, headerFranchiseId, searchKeyword]);
 
   const fetchData = useCallback(
     async (filters: { keyword?: string; status?: string; sort?: string }) => {
@@ -100,6 +111,31 @@ const OrderManagement = () => {
   const refreshData = useCallback(async () => {
     await fetchData({ status: selectedStatus.toString() });
   }, [fetchData, selectedStatus]);
+
+  useEffect(() => {
+    const openId = String(searchParams.get("openId") ?? "").trim();
+    const tabRaw = String(searchParams.get("tab") ?? "").trim();
+    if (!openId) return;
+
+    const linkKey = `${tabRaw}|${openId}`;
+    if (notificationDeepLinkHandledRef.current === linkKey) return;
+    notificationDeepLinkHandledRef.current = linkKey;
+
+    const tabNum = Number(tabRaw);
+    if (ORDER_TAB_KEYS.includes(tabNum as OrderTabKey)) {
+      setSelectedStatus(tabNum as OrderTabKey);
+      setCurrentPage(1);
+    }
+
+    openOrderFromNotification(openId, () => {
+      void refreshData();
+    });
+
+    const next = new URLSearchParams(searchParams);
+    next.delete("openId");
+    next.delete("tab");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, refreshData]);
 
   /** Tab badges: `POST /getCount` `{ type: "order-management", franchise_id? }`; falls back to list totals if unmapped. */
   const reloadTabCounts = useCallback(async () => {
@@ -167,23 +203,21 @@ const OrderManagement = () => {
     void Promise.all([reloadTabCounts(), refreshData()]);
   }, [reloadTabCounts, refreshData, currentPage, selectedStatus]);
 
-  const handleFilterChange = async (filters: {
-    keyword?: string;
-    status?: string;
-    sort?: string;
-  }) => {
+  const clearOrderFilters = useCallback(() => {
+    setFromDate(null);
+    setToDate(null);
+    setSearchKeyword("");
+    setSearchDraft("");
+    setDateFilterValue("from_date", "");
+    setDateFilterValue("to_date", "");
+    setSearchClearVersion((v) => v + 1);
+    setUtilitySearchKey((k) => k + 1);
     setCurrentPage(1);
-    setTotalPages(0);
-    if (Object.keys(filters).length === 0) {
-      fetchRef.current = false;
-    } else {
-      await fetchData({
-        ...filters,
-        status: filters.status ?? selectedStatus.toString(),
-        ...listFilters,
-      });
-    }
-  };
+  }, [setDateFilterValue]);
+
+  const hasActiveOrderFilters = Boolean(
+    fromDate || toDate || searchKeyword.trim() || searchDraft.trim()
+  );
 
   const handleStatusCardSelect = (statusKey: OrderTabKey) => {
     setSelectedStatus(statusKey);
@@ -430,22 +464,22 @@ const OrderManagement = () => {
             <Button
               variant="outline-secondary"
               size="sm"
-              className="custom-btn-secondary partner-payout-clear-btn px-3"
+              className="custom-btn-secondary partner-payout-clear-btn order-management-clear-btn px-3"
               type="button"
-              disabled={!fromDate && !toDate}
-              onClick={() => {
-                setFromDate(null);
-                setToDate(null);
-                setDateFilterValue("from_date", "");
-                setDateFilterValue("to_date", "");
-                setUtilitySearchKey((k) => k + 1);
-                setCurrentPage(1);
-              }}
+              disabled={!hasActiveOrderFilters}
+              onClick={clearOrderFilters}
             >
               Clear
             </Button>
           }
-          onSearch={(value) => handleFilterChange({ keyword: value })}
+          onSearch={(value) => {
+            setSearchKeyword(value);
+            setSearchDraft(value);
+            setCurrentPage(1);
+          }}
+          onSearchInputChange={setSearchDraft}
+          syncKeyword={searchKeyword}
+          searchClearVersion={searchClearVersion}
         />
 
         <CustomTable

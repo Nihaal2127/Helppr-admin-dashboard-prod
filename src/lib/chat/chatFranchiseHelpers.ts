@@ -13,8 +13,26 @@ import {
 
 const userFranchiseCache = new Map<string, string>();
 const orderFranchiseCache = new Map<string, string>();
+const orderFranchiseInflight = new Map<string, Promise<string>>();
+
+const FRANCHISE_UNRESOLVED = "__unresolved__";
 
 const ENRICH_CONCURRENCY = 4;
+
+function refIdLoose(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "object" && !Array.isArray(value)) {
+    const row = value as Record<string, unknown>;
+    return String(row._id ?? row.id ?? "").trim();
+  }
+  return String(value).trim();
+}
+
+function cachedFranchiseId(cache: Map<string, string>, key: string): string {
+  const cached = cache.get(key);
+  if (cached === undefined || cached === FRANCHISE_UNRESOLVED) return "";
+  return cached;
+}
 
 /** Super admin/staff with a specific franchise selected in the header. */
 export function shouldEnrichChatFranchiseIds(): boolean {
@@ -53,6 +71,10 @@ function orderIdsNeedingFranchise(chats: ChatRecordModel[]): string[] {
   const ids = new Set<string>();
   for (const chat of chats) {
     if (chatLinkedFranchiseId(chat)) continue;
+
+    const assignee = assigneeUserId(chat);
+    if (assignee && cachedFranchiseId(userFranchiseCache, assignee)) continue;
+
     const orderId = chatLinkedOrderId(chat);
     if (orderId && !orderFranchiseCache.has(orderId)) {
       ids.add(orderId);
@@ -62,29 +84,51 @@ function orderIdsNeedingFranchise(chats: ChatRecordModel[]): string[] {
 }
 
 async function resolveUserFranchiseId(userId: string): Promise<string> {
-  const cached = userFranchiseCache.get(userId);
-  if (cached) return cached;
+  const uid = String(userId ?? "").trim();
+  if (!uid) return "";
+  if (userFranchiseCache.has(uid)) {
+    return cachedFranchiseId(userFranchiseCache, uid);
+  }
 
-  const res = await fetchUserById(userId);
-  const rawFranchise = res.user?.franchise_id;
-  const fid = String(
-    typeof rawFranchise === "string"
-      ? rawFranchise
-      : rawFranchise?._id ?? ""
-  ).trim();
-  if (fid) userFranchiseCache.set(userId, fid);
-  return fid;
+  try {
+    const res = await fetchUserById(uid);
+    const fid = refIdLoose(res.user?.franchise_id);
+    userFranchiseCache.set(uid, fid || FRANCHISE_UNRESOLVED);
+    return fid;
+  } catch {
+    userFranchiseCache.set(uid, FRANCHISE_UNRESOLVED);
+    return "";
+  }
 }
 
 async function resolveOrderFranchiseId(orderId: string): Promise<string> {
-  const cached = orderFranchiseCache.get(orderId);
-  if (cached) return cached;
+  const id = String(orderId ?? "").trim();
+  if (!id) return "";
+  if (orderFranchiseCache.has(id)) {
+    return cachedFranchiseId(orderFranchiseCache, id);
+  }
 
-  const res = await fetchOrderById(orderId, { skipLoader: true });
-  const order = res.order as { franchise_id?: string; franchiseId?: string } | null;
-  const fid = String(order?.franchise_id ?? order?.franchiseId ?? "").trim();
-  if (fid) orderFranchiseCache.set(orderId, fid);
-  return fid;
+  const inflight = orderFranchiseInflight.get(id);
+  if (inflight) return inflight;
+
+  const task = (async () => {
+    try {
+      const res = await fetchOrderById(id, { skipLoader: true });
+      const order = res.order as Record<string, unknown> | null;
+      const fid =
+        refIdLoose(order?.franchise_id) || refIdLoose(order?.franchiseId) || "";
+      orderFranchiseCache.set(id, fid || FRANCHISE_UNRESOLVED);
+      return fid;
+    } catch {
+      orderFranchiseCache.set(id, FRANCHISE_UNRESOLVED);
+      return "";
+    } finally {
+      orderFranchiseInflight.delete(id);
+    }
+  })();
+
+  orderFranchiseInflight.set(id, task);
+  return task;
 }
 
 function attachFranchiseId(
@@ -97,13 +141,13 @@ function attachFranchiseId(
 function franchiseIdFromCaches(chat: ChatRecordModel): string {
   const assignedTo = assigneeUserId(chat);
   if (assignedTo) {
-    const fromAssignee = userFranchiseCache.get(assignedTo);
+    const fromAssignee = cachedFranchiseId(userFranchiseCache, assignedTo);
     if (fromAssignee) return fromAssignee;
   }
 
   const orderId = chatLinkedOrderId(chat);
   if (orderId) {
-    const fromOrder = orderFranchiseCache.get(orderId);
+    const fromOrder = cachedFranchiseId(orderFranchiseCache, orderId);
     if (fromOrder) return fromOrder;
   }
 
@@ -144,19 +188,22 @@ export async function enrichChatInboxFranchiseIds(
     }
   }
 
+  if (userIdsToResolve.size > 0) {
+    await runWithConcurrency(
+      Array.from(userIdsToResolve).map(
+        (userId) => () => resolveUserFranchiseId(userId)
+      ),
+      ENRICH_CONCURRENCY
+    );
+  }
+
   const orderIdsToResolve = orderIdsNeedingFranchise(chats);
-
-  const userTasks = Array.from(userIdsToResolve).map(
-    (userId) => () => resolveUserFranchiseId(userId)
-  );
-  const orderTasks = orderIdsToResolve.map(
-    (orderId) => () => resolveOrderFranchiseId(orderId)
-  );
-
-  await runWithConcurrency(
-    [...userTasks, ...orderTasks],
-    ENRICH_CONCURRENCY
-  );
+  if (orderIdsToResolve.length > 0) {
+    await runWithConcurrency(
+      orderIdsToResolve.map((orderId) => () => resolveOrderFranchiseId(orderId)),
+      ENRICH_CONCURRENCY
+    );
+  }
 
   return chats.map((chat) => {
     const franchiseId = resolveChatFranchiseId(chat);

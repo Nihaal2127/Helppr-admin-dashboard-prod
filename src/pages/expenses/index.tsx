@@ -160,6 +160,8 @@ const ExpensesPage = () => {
   const [pageSize, setPageSize] = useState(10);
 
   const [keyword, setKeyword] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchClearVersion, setSearchClearVersion] = useState(0);
   const [sort, setSort] = useState<"-1" | "1">("-1");
   const [sortBy, setSortBy] = useState<ServerTableSortBy>([]);
   const [filterEpoch, setFilterEpoch] = useState(0);
@@ -725,14 +727,16 @@ const ExpensesPage = () => {
     }
   };
 
-  const clearExpensesDisabled = !keyword?.trim() && sort === "-1";
+  const clearExpensesDisabled = !keyword?.trim() && !searchDraft.trim() && sort === "-1";
 
   const clearExpensesFilters = () => {
     setKeyword("");
+    setSearchDraft("");
     setSort("-1");
     setSortBy([]);
     setCurrentPage(1);
     setFilterEpoch((k) => k + 1);
+    setSearchClearVersion((v) => v + 1);
     setUtilitySearchKey((k) => k + 1);
   };
 
@@ -783,10 +787,13 @@ const ExpensesPage = () => {
         }
         onSearch={(value) => {
           setKeyword(value);
+          setSearchDraft(value);
           setCurrentPage(1);
           setFilterEpoch((k) => k + 1);
         }}
+        onSearchInputChange={setSearchDraft}
         syncKeyword={keyword}
+        searchClearVersion={searchClearVersion}
       />
 
       <CustomTable

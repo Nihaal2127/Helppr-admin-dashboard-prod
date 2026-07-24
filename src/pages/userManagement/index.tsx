@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { useLocation } from "react-router-dom";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useLocation, useSearchParams } from "react-router-dom";
 import CustomHeader from "../../components/CustomHeader";
 import CustomSummaryBox from "../../components/CustomSummaryBox";
 import CustomUtilityBox from "../../components/CustomUtilityBox";
@@ -40,6 +40,8 @@ import ChangePartnerPasswordDialog from "./ChangePartnerPasswordDialog";
 
 const UserManagement = () => {
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const notificationDeepLinkHandledRef = useRef<string | null>(null);
   const [selectedBox, setSelectedBox] = useState<string>("box-user");
   const [userData, setUserData] = useState<{}>({});
   const [partnerData, setParnterData] = useState<{}>({});
@@ -77,8 +79,8 @@ const UserManagement = () => {
     setParnterData({
       Total: userCountModel.total_partner ?? 0,
       Active: userCountModel.active_partner ?? 0,
-      Inactive: userCountModel.inactive_partner ?? 0,
-      Blocked: Number(userCountModel.blocked_partner ?? 0),
+      // Inactive: userCountModel.inactive_partner ?? 0,
+      Inactive: Number(userCountModel.blocked_partner ?? 0),
     });
     setVerificationData({
       Total: userCountModel.total_document,
@@ -269,6 +271,60 @@ const UserManagement = () => {
     },
     [refreshData, refreshUserManagementCounts]
   );
+
+  useEffect(() => {
+    const tabRaw = String(searchParams.get("tab") ?? "")
+      .trim()
+      .toLowerCase();
+    const openId = String(searchParams.get("openId") ?? "").trim();
+    if (!tabRaw && !openId) return;
+
+    const linkKey = `${tabRaw}|${openId}`;
+    if (notificationDeepLinkHandledRef.current === linkKey) return;
+    notificationDeepLinkHandledRef.current = linkKey;
+
+    const box =
+      tabRaw === "partner" || tabRaw === "partners"
+        ? "box-partner"
+        : tabRaw === "verification" || tabRaw === "document"
+          ? "box-verification"
+          : tabRaw === "user" || tabRaw === "customer"
+            ? "box-user"
+            : null;
+
+    if (box) {
+      setSelectedBox(box);
+      setCurrentPage(1);
+      setSearchKeyword("");
+      setStatusFilter(undefined);
+      setPartnerIsVerifiedFilter(undefined);
+      setSortBy([]);
+      setUtilitySearchKey((k) => k + 1);
+    }
+
+    if (openId) {
+      window.setTimeout(() => {
+        if (box === "box-verification" || tabRaw === "verification") {
+          openPartnerVerification(openId);
+        } else if (box === "box-partner" || tabRaw === "partner") {
+          partnerShow(openId);
+        } else {
+          userShow(openId);
+        }
+      }, 0);
+    }
+
+    const next = new URLSearchParams(searchParams);
+    next.delete("openId");
+    next.delete("tab");
+    setSearchParams(next, { replace: true });
+  }, [
+    searchParams,
+    setSearchParams,
+    openPartnerVerification,
+    partnerShow,
+    userShow,
+  ]);
 
   const partnerChangePassword = useCallback((row: { original: UserModel }) => {
     const u = row.original;

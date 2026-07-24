@@ -69,24 +69,18 @@ function resolveActiveFlag(value: unknown, defaultActive = true): boolean {
   return value === true || String(value).toLowerCase() === "true";
 }
 
-/** Franchise catalogue dropdowns: only `is_active === true` rows are selectable. */
-function catalogDropdownIsActive(value: unknown): boolean {
-  return resolveActiveFlag(value, false);
-}
-
 function mapFranchiseCatalogService(
   raw: Record<string, unknown>,
   categoryId: string
 ): PartnerCatalogServiceLite | null {
-  if (!catalogDropdownIsActive(raw.is_active)) return null;
-  const _id = String(raw._id ?? "").trim();
+  const _id = String(raw._id ?? raw.service_id ?? "").trim();
   if (!_id) return null;
   const priceRaw = raw.price ?? raw.minimum_deposit;
   const priceNum =
     priceRaw !== undefined && priceRaw !== null ? Number(priceRaw) : NaN;
   return {
     _id,
-    name: String(raw.name ?? "").trim(),
+    name: String(raw.name ?? raw.service_name ?? "").trim(),
     category_id: categoryId,
     price: Number.isFinite(priceNum) ? priceNum : undefined,
     payment_type: raw.payment_type ? String(raw.payment_type) : undefined,
@@ -317,6 +311,8 @@ function EditPartnerCategoriesServicesDialogView({
   const initialBlockIdsRef = useRef<Set<string>>(new Set());
   const initialRowIdsRef = useRef<Set<string>>(new Set());
   const didInit = useRef(false);
+  const loadedServiceCategoryIdsRef = useRef<Set<string>>(new Set());
+  const loadingServiceCategoryIdsRef = useRef<Set<string>>(new Set());
 
   const userRole = String(getLocalStorage(AppConstant.userRole) ?? "").trim();
   const isSuperAdminOrStaff =
@@ -331,6 +327,16 @@ function EditPartnerCategoriesServicesDialogView({
     () => isSuperAdminOrStaff && !catalogFranchiseApiId,
     [isSuperAdminOrStaff, catalogFranchiseApiId]
   );
+
+  /** Stable key — only category ids, not description/price edits on blocks. */
+  const blockCategoryIdsKey = useMemo(() => {
+    const ids = blocks
+      .map((b) => String(b.categoryId ?? "").trim())
+      .filter(Boolean);
+    const unique = ids.filter((id, i) => ids.indexOf(id) === i);
+    unique.sort();
+    return unique.join("|");
+  }, [blocks]);
 
   const cityId = user.city_id ?? "";
   const stateId = user.state_id ?? "";
@@ -366,36 +372,32 @@ function EditPartnerCategoriesServicesDialogView({
             ? svcRes.services
             : [];
         setAllServices(
-          list
-            .filter((s) =>
-              catalogDropdownIsActive((s as { is_active?: unknown }).is_active)
-            )
-            .map((s) => {
-              const category_id = String(
-                normalizeServiceCategoryRef(
-                  (s as { category_id?: unknown }).category_id
-                )
-              );
-              const priceRaw =
-                (s as { price?: number | null }).price ??
-                (s as { minimum_deposit?: number | null }).minimum_deposit;
-              const priceNum =
-                priceRaw !== undefined && priceRaw !== null
-                  ? Number(priceRaw)
-                  : NaN;
-              return {
-                _id: String((s as { _id?: string })._id ?? ""),
-                name: String((s as { name?: string }).name ?? ""),
-                category_id,
-                category_name: (s as { category_name?: string }).category_name
-                  ? String((s as { category_name?: string }).category_name)
-                  : undefined,
-                price: Number.isFinite(priceNum) ? priceNum : undefined,
-                payment_type: (s as { payment_type?: string }).payment_type
-                  ? String((s as { payment_type?: string }).payment_type)
-                  : undefined,
-              };
-            })
+          list.map((s) => {
+            const category_id = String(
+              normalizeServiceCategoryRef(
+                (s as { category_id?: unknown }).category_id
+              )
+            );
+            const priceRaw =
+              (s as { price?: number | null }).price ??
+              (s as { minimum_deposit?: number | null }).minimum_deposit;
+            const priceNum =
+              priceRaw !== undefined && priceRaw !== null
+                ? Number(priceRaw)
+                : NaN;
+            return {
+              _id: String((s as { _id?: string })._id ?? ""),
+              name: String((s as { name?: string }).name ?? ""),
+              category_id,
+              category_name: (s as { category_name?: string }).category_name
+                ? String((s as { category_name?: string }).category_name)
+                : undefined,
+              price: Number.isFinite(priceNum) ? priceNum : undefined,
+              payment_type: (s as { payment_type?: string }).payment_type
+                ? String((s as { payment_type?: string }).payment_type)
+                : undefined,
+            };
+          })
         );
       } catch {
         if (!cancelled) setAllServices([]);
@@ -428,7 +430,6 @@ function EditPartnerCategoriesServicesDialogView({
         }
         const servicesByCat: Record<string, PartnerCatalogServiceLite[]> = {};
         const catList = (Array.isArray(res.categories) ? res.categories : [])
-          .filter((c) => catalogDropdownIsActive(c.is_active))
           .map((c) => {
             const raw = c as unknown as Record<string, unknown>;
             const value = String(c._id ?? c.category_id ?? "").trim();
@@ -454,6 +455,11 @@ function EditPartnerCategoriesServicesDialogView({
       cancelled = true;
     };
   }, [catalogFranchiseApiId, catalogLocked]);
+
+  useEffect(() => {
+    loadedServiceCategoryIdsRef.current.clear();
+    loadingServiceCategoryIdsRef.current.clear();
+  }, [catalogFranchiseApiId, cityId, stateId]);
 
   const partnerCategoryLabelById = useMemo(() => {
     const map = new Map<string, string>();
@@ -508,6 +514,36 @@ function EditPartnerCategoriesServicesDialogView({
     }
     return out;
   }, [allServices, servicesByCategoryId]);
+
+  const partnerServiceLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const ps of user.partner_services ?? []) {
+      const sid = partnerServiceRefId(ps.service_id);
+      const name = partnerServiceRefName(ps.service_id, "");
+      if (sid && name) map.set(sid, name);
+    }
+    const svcIds = (user.service_ids ?? []).map(String);
+    const svcNames = user.service_names ?? [];
+    svcIds.forEach((id, i) => {
+      const sid = String(id ?? "").trim();
+      const name =
+        svcNames[i] != null && String(svcNames[i]).trim()
+          ? String(svcNames[i]).trim()
+          : "";
+      if (sid && name) map.set(sid, name);
+    });
+    for (const s of catalogServicesForBlocks) {
+      const sid = String(s._id ?? "").trim();
+      const name = String(s.name ?? "").trim();
+      if (sid && name) map.set(sid, name);
+    }
+    return map;
+  }, [
+    user.partner_services,
+    user.service_ids,
+    user.service_names,
+    catalogServicesForBlocks,
+  ]);
 
   const categorySelectOptionsForBlock = useCallback(
     (block: PartnerCategoryBlock): PartnerSelectOption[] => {
@@ -572,7 +608,9 @@ function EditPartnerCategoriesServicesDialogView({
       }
 
       const resolveLabel = (sid: string): string =>
-        catalogServicesForBlocks.find((x) => String(x._id) === sid)?.name ?? sid;
+        partnerServiceLabelById.get(sid) ??
+        catalogServicesForBlocks.find((x) => String(x._id) === sid)?.name ??
+        sid;
 
       if (currentSid && !seen.has(currentSid)) {
         ordered.push({ value: currentSid, label: resolveLabel(currentSid) });
@@ -585,7 +623,7 @@ function EditPartnerCategoriesServicesDialogView({
 
       return [{ value: "", label: "Select service" }, ...filtered];
     },
-    [allServices, servicesByCategoryId, catalogServicesForBlocks]
+    [allServices, servicesByCategoryId, catalogServicesForBlocks, partnerServiceLabelById]
   );
 
   useEffect(() => {
@@ -649,9 +687,17 @@ function EditPartnerCategoriesServicesDialogView({
   }, [allServices]);
 
   const loadServicesForCategory = useCallback(
-    async (categoryId: string) => {
+    async (categoryId: string, options?: { force?: boolean }) => {
       const cid = String(categoryId ?? "").trim();
       if (!cid || catalogLocked) return;
+      if (
+        !options?.force &&
+        (loadedServiceCategoryIdsRef.current.has(cid) ||
+          loadingServiceCategoryIdsRef.current.has(cid))
+      ) {
+        return;
+      }
+      loadingServiceCategoryIdsRef.current.add(cid);
       try {
         const svcRes = await fetchService(
           1,
@@ -671,24 +717,43 @@ function EditPartnerCategoriesServicesDialogView({
         const mapped: PartnerCatalogServiceLite[] = [];
         for (const s of list) {
           if (normalizeServiceCategoryRef(s.category_id) !== cid) continue;
-          const row = mapFranchiseCatalogService(
-            s as unknown as Record<string, unknown>,
-            cid
-          );
-          if (row) mapped.push(row);
+          const priceRaw =
+            (s as { price?: number | null }).price ??
+            (s as { minimum_deposit?: number | null }).minimum_deposit;
+          const priceNum =
+            priceRaw !== undefined && priceRaw !== null
+              ? Number(priceRaw)
+              : NaN;
+          mapped.push({
+            _id: String((s as { _id?: string })._id ?? ""),
+            name: String((s as { name?: string }).name ?? ""),
+            category_id: cid,
+            price: Number.isFinite(priceNum) ? priceNum : undefined,
+            payment_type: String(
+              (s as { payment_type?: string }).payment_type ??
+                (s as { min_deposit_type?: string }).min_deposit_type ??
+                ""
+            ).trim(),
+          });
         }
-        setServicesByCategoryId((prev) => {
-          if (prev[cid]?.length) return prev;
-          return { ...prev, [cid]: mapped };
-        });
+        setServicesByCategoryId((prev) => ({ ...prev, [cid]: mapped }));
+        loadedServiceCategoryIdsRef.current.add(cid);
       } catch {
-        setServicesByCategoryId((prev) =>
-          prev[cid]?.length ? prev : { ...prev, [cid]: [] }
-        );
+        setServicesByCategoryId((prev) => ({ ...prev, [cid]: [] }));
+      } finally {
+        loadingServiceCategoryIdsRef.current.delete(cid);
       }
     },
     [catalogFranchiseApiId, catalogLocked, cityId, stateId]
   );
+
+  /** Preload franchise-active services when block category ids change (not on description/price typing). */
+  useEffect(() => {
+    if (catalogLocked || !blockCategoryIdsKey) return;
+    for (const cid of blockCategoryIdsKey.split("|").filter(Boolean)) {
+      void loadServicesForCategory(cid);
+    }
+  }, [blockCategoryIdsKey, catalogLocked, loadServicesForCategory]);
 
   const addCategoryBlock = useCallback(() => {
     setBlocks((prev) => [...prev, emptyPartnerCatalogBlock("")]);
@@ -751,7 +816,8 @@ function EditPartnerCategoriesServicesDialogView({
       );
       const cid = String(categoryId ?? "").trim();
       if (!cid || isExistingBlock(blockId)) return;
-      void loadServicesForCategory(cid);
+      loadedServiceCategoryIdsRef.current.delete(cid);
+      void loadServicesForCategory(cid, { force: true });
     },
     [isExistingBlock, loadServicesForCategory]
   );

@@ -4,10 +4,6 @@ import {
   RoleSettingsModel,
   StaffSettingsModel,
 } from "../lib/models/SettingsModel";
-import { offersMockSeed } from "../mockData/settingsOffersMockData";
-import { rolesMockSeed } from "../mockData/settingsRolesMockData";
-import { staffMockSeed } from "../mockData/settingsStaffMockData";
-import { expenseCategoriesMockSeed } from "../mockData/settingsExpenseCategoryMockData";
 import { AppConstant } from "../lib/global/AppConstant";
 import { getLocalStorage } from "../lib/global/localStorageHelper";
 import { showErrorAlert } from "../lib/global/alertHelper";
@@ -42,48 +38,11 @@ function dobFromApiRaw(raw: Record<string, unknown>): string | undefined {
   return ymd || undefined;
 }
 
-// ----------------------
-// Offer mock data (in-memory, no localStorage)
-// ----------------------
-
-let mockOffers: OfferModel[] = offersMockSeed.map((item, index) => {
-  const now = new Date().toISOString();
-  return {
-    ...item,
-    id: `${Date.now()}-${index}`,
-    createdAt: now,
-    startDate: item.startDate || now,
-    endDate: item.endDate || now,
-  };
-});
-
-let mockRoles: RoleSettingsModel[] = rolesMockSeed.map((item, index) => {
-  const now = new Date().toISOString();
-  return {
-    ...item,
-    id: `${Date.now()}-role-${index}`,
-    createdDate: now,
-  };
-});
-
-let mockExpenseCategories: ExpenseCategoryModel[] =
-  expenseCategoriesMockSeed.map((item, index) => {
-    const now = new Date().toISOString();
-    return {
-      ...item,
-      id: `${Date.now()}-expense-category-${index}`,
-      createdDate: now,
-    };
-  });
-
-let mockStaff: StaffSettingsModel[] = staffMockSeed.map((item, index) => {
-  const now = new Date().toISOString();
-  return {
-    ...item,
-    id: `${Date.now()}-staff-${index}`,
-    createdDate: now,
-  };
-});
+// In-memory caches synced from API (no seed data).
+let mockOffers: OfferModel[] = [];
+let mockRoles: RoleSettingsModel[] = [];
+let mockExpenseCategories: ExpenseCategoryModel[] = [];
+let mockStaff: StaffSettingsModel[] = [];
 
 // Kept for backward compatibility with existing page calls.
 export const ensureSettingsSeedData = () => {};
@@ -178,21 +137,21 @@ export async function fetchActiveOffers(): Promise<OfferModel[]> {
       true,
       true
     );
-    if (!res.success) return activeValidOffersForToday(getOffers());
+    if (!res.success) return [];
     const payload =
       res.data && typeof res.data === "object"
         ? (res.data as Record<string, unknown>)
         : {};
     const records = pickOfferRows(payload);
     if (!records.length) {
-      return activeValidOffersForToday(getOffers());
+      return [];
     }
     return records
       .map((r) => mapApiOfferRecord(r))
       .filter((o): o is OfferModel => o != null && o.status === "active")
       .filter((o) => isOfferWithinValidityPeriod(o));
   } catch {
-    return activeValidOffersForToday(getOffers());
+    return [];
   }
 }
 

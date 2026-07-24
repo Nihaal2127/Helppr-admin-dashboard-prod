@@ -3483,11 +3483,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                           register={register}
                           fieldName="category_id"
                           error={errors.category_id}
-                            requiredMessage={
-                              createOrderPartnerSelected
-                                ? "Please select a category"
-                                : undefined
-                            }
+                            requiredMessage="Please select a category"
                           defaultValue={getValues("category_id")}
                             isClearable
                             setValue={(name: string, value: any) => {
@@ -3529,11 +3525,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                           register={register}
                             fieldName="requested_services"
                             error={errors.requested_services}
-                          requiredMessage={
-                              createCategoryIdWatch && createOrderPartnerSelected
-                                ? "Please select a service"
-                              : undefined
-                          }
+                          requiredMessage="Please select a service"
                             defaultValue={getValues("requested_services")}
                             setValue={(name: string, value: any) => {
                               setValue(name, value, {

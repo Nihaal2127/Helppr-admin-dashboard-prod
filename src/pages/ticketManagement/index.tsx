@@ -18,7 +18,7 @@ type ChatCardType = "normal" | "dispute" | "quote" | "group";
 const TicketManagement = () => {
   const navigate = useNavigate();
   const { register, setValue } = useForm();
-  const { inbox, inboxLoading } = useChatContext();
+  const { inbox, inboxLoading, enrichInboxFranchiseIdsIfNeeded } = useChatContext();
 
   const [franchiseId, setFranchiseId] = useState(() => readHeaderFranchisePreference());
   const [selectedChatCard, setSelectedChatCard] = useState<ChatCardType | "">("");
@@ -31,6 +31,11 @@ const TicketManagement = () => {
     return () =>
       window.removeEventListener(HEADER_FRANCHISE_CHANGED_EVENT, onFranchiseChange);
   }, []);
+
+  useEffect(() => {
+    if (!inbox.length) return;
+    void enrichInboxFranchiseIdsIfNeeded();
+  }, [enrichInboxFranchiseIdsIfNeeded, franchiseId, inbox.length]);
 
   const scopedInbox = useMemo(
     () => filterChatsByFranchise(inbox, franchiseId),

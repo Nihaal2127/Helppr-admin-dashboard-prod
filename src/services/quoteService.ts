@@ -2,7 +2,6 @@ import type {
   QuoteRow,
   QuoteTabKey,
 } from "../lib/types/quoteTypes";
-import { quoteListMockData } from "../mockData/quoteMockData";
 import {
   APP_USER_TYPE,
   fetchPartnerDropDown,
@@ -12,7 +11,7 @@ import { apiRequest } from "../lib/global/remote/apiHelper";
 import { ApiPaths } from "../lib/global/remote/apiPaths";
 import type { ServerTableSortBy } from "../lib/global/serverTableSort";
 import { fetchCategoryDropDown } from "./categoryService";
-import { fetchServiceDropDown } from "./servicesService";
+import { fetchServiceById, fetchServiceDropDown } from "./servicesService";
 import type { ServiceDropDownOption } from "./servicesService";
 import { normalizeServiceCategoryRef } from "./servicesService";
 import {
@@ -168,17 +167,6 @@ export async function fetchFranchiseRelatedCatalog(
 ): Promise<{ success: boolean; record: FranchiseRelatedCatalogRecord | null }> {
   const id = str(franchiseId);
   if (!id) return { success: false, record: null };
-  if (USE_MOCK_QUOTE_API) {
-    return {
-      success: true,
-      record: {
-        categories: [],
-        services: [],
-        partners: [],
-        employees: [],
-      },
-    };
-  }
 
   const existing = relatedCatalogInflight.get(id);
   if (existing) return existing;
@@ -1179,24 +1167,97 @@ export function buildQuotePrefilledCategoryOptions(
   return [{ value: cid, label: name || cid }];
 }
 
+function enrichQuoteServiceOptionLabel(
+  opt: ServiceDropDownOption,
+  sid: string,
+  nameCandidates: unknown[]
+): ServiceDropDownOption {
+  const human = pickHumanQuoteServiceLabel([...nameCandidates, opt.label], sid);
+  if (!human || human === opt.label) return opt;
+  return { ...opt, label: human };
+}
+
 export function buildQuotePrefilledServiceOptions(
   quoteCatalogServices: ServiceDropDownOption[],
   serviceId: string,
   serviceName?: string,
-  categoryId?: string
+  categoryId?: string,
+  extraNameCandidates: unknown[] = []
 ): ServiceDropDownOption[] {
   const sid = str(serviceId);
   if (!sid) return [];
+  const nameCandidates = [serviceName, ...extraNameCandidates];
   const match = quoteCatalogServices.find((o) => String(o.value) === sid);
-  if (match) return [match];
+  if (match) {
+    return [enrichQuoteServiceOptionLabel(match, sid, nameCandidates)];
+  }
   const cid = normalizeServiceCategoryRef(categoryId);
+  const label =
+    pickHumanQuoteServiceLabel(nameCandidates, sid) || sid;
   return [
     {
       value: sid,
-      label: str(serviceName) || sid,
+      label,
       category_id: cid || undefined,
     },
   ];
+}
+
+function applyQuoteServiceNameFromFees(
+  quote: QuoteRow,
+  serviceFees: ServiceDropDownOption | undefined
+): QuoteRow {
+  const feeLabel = pickHumanQuoteServiceLabel(
+    [serviceFees?.label],
+    quote.service_id
+  );
+  if (!feeLabel) return quote;
+  const next = { ...quote };
+  if (!next.service_name) next.service_name = feeLabel;
+  if (
+    !next.requested_services ||
+    isMongoObjectId(next.requested_services) ||
+    next.requested_services === next.service_id
+  ) {
+    next.requested_services = feeLabel;
+  }
+  return next;
+}
+
+/** Resolve catalogue service name from `service_id` when quote GET omits populated refs. */
+export async function enrichQuoteRowServiceName(
+  quote: QuoteRow
+): Promise<QuoteRow> {
+  const sid = str(quote.service_id);
+  if (!sid) return quote;
+
+  const existing = pickHumanQuoteServiceLabel(
+    [quote.service_name, quote.requested_services],
+    sid
+  );
+  if (existing) {
+    return {
+      ...quote,
+      service_name: existing,
+      requested_services: existing,
+    };
+  }
+
+  const { service } = await fetchServiceById(sid);
+  let name = str(service?.name);
+  if (!name || isMongoObjectId(name)) {
+    const cid = str(quote.category_id);
+    const list = await fetchServiceDropDown(cid || undefined);
+    const match = list.find((o) => String(o.value) === sid);
+    name = str(match?.label);
+  }
+  if (!name || isMongoObjectId(name)) return quote;
+
+  return {
+    ...quote,
+    service_name: name,
+    requested_services: name,
+  };
 }
 
 /**
@@ -1522,12 +1583,6 @@ export function filterCatalogPartnerRecordsByService(
   return filtered.length ? filtered : partners;
 }
 
-/**
- * Set to `true` for in-memory mock rows (no network).
- * Set to `false` to use live APIs under `/api/quote/*` (see Help-PR-Area-Franchise-Subscription Postman collection).
- */
-const USE_MOCK_QUOTE_API = false;
-
 /** `GET /user/getDropDown?type=4` — customers / end users (see `APP_USER_TYPE` in `userService`). */
 const CUSTOMER_USER_TYPE = APP_USER_TYPE.CUSTOMER;
 /** `GET /user/getDropDown?type=3` — franchise employees. */
@@ -1665,7 +1720,6 @@ export function mapQuoteTabCountsFromRecord(
 export async function fetchQuoteCounts(
   franchiseId?: string | null
 ): Promise<Partial<Record<QuoteTabKey, number>> | null> {
-  if (USE_MOCK_QUOTE_API) return null;
   const params = new URLSearchParams();
   const fid = franchiseIdForApiQuery(franchiseId);
   if (fid) params.set("franchise_id", fid);
@@ -1766,6 +1820,67 @@ function nestedObj(v: unknown): Record<string, unknown> | undefined {
 
 function isMongoObjectId(value: string): boolean {
   return /^[a-f\d]{24}$/i.test(value.trim());
+}
+
+/** First human-readable service label from a quote API row (skips raw ObjectIds). */
+function pickHumanQuoteServiceLabel(
+  candidates: unknown[],
+  catalogServiceId?: string
+): string {
+  const sid = str(catalogServiceId);
+  for (const c of candidates) {
+    const label = str(c);
+    if (!label) continue;
+    if (sid && label === sid) continue;
+    if (isMongoObjectId(label)) continue;
+    return label;
+  }
+  return "";
+}
+
+export function resolveQuoteServiceDisplayName(
+  r: Record<string, unknown>,
+  catalogServiceId?: string
+): string {
+  const servicePackageRef = nestedObj(r.service_id);
+  const packageServiceRef = servicePackageRef
+    ? nestedObj(servicePackageRef.service) ??
+      nestedObj(servicePackageRef.service_id)
+    : undefined;
+  const innerCatalogService = servicePackageRef
+    ? nestedObj(servicePackageRef.service_id) ?? packageServiceRef
+    : undefined;
+  const serviceRef =
+    innerCatalogService ??
+    packageServiceRef ??
+    servicePackageRef ??
+    nestedObj(r.service);
+  const requestedServicesRef = nestedObj(r.requested_services);
+  const sid = catalogServiceId || resolveQuoteCatalogServiceId(r);
+
+  return pickHumanQuoteServiceLabel(
+    [
+      r.service_name,
+      requestedServicesRef?.name,
+      requestedServicesRef?.service_name,
+      typeof r.requested_services === "string" ||
+      typeof r.requested_services === "number"
+        ? r.requested_services
+        : undefined,
+      packageServiceRef?.name,
+      packageServiceRef?.service_name,
+      innerCatalogService?.name,
+      innerCatalogService?.service_name,
+      servicePackageRef?.name,
+      servicePackageRef?.service_name,
+      serviceRef?.name,
+      serviceRef?.service_name,
+      r.services,
+      r.service_summary,
+      r.name,
+    ],
+    sid
+  );
 }
 
 /** Human-readable order number for Success quotes — not the order Mongo `_id`. */
@@ -1984,8 +2099,6 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
   const innerCatalogService = servicePackageRef
     ? nestedObj(servicePackageRef.service_id) ?? packageServiceRef
     : undefined;
-  const serviceRef =
-    innerCatalogService ?? packageServiceRef ?? servicePackageRef ?? nestedObj(r.service);
   const addressRef =
     nestedObj(r.address_id) ??
     nestedObj(r.address) ??
@@ -2000,20 +2113,9 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
         r.reference
     ) || mongoId;
 
-  const requested_services = str(
-    r.service_name ??
-      r.requested_services ??
-      packageServiceRef?.name ??
-      packageServiceRef?.service_name ??
-      innerCatalogService?.name ??
-      innerCatalogService?.service_name ??
-      servicePackageRef?.name ??
-      servicePackageRef?.service_name ??
-      serviceRef?.name ??
-      serviceRef?.service_name ??
-      r.name ??
-      ""
-  );
+  const catalogServiceId = resolveQuoteCatalogServiceId(r);
+  const service_name = resolveQuoteServiceDisplayName(r, catalogServiceId);
+  const requested_services = service_name;
 
   const fromD = isoOrDateToYmd(str(r.from_date ?? r.fromDate ?? ""));
   const toD = isoOrDateToYmd(str(r.to_date ?? r.toDate ?? ""));
@@ -2208,12 +2310,13 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
     })(),
     category_id: refId(r.category_id) || refId(categoryRef) || undefined,
     category_name: str(r.category_name ?? categoryRef?.name) || undefined,
+    service_name: service_name || undefined,
     area: area || undefined,
     landmark: landmark || undefined,
     state: state || undefined,
     address_line: address_line || undefined,
     pincode: pincode || undefined,
-    service_id: resolveQuoteCatalogServiceId(r) || undefined,
+    service_id: catalogServiceId || undefined,
     partner_id: refId(r.partner_id) || refId(partnerRef) || undefined,
     partner_user_id:
       str(r.partner_user_id ?? partnerRef?.user_id) || undefined,
@@ -2248,167 +2351,6 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
   };
 }
 
-function filterQuotesByStatusTab(
-  records: QuoteRow[],
-  tab: QuoteTabKey
-): QuoteRow[] {
-  const want = tab.toLowerCase();
-  return records.filter((r) => normalizeQuoteApiStatus(r.status) === want);
-}
-
-/** Schedule bounds for list filters (prefers API `from_date` / `to_date`). */
-function quoteScheduleBoundsMs(row: QuoteRow): {
-  fromMs: number | null;
-  toMs: number | null;
-} {
-  let fromYmd = str(row.from_date);
-  let toYmd = str(row.to_date);
-  if (!fromYmd) {
-    const raw = str(row.requested_date);
-    if (raw) {
-      const parts = raw.split(/\s+to\s+/i).map((p) => p.trim()).filter(Boolean);
-      fromYmd = isoOrDateToYmd(parts[0] ?? "");
-      toYmd = parts.length > 1 ? isoOrDateToYmd(parts[1]) : fromYmd;
-    }
-  }
-  if (!fromYmd && row.scheduled_date) {
-    fromYmd = isoOrDateToYmd(row.scheduled_date);
-    toYmd = fromYmd;
-  }
-  if (!toYmd && fromYmd) toYmd = fromYmd;
-  const fromMs = fromYmd
-    ? new Date(fromYmd + "T00:00:00").getTime()
-    : null;
-  const toMs = toYmd ? new Date(toYmd + "T23:59:59.999").getTime() : null;
-  return { fromMs, toMs };
-}
-
-/** Quote schedule range overlaps filter `[filterFrom, filterTo]` (inclusive days). */
-function quoteScheduleOverlapsFilter(
-  row: QuoteRow,
-  filterFromMs: number | null,
-  filterToMs: number | null
-): boolean {
-  if (filterFromMs == null && filterToMs == null) return true;
-  const { fromMs, toMs } = quoteScheduleBoundsMs(row);
-  if (fromMs == null && toMs == null) return false;
-  const qStart = fromMs ?? toMs;
-  const qEnd = toMs ?? fromMs;
-  if (qStart == null || qEnd == null) return false;
-  if (filterFromMs != null && qEnd < filterFromMs) return false;
-  if (filterToMs != null && qStart > filterToMs) return false;
-  return true;
-}
-
-function matchesKeyword(row: QuoteRow, keyword: string): boolean {
-  if (!keyword) return true;
-  const searchable = [
-    row.quote_id,
-    row.order_id,
-    row.requested_services,
-    row.services,
-    row.requested_partner,
-    row.partner_name,
-    row.user_name,
-    row.category_name,
-    row.phone_number,
-    row.service_price != null ? String(row.service_price) : "",
-    `${row.door_no}, ${row.street}, ${row.area ?? ""}, ${row.city}`,
-    row.status,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  return searchable.includes(keyword);
-}
-
-function sortValueForColumn(row: QuoteRow, sortId: string): string | number {
-  switch (sortId) {
-    case "quote_id":
-      return row.quote_id ?? "";
-    case "requested_services":
-      return row.requested_services ?? "";
-    case "requested_partner":
-      return row.requested_partner ?? "";
-    case "partner_name":
-      return row.partner_name ?? "";
-    case "user_name":
-      return row.user_name ?? "";
-    case "total_price":
-      return row.total_price ?? row.service_price ?? 0;
-    case "service_price":
-      return row.service_price ?? row.total_price ?? 0;
-    case "from_date":
-      return row.from_date ?? row.requested_date ?? row.scheduled_date ?? "";
-    case "to_date":
-      return row.to_date ?? row.from_date ?? "";
-    case "requested_date":
-      return row.requested_date ?? row.from_date ?? "";
-    case "requested_time":
-      return row.requested_time ?? "";
-    case "services":
-      return row.services ?? row.requested_services ?? "";
-    case "scheduled_date":
-      return row.scheduled_date ?? "";
-    case "order_id":
-      return row.order_id ?? "";
-    case "status":
-      return row.status ?? "";
-    case "address":
-    case "location":
-      return [row.door_no, row.street, row.area, row.city, row.pincode]
-        .filter(Boolean)
-        .join(", ");
-    case "time":
-    case "time_range":
-      return `${row.service_from_time ?? ""} ${row.service_to_time ?? ""}`;
-    default:
-      return "";
-  }
-}
-
-function sortQuotesInMemory(rows: QuoteRow[], sort: QuoteListSort): QuoteRow[] {
-  const safe = normalizeQuoteListSort(sort);
-  if (!safe.length) return rows;
-  const { id, desc } = safe[0];
-  const dir = desc ? -1 : 1;
-  return [...rows].sort((a, b) => {
-    const va = sortValueForColumn(a, id);
-    const vb = sortValueForColumn(b, id);
-    if (typeof va === "number" && typeof vb === "number") {
-      return (va - vb) * dir;
-    }
-    return (
-      String(va).localeCompare(String(vb), undefined, {
-        numeric: true,
-        sensitivity: "base",
-      }) * dir
-    );
-  });
-}
-
-function filterQuotesForTab(
-  rows: QuoteRow[],
-  tab: QuoteTabKey,
-  filters: QuoteListFilters
-): QuoteRow[] {
-  const keyword = (filters.keyword ?? "").trim().toLowerCase();
-  const fromTs =
-    filters.from_date != null
-      ? new Date(filters.from_date).setHours(0, 0, 0, 0)
-      : null;
-  const toTs =
-    filters.to_date != null
-      ? new Date(filters.to_date).setHours(23, 59, 59, 999)
-      : null;
-
-  return rows.filter((row) => {
-    if (!matchesKeyword(row, keyword)) return false;
-    return quoteScheduleOverlapsFilter(row, fromTs, toTs);
-  });
-}
-
 export async function fetchQuotes(
   tab: QuoteTabKey,
   page: number,
@@ -2421,19 +2363,6 @@ export async function fetchQuotes(
   totalPages: number;
   totalCount: number;
 }> {
-  if (USE_MOCK_QUOTE_API) {
-    const allRows = filterQuotesByStatusTab(quoteListMockData.records, tab);
-    const filtered = filterQuotesForTab(allRows, tab, filters);
-    const sorted = sortQuotesInMemory(filtered, sort);
-
-    const totalCount = sorted.length;
-    const totalPages = totalCount ? Math.ceil(totalCount / pageSize) : 0;
-    const start = Math.max(0, (page - 1) * pageSize);
-    const records = sorted.slice(start, start + pageSize);
-
-    return { response: true, quotes: records, totalPages, totalCount };
-  }
-
   const fid = franchiseIdForApiQuery(filters.franchise_id);
   const params = new URLSearchParams({
     page: String(page),
@@ -2491,22 +2420,6 @@ export async function fetchQuoteServiceOptionsForCategory(
   const cid = str(categoryId);
   if (!cid) return [];
 
-  if (USE_MOCK_QUOTE_API) {
-    const names = new Set<string>();
-    for (const row of quoteListMockData.records) {
-      if (str(row.category_id) !== cid) continue;
-      const raw = str(row.requested_services);
-      if (!raw) continue;
-      for (const part of raw.split(",")) {
-        const s = part.trim();
-        if (s) names.add(s);
-      }
-    }
-    return Array.from(names)
-      .sort((a, b) => a.localeCompare(b))
-      .map((s) => ({ value: s, label: s }));
-  }
-
   return fetchServiceDropDown(cid);
 }
 
@@ -2523,63 +2436,6 @@ export async function fetchQuoteCreateOptions(opts?: {
   quoteEmployeeOptions: OptionType[];
   quoteCategoryOptions: OptionType[];
 }> {
-  if (USE_MOCK_QUOTE_API) {
-    const allMock = quoteListMockData.records;
-
-    const partners = Array.from(
-      new Set(
-        allMock
-          .map((row) => str(row.requested_partner || row.partner_name))
-          .filter(Boolean)
-      )
-    );
-
-    const userById = new Map<string, QuoteUserOption>();
-    for (const row of allMock) {
-      const uid = str(row.user_id);
-      if (!uid) continue;
-      const name = str(row.user_name) || uid;
-      const phone = str(row.phone_number);
-      const label = phone ? `${name} (${phone})` : name;
-      if (!userById.has(uid)) {
-        userById.set(uid, { value: uid, label, user_name: name });
-      }
-    }
-
-    const employeeById = new Map<string, OptionType>();
-    for (const row of allMock) {
-      const eid = str(row.employee_id);
-      if (!eid) continue;
-      const ename = str(row.employee_name) || eid;
-      if (!employeeById.has(eid)) {
-        employeeById.set(eid, { value: eid, label: ename });
-      }
-    }
-
-    const categoryById = new Map<string, OptionType>();
-    for (const row of allMock) {
-      const cid = str(row.category_id);
-      if (!cid) continue;
-      const cname = str(row.category_name) || cid;
-      if (!categoryById.has(cid)) {
-        categoryById.set(cid, { value: cid, label: cname });
-      }
-    }
-
-    return {
-      quotePartnerOptions: partners.map((p) => ({ value: p, label: p })),
-      quoteUserOptions: Array.from(userById.values()).sort((a, b) =>
-        a.user_name.localeCompare(b.user_name)
-      ),
-      quoteEmployeeOptions: Array.from(employeeById.values()).sort((a, b) =>
-        a.label.localeCompare(b.label)
-      ),
-      quoteCategoryOptions: Array.from(categoryById.values()).sort((a, b) =>
-        a.label.localeCompare(b.label)
-      ),
-    };
-  }
-
   const scopedFranchiseId = franchiseIdForApiQuery(opts?.franchiseId);
   const extra = scopedFranchiseId
     ? { franchise_id: scopedFranchiseId }
@@ -2625,24 +2481,6 @@ export async function fetchQuoteCreateOptions(opts?: {
 export async function fetchQuotePartnerDropDown(serviceId?: string): Promise<{
   partners: Array<any>;
 }> {
-  if (USE_MOCK_QUOTE_API) {
-    const partnerSet = new Set<string>();
-    for (const r of quoteListMockData.records) {
-      if (r.requested_partner) partnerSet.add(String(r.requested_partner));
-      if (r.partner_name) partnerSet.add(String(r.partner_name));
-    }
-
-    const partners = Array.from(partnerSet);
-    return {
-      partners: partners.map((name, idx) => ({
-        _id: `QT-PT-${idx + 1}`,
-        partner_id: `P-${idx + 1}`,
-        partner_name: name,
-        name,
-      })),
-    };
-  }
-
   // Prefer `GET /user/getPartnerDropDown?service_id=…` (Postman); fall back to `GET /user/getDropDown?type=2&service_id=…`.
   const sid = str(serviceId);
   const fromPartnerApi = await fetchPartnerDropDown(sid || undefined);
@@ -2756,18 +2594,23 @@ export function extractServiceFeesFromQuoteRecord(
     innerCatalogService) as Record<string, unknown> | undefined;
   const catalogInner = innerCatalogService ?? packageServiceRef;
 
+  const feeLabel = pickHumanQuoteServiceLabel(
+    [
+      innerCatalogService?.name,
+      innerCatalogService?.service_name,
+      packageServiceRef?.name,
+      packageServiceRef?.service_name,
+      feeSourceRow?.name,
+      feeSourceRow?.service_name,
+      raw.service_name,
+    ],
+    catalogServiceId || serviceId
+  );
+
   const catalogOpt: ServiceDropDownOption | undefined = feeSourceRow
     ? {
         value: catalogServiceId || providingRowId || str(feeSourceRow._id),
-        label:
-          str(
-            innerCatalogService?.name ??
-              innerCatalogService?.service_name ??
-              packageServiceRef?.name ??
-              packageServiceRef?.service_name ??
-              feeSourceRow.name ??
-              feeSourceRow.service_name
-          ) || serviceId,
+        label: feeLabel,
         ...quoteServiceFeeFieldsFromRow(
           catalogInner ?? undefined,
           feeSourceRow
@@ -2787,6 +2630,11 @@ export function extractServiceFeesFromQuoteRecord(
             : feeSourceRow.price != null
             ? Number(feeSourceRow.price)
             : undefined,
+      }
+    : catalogServiceId || serviceId
+    ? {
+        value: catalogServiceId || serviceId,
+        label: feeLabel,
       }
     : undefined;
 
@@ -2843,10 +2691,26 @@ export async function fetchQuoteDetailById(quoteMongoId: string): Promise<{
     return { quote: null, serviceFees: undefined };
   }
   const record = raw as Record<string, unknown>;
-  return {
-    quote: mapServerQuoteRecord(record),
-    serviceFees: extractServiceFeesFromQuoteRecord(record),
-  };
+  let serviceFees = extractServiceFeesFromQuoteRecord(record);
+  let quote = applyQuoteServiceNameFromFees(
+    mapServerQuoteRecord(record),
+    serviceFees
+  );
+  quote = await enrichQuoteRowServiceName(quote);
+  const resolvedName = pickHumanQuoteServiceLabel(
+    [quote.service_name, quote.requested_services],
+    quote.service_id
+  );
+  if (
+    resolvedName &&
+    serviceFees &&
+    (!serviceFees.label ||
+      isMongoObjectId(serviceFees.label) ||
+      serviceFees.label === quote.service_id)
+  ) {
+    serviceFees = { ...serviceFees, label: resolvedName };
+  }
+  return { quote, serviceFees };
 }
 
 export async function fetchCustomerQuotes(

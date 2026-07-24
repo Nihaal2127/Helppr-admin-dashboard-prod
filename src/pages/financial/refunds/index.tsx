@@ -99,6 +99,8 @@ const RefundsPage = () => {
   const [fromDate, setFromDate] = useState<string | null>(null);
   const [toDate, setToDate] = useState<string | null>(null);
   const [searchValue, setSearchValue] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchClearVersion, setSearchClearVersion] = useState(0);
   const [utilitySearchKey, setUtilitySearchKey] = useState(0);
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -323,13 +325,17 @@ const RefundsPage = () => {
             size="sm"
             className="custom-btn-secondary partner-payout-clear-btn px-3"
             type="button"
-            disabled={!fromDate && !toDate && !searchValue.trim()}
+            disabled={
+              !fromDate && !toDate && !searchValue.trim() && !searchDraft.trim()
+            }
             onClick={() => {
               setFromDate(null);
               setToDate(null);
               setSearchValue("");
+              setSearchDraft("");
               setQuoteFilterValue("from_date", "");
               setQuoteFilterValue("to_date", "");
+              setSearchClearVersion((v) => v + 1);
               setUtilitySearchKey((k) => k + 1);
               setCurrentPage(1);
             }}
@@ -340,9 +346,12 @@ const RefundsPage = () => {
         hideUtilityActions
         onSearch={(value) => {
           setSearchValue(value);
+          setSearchDraft(value);
           setCurrentPage(1);
         }}
+        onSearchInputChange={setSearchDraft}
         syncKeyword={searchValue}
+        searchClearVersion={searchClearVersion}
       />
 
       {loading ? (

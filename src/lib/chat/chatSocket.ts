@@ -1,5 +1,5 @@
 import { io, Socket } from "socket.io-client";
-import { AppConstant, getChatServiceUrl } from "../global/AppConstant";
+import { AppConstant } from "../global/AppConstant";
 import { mapChatMessage, ChatMessageModel } from "../models/ChatModel";
 
 export type ChatSocketSendPayload = {
@@ -37,7 +37,6 @@ type PresenceUpdatedHandler = (payload: {
 }) => void;
 
 let socket: Socket | null = null;
-let socketBaseUrl: string | null = null;
 let connected = false;
 let lastConnectError = "";
 let socketConsumers = 0;
@@ -278,15 +277,6 @@ export function connectChatSocket(): Socket | null {
   const token = getToken();
   if (!token) return null;
 
-  const chatServiceUrl = getChatServiceUrl();
-
-  if (socket && socketBaseUrl && socketBaseUrl !== chatServiceUrl) {
-    socket.removeAllListeners();
-    socket.disconnect();
-    socket = null;
-    socketBaseUrl = null;
-  }
-
   if (socket?.connected) return socket;
 
   if (socket) {
@@ -297,11 +287,8 @@ export function connectChatSocket(): Socket | null {
     return socket;
   }
 
-  socketBaseUrl = chatServiceUrl;
-  const useSecure = /^https:\/\//i.test(chatServiceUrl);
-  socket = io(chatServiceUrl, {
+  socket = io(AppConstant.CHAT_SERVICE_URL, {
     auth: { token },
-    secure: useSecure,
     transports: ["polling", "websocket"],
     autoConnect: true,
     reconnection: true,
@@ -352,7 +339,6 @@ export function disconnectChatSocket() {
   if (socket) {
     socket.disconnect();
     socket = null;
-    socketBaseUrl = null;
   }
 }
 

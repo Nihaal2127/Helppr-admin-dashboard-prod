@@ -1214,7 +1214,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                   fieldName="admin_id"
                   error={errors.admin_id}
                   asCol={false}
-                  // requiredMessage="Please select admin"
+                  requiredMessage="Please select admin"
                   defaultValue={String(watchedAdminId ?? "")}
                   setValue={setValue as (name: string, value: any) => void}
                   menuPortal
@@ -1223,7 +1223,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                     if (raw === ADD_ADMIN_DROPDOWN_VALUE) {
                       const revert = lastAdminSelectionRef.current;
                       setValue("admin_id", revert, {
-                        shouldValidate: false,
+                        shouldValidate: true,
                         shouldDirty: false,
                       });
                       setAdminSelectResetKey((k) => k + 1);
@@ -1232,7 +1232,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                           await reloadAdminOptions();
                           if (userId) {
                             setValue("admin_id", userId, {
-                              shouldValidate: false,
+                              shouldValidate: true,
                               shouldDirty: true,
                             });
                             lastAdminSelectionRef.current = userId;

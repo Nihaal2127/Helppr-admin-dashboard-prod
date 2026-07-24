@@ -2,13 +2,10 @@ import { apiRequest } from "../lib/global/remote/apiHelper";
 import { ApiPaths } from "../lib/global/remote/apiPaths";
 import { AreaModel } from "../lib/models/AreaModel";
 import { showLog } from "../helper/utility";
-import { fetchMockAreas } from "./areaMockService";
 import {
   franchiseIdForAreaGetAll,
 } from "../lib/franchise/headerFranchisePreference";
 import type { ServerTableSortBy } from "../lib/global/serverTableSort";
-
-const USE_MOCK_AREA_API = false;
 
 export const fetchAreaDropDown = async (
   cityId?: string,
@@ -73,10 +70,6 @@ export const fetchArea = async (
       : statusRaw === "inactive" || statusRaw === "false"
       ? "false"
       : statusRaw;
-  if (USE_MOCK_AREA_API) {
-    return fetchMockAreas(page, pageSize, filters);
-  }
-
   const franchiseIdQuery = franchiseIdForAreaGetAll(filters.franchise_id);
 
   const params = new URLSearchParams({

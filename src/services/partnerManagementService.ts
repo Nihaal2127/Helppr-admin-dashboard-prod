@@ -5,15 +5,8 @@ import type {
   PartnerSubscriptionModel,
   PostModel,
 } from "../lib/types/partnerManagementTypes";
-import {
-  partnerPortfoliosSeed,
-  partnerPostsSeed,
-  partnerSubscriptionsSeed,
-} from "../mockData/partnerManagementMockData";
-import { partnerSubscriptionPlansSeed } from "../mockData/partnerSubscriptionPlansSeedData";
 import type { SubscriptionPlanModel } from "../lib/models/SubscriptionPlanModel";
 import type { ServerTableSortBy } from "../lib/global/serverTableSort";
-import { todayLocalYmd } from "../helper/dateFormat";
 import { capitalizeString } from "../helper/utility";
 import {
   franchiseIdForScopedListApi,
@@ -47,53 +40,10 @@ export type PortfolioRow = {
 
 type ListStats = { Total: number; Active: number; Inactive: number };
 
-/**
- * Portfolio Management list (`portfolioManagement/PortfolioManagement.tsx`).
- * `false` → Postman `GET /api/partners` (folder 42 — Partners browse). `true` → in-memory seed.
- */
-export const USE_MOCK_PARTNER_PORTFOLIOS_API = false;
-
-/**
- * Post Management list (`postManagement/PostManagement.tsx`).
- * `false` → Postman `GET /api/partner-post/getAll`. `true` → in-memory seed.
- */
-export const USE_MOCK_PARTNER_POSTS_API = false;
-
-/**
- * Partner Subscription List only (`subscriptionPlans.tsx` partner tab).
- * `false` → Postman `/partner-subscription/*`. `true` → in-memory seed (unchanged).
- */
-export const USE_MOCK_PARTNER_SUBSCRIPTIONS_API = false;
-
-let mockPartnerSubscriptions: PartnerSubscriptionModel[] =
-  partnerSubscriptionsSeed.map((item) => ({ ...item }));
-let mockPortfolios: PortfolioRow[] = partnerPortfoliosSeed.map(
-  (item): PortfolioRow => ({
-    ...item,
-    franchise_name: item.franchise_name ?? "",
-  })
-);
-let mockPosts: PostModel[] = partnerPostsSeed.map((item) => ({ ...item }));
-let mockSubscriptionPlans: SubscriptionPlanModel[] =
-  partnerSubscriptionPlansSeed.map((item) => ({ ...item }));
-
-/** When `true`, subscription plan catalog uses seed data; when `false`, calls `/subscription-plan/*` APIs. */
-export const USE_MOCK_SUBSCRIPTION_PLAN_API = false;
-
 function statsFor(list: Array<{ is_active: boolean }>): ListStats {
   const total = list.length;
   const active = list.filter((x) => x.is_active).length;
   return { Total: total, Active: active, Inactive: total - active };
-}
-
-function paginate<T>(
-  rows: T[],
-  page: number,
-  limit: number
-): { records: T[]; totalPages: number } {
-  const totalPages = rows.length ? Math.ceil(rows.length / limit) : 0;
-  const start = Math.max(0, (page - 1) * limit);
-  return { records: rows.slice(start, start + limit), totalPages };
 }
 
 function parseSubscriptionPlanRecord(
@@ -206,51 +156,6 @@ export async function fetchSubscriptionPlans(
   stats: ListStats;
 }> {
   const primarySort = sortBy[0];
-  if (USE_MOCK_SUBSCRIPTION_PLAN_API) {
-    const keyword = (filters.name ?? "").trim().toLowerCase();
-    const statusRaw = (filters.status ?? "").toLowerCase();
-    const sortRaw = primarySort
-      ? primarySort.desc
-        ? "desc"
-        : "asc"
-      : String(filters.sort ?? "").toLowerCase();
-
-    let data = [...mockSubscriptionPlans];
-    if (statusRaw === "true") data = data.filter((x) => x.is_active);
-    if (statusRaw === "false") data = data.filter((x) => !x.is_active);
-
-    if (keyword) {
-      data = data.filter((p) => {
-        const hay = [
-          p.plan_name,
-          p.plan_description,
-          p.price,
-          p.duration,
-          p.duration_type,
-        ]
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(keyword);
-      });
-    }
-
-    if (sortRaw) {
-      const ascending = sortRaw === "asc" || sortRaw === "1";
-      data.sort((a, b) =>
-        ascending
-          ? (a.plan_name || "").localeCompare(b.plan_name || "")
-          : (b.plan_name || "").localeCompare(a.plan_name || "")
-      );
-    }
-
-    const { records, totalPages } = paginate(data, page, limit);
-    return {
-      response: true,
-      records,
-      totalPages,
-      stats: statsFor(mockSubscriptionPlans),
-    };
-  }
 
   const params = new URLSearchParams({
     page: String(page),
@@ -308,12 +213,6 @@ export async function fetchSubscriptionPlans(
 }
 
 export async function voidSubscriptionPlan(id: string): Promise<boolean> {
-  if (USE_MOCK_SUBSCRIPTION_PLAN_API) {
-    mockSubscriptionPlans = mockSubscriptionPlans.map((p) =>
-      p._id === id ? { ...p, is_active: false } : p
-    );
-    return true;
-  }
   const res = await apiRequest(ApiPaths.SUBSCRIPTION_PLAN_DELETE(id), "DELETE");
   return Boolean(res.success);
 }
@@ -322,21 +221,6 @@ export async function saveSubscriptionPlan(
   plan: SubscriptionPlanModel,
   isUpdate: boolean
 ): Promise<boolean> {
-  if (USE_MOCK_SUBSCRIPTION_PLAN_API) {
-    if (isUpdate) {
-      mockSubscriptionPlans = mockSubscriptionPlans.map((p) =>
-        p._id === plan._id ? { ...p, ...plan } : p
-      );
-      return true;
-    }
-    const nextId = `PLN${String(Date.now()).slice(-6)}`;
-    mockSubscriptionPlans = [
-      { ...plan, _id: nextId },
-      ...mockSubscriptionPlans,
-    ];
-    return true;
-  }
-
   if (isUpdate) {
     if (!plan._id) return false;
     const res = await apiRequest(
@@ -363,19 +247,6 @@ export type SubscriptionPlanOption = {
 export async function fetchSubscriptionPlanOptions(): Promise<
   SubscriptionPlanOption[]
 > {
-  if (USE_MOCK_SUBSCRIPTION_PLAN_API) {
-    return partnerSubscriptionPlansSeed
-      .filter((p) => p.is_active)
-      .map((p) => ({
-        value: p.plan_name,
-        label: capitalizeString(p.plan_name),
-        price:
-          typeof p.price === "number" && Number.isFinite(p.price)
-            ? p.price
-            : null,
-      }));
-  }
-
   const res = await apiRequest(
     ApiPaths.SUBSCRIPTION_PLAN_GET_DROP_DOWN(),
     "GET"
@@ -530,36 +401,6 @@ function resolvePartnerSubscriptionTotalPages(
   return 0;
 }
 
-function comparePartnerSubscriptionsMock(
-  a: PartnerSubscriptionModel,
-  b: PartnerSubscriptionModel,
-  columnId: string,
-  desc: boolean
-): number {
-  const mul = desc ? -1 : 1;
-  const val = (p: PartnerSubscriptionModel, id: string): string | number => {
-    switch (id) {
-      case "partner_name":
-        return (p.partner_name || "").toLowerCase();
-      case "subscription_plan":
-        return (p.subscription_plan || "").toLowerCase();
-      case "subscription_start_date":
-        return String(p.subscription_start_date ?? "");
-      case "subscription_end_date":
-        return String(p.subscription_end_date ?? "");
-      case "is_active":
-        return p.is_active ? 1 : 0;
-      default:
-        return (p.partner_name || "").toLowerCase();
-    }
-  };
-  const av = val(a, columnId);
-  const bv = val(b, columnId);
-  if (av < bv) return -1 * mul;
-  if (av > bv) return 1 * mul;
-  return 0;
-}
-
 function partnerSubListStatsFromResponse(
   root: Record<string, unknown>,
   records: PartnerSubscriptionModel[]
@@ -612,103 +453,6 @@ export async function fetchPartnerSubscriptions(
   stats: ListStats;
 }> {
   const primarySort = sortBy[0];
-  if (USE_MOCK_PARTNER_SUBSCRIPTIONS_API) {
-    const keyword = (filters.name ?? "").trim().toLowerCase();
-    const statusRaw = (filters.status ?? "").toLowerCase();
-    const sortRaw = primarySort
-      ? primarySort.desc
-        ? "desc"
-        : "asc"
-      : String(filters.sort ?? "").toLowerCase();
-
-    let data = [...mockPartnerSubscriptions];
-    if (statusRaw === "true" || statusRaw === "active")
-      data = data.filter((x) => x.is_active);
-    if (
-      statusRaw === "false" ||
-      statusRaw === "inactive" ||
-      statusRaw === "expired"
-    ) {
-      data = data.filter((x) => !x.is_active);
-    }
-
-    if (keyword) {
-      data = data.filter((p) => {
-        const hay = [
-          p.partner_name,
-          p.partner_id,
-          p.subscription_plan,
-          p.address ?? p.location,
-        ]
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(keyword);
-      });
-    }
-
-    const planTypeRaw = (filters.planType ?? "").toLowerCase();
-    if (planTypeRaw && planTypeRaw !== "all") {
-      data = data.filter(
-        (p) => (p.subscription_plan || "").toLowerCase() === planTypeRaw
-      );
-    }
-
-    const locationRaw = (filters.location ?? "").toLowerCase();
-    if (locationRaw && locationRaw !== "all") {
-      data = data.filter((p) =>
-        (p.address ?? p.location ?? "").toLowerCase().includes(locationRaw)
-      );
-    }
-
-    const fromDateRaw = (filters.fromDate ?? "").trim();
-    const toDateRaw = (filters.toDate ?? "").trim();
-    if (fromDateRaw || toDateRaw) {
-      const dayStart = (s: string) => {
-        const d = String(s).trim().slice(0, 10);
-        const [y, m, day] = d.split("-").map((x) => Number(x));
-        if (!y || !m || !day) return null;
-        return new Date(y, m - 1, day, 0, 0, 0, 0).getTime();
-      };
-      const dayEnd = (s: string) => {
-        const d = String(s).trim().slice(0, 10);
-        const [y, m, day] = d.split("-").map((x) => Number(x));
-        if (!y || !m || !day) return null;
-        return new Date(y, m - 1, day, 23, 59, 59, 999).getTime();
-      };
-      const fromTs = fromDateRaw ? dayStart(fromDateRaw) : null;
-      const toTs = toDateRaw ? dayEnd(toDateRaw) : null;
-      data = data.filter((p) => {
-        const startStr = String(p.subscription_start_date ?? "").slice(0, 10);
-        const startTs = dayStart(startStr);
-        if (startTs == null || !Number.isFinite(startTs)) return false;
-        const afterFrom = fromTs === null || startTs >= fromTs;
-        const beforeTo = toTs === null || startTs <= toTs;
-        return afterFrom && beforeTo;
-      });
-    }
-
-    if (primarySort?.id) {
-      const sid = primarySort.id;
-      data.sort((a, b) =>
-        comparePartnerSubscriptionsMock(a, b, sid, primarySort.desc)
-      );
-    } else if (sortRaw) {
-      const ascending = sortRaw === "asc" || sortRaw === "1";
-      data.sort((a, b) =>
-        ascending
-          ? (a.partner_name || "").localeCompare(b.partner_name || "")
-          : (b.partner_name || "").localeCompare(a.partner_name || "")
-      );
-    }
-
-    const { records, totalPages } = paginate(data, page, limit);
-    return {
-      response: true,
-      records,
-      totalPages,
-      stats: statsFor(mockPartnerSubscriptions as any),
-    };
-  }
 
   const params = new URLSearchParams({
     page: String(page),
@@ -800,12 +544,6 @@ export async function fetchPartnerSubscriptions(
 }
 
 export async function voidPartnerSubscription(id: string): Promise<boolean> {
-  if (USE_MOCK_PARTNER_SUBSCRIPTIONS_API) {
-    mockPartnerSubscriptions = mockPartnerSubscriptions.map((p) =>
-      String(p._id) === String(id) ? { ...p, is_active: false } : p
-    );
-    return true;
-  }
   const res = await apiRequest(
     ApiPaths.PARTNER_SUBSCRIPTION_DELETE(id),
     "DELETE"
@@ -821,21 +559,6 @@ export async function savePartnerSubscription(
   sub: PartnerSubscriptionModel
 ): Promise<boolean> {
   const updateExisting = Boolean(String(sub._id ?? "").trim());
-
-  if (USE_MOCK_PARTNER_SUBSCRIPTIONS_API) {
-    if (updateExisting) {
-      mockPartnerSubscriptions = mockPartnerSubscriptions.map((p) =>
-        String(p._id) === String(sub._id) ? { ...p, ...sub } : p
-      );
-      return true;
-    }
-    const nextId = String(Date.now());
-    mockPartnerSubscriptions = [
-      { ...sub, _id: nextId },
-      ...mockPartnerSubscriptions,
-    ];
-    return true;
-  }
 
   if (updateExisting) {
     if (!String(sub._id ?? "").trim()) {
@@ -1202,71 +925,6 @@ export async function fetchPortfolios(
   stats: ListStats;
 }> {
   const primarySort = sortBy[0];
-  if (USE_MOCK_PARTNER_PORTFOLIOS_API) {
-    const keyword = (filters.name ?? "").trim().toLowerCase();
-    const statusRaw = (filters.status ?? "").toLowerCase();
-    const sortRaw = primarySort
-      ? primarySort.desc
-        ? "desc"
-        : "asc"
-      : String(filters.sort ?? "").toLowerCase();
-    const categoryRaw = (filters.category ?? "").toLowerCase();
-    const serviceRaw = (filters.service ?? "").toLowerCase();
-    const locationRaw = (filters.location ?? "").toLowerCase();
-
-    let data = [...mockPortfolios];
-    if (statusRaw === "true" || statusRaw === "active")
-      data = data.filter((x) => x.is_active);
-    if (statusRaw === "false" || statusRaw === "inactive")
-      data = data.filter((x) => !x.is_active);
-
-    if (keyword) {
-      data = data.filter((p) => {
-        const hay = [
-          p.partner_name,
-          p.partner_id,
-          p.category,
-          p.service,
-          p.location,
-        ]
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(keyword);
-      });
-    }
-    if (categoryRaw && categoryRaw !== "all") {
-      data = data.filter((p) =>
-        (p.category || "").toLowerCase().includes(categoryRaw)
-      );
-    }
-    if (serviceRaw && serviceRaw !== "all") {
-      data = data.filter((p) =>
-        (p.service || "").toLowerCase().includes(serviceRaw)
-      );
-    }
-    if (locationRaw && locationRaw !== "all") {
-      data = data.filter((p) =>
-        (p.location || "").toLowerCase().includes(locationRaw)
-      );
-    }
-
-    if (sortRaw) {
-      const ascending = sortRaw === "asc" || sortRaw === "1";
-      data.sort((a, b) =>
-        ascending
-          ? a.partner_name.localeCompare(b.partner_name)
-          : b.partner_name.localeCompare(a.partner_name)
-      );
-    }
-
-    const { records, totalPages } = paginate(data, page, limit);
-    return {
-      response: true,
-      records,
-      totalPages,
-      stats: statsFor(mockPortfolios),
-    };
-  }
 
   const params = new URLSearchParams({
     page: String(page),
@@ -1331,11 +989,6 @@ export async function fetchPortfolioProfile(
   const id = String(partnerId ?? "").trim();
   if (!id) return { response: false, portfolio: null };
 
-  if (USE_MOCK_PARTNER_PORTFOLIOS_API) {
-    const row = mockPortfolios.find((p) => String(p._id) === id) ?? null;
-    return { response: Boolean(row), portfolio: row };
-  }
-
   const params = new URLSearchParams();
   const rowFranchiseId = String(partnerFranchiseId ?? "").trim();
   const scopedFranchiseId =
@@ -1383,12 +1036,6 @@ export async function fetchPortfolioProfile(
 }
 
 export async function voidPortfolio(id: string): Promise<boolean> {
-  if (USE_MOCK_PARTNER_PORTFOLIOS_API) {
-    mockPortfolios = mockPortfolios.map((p) =>
-      p._id === id ? { ...p, is_active: false } : p
-    );
-    return true;
-  }
   return false;
 }
 
@@ -1676,8 +1323,6 @@ function pickPartnerPostCountsRecord(
 export async function fetchPartnerPostCounts(
   franchiseId?: string
 ): Promise<PostManagementStats | null> {
-  if (USE_MOCK_PARTNER_POSTS_API) return null;
-
   const params = new URLSearchParams();
   const fid = (franchiseId ?? "").trim();
   if (
@@ -1706,18 +1351,6 @@ export async function fetchPartnerPostCounts(
 export async function fetchPostManagementSummary(
   franchiseId?: string
 ): Promise<PostManagementStats> {
-  if (USE_MOCK_PARTNER_POSTS_API) {
-    const published = mockPosts.filter((x) => x.status === "published").length;
-    const hidden = mockPosts.filter((x) => x.status === "hidden").length;
-    const removed = mockPosts.filter((x) => x.status === "removed").length;
-    return {
-      Total: mockPosts.length,
-      Published: published,
-      Hidden: hidden,
-      Removed: removed,
-    };
-  }
-
   const fromGetCounts = await fetchPartnerPostCounts(franchiseId);
   if (fromGetCounts) return fromGetCounts;
 
@@ -1750,33 +1383,6 @@ export async function fetchPostList(
   records: PostModel[];
   totalPages: number;
 }> {
-  if (USE_MOCK_PARTNER_POSTS_API) {
-    const keyword = (filters.name ?? "").trim().toLowerCase();
-    const statusRaw = (filters.status ?? "all").toLowerCase();
-    const sortRaw = String(filters.sort ?? "").toLowerCase();
-
-    let data = [...mockPosts];
-    if (statusRaw !== "all") {
-      data = data.filter((item) => item.status === statusRaw);
-    }
-    if (keyword) {
-      data = data.filter((item) =>
-        item.partner_name.toLowerCase().includes(keyword)
-      );
-    }
-    if (sortRaw) {
-      const ascending = sortRaw === "asc" || sortRaw === "1";
-      data.sort((a, b) => {
-        const first = new Date(a.uploaded_date).getTime();
-        const second = new Date(b.uploaded_date).getTime();
-        return ascending ? first - second : second - first;
-      });
-    }
-
-    const { records, totalPages } = paginate(data, page, limit);
-    return { response: true, records, totalPages };
-  }
-
   const apiStatus = uiPostStatusToApi(filters.status ?? "all");
   const { root, records: apiRecords } = await fetchPartnerPostListPage(
     page,
@@ -1815,14 +1421,6 @@ export async function moderatePartnerPost(
   postId: string,
   status: PostModel["status"]
 ): Promise<boolean> {
-  if (USE_MOCK_PARTNER_POSTS_API) {
-    mockPosts = mockPosts.map((p) =>
-      String(p._id ?? p.id) === String(postId)
-        ? { ...p, status }
-        : p
-    );
-    return true;
-  }
   const id = String(postId ?? "").trim();
   if (!id) return false;
   const res = await apiRequest(
@@ -1831,41 +1429,4 @@ export async function moderatePartnerPost(
     { status }
   );
   return Boolean(res.success);
-}
-
-/** Mock-only: persist post status changes from Post Management view. */
-export function updatePartnerPostStatus(
-  postId: number | string | undefined,
-  status: PostModel["status"]
-): void {
-  if (USE_MOCK_PARTNER_POSTS_API && postId != null) {
-    mockPosts = mockPosts.map((p) =>
-      String(p._id ?? p.id) === String(postId) ? { ...p, status } : p
-    );
-  }
-}
-
-/** Mock-only: append a post from Post Management “Add post”. */
-export function addPartnerPostMock(payload: {
-  partner_name: string;
-  description: string;
-  media_type: "image" | "video";
-  location?: string;
-}): void {
-  if (!USE_MOCK_PARTNER_POSTS_API) return;
-  const nextId = Math.max(0, ...mockPosts.map((p) => Number(p.id) || 0)) + 1;
-  const partner_id = `P${String(nextId).padStart(3, "0")}`;
-  mockPosts = [
-    {
-      id: nextId,
-      partner_id,
-      partner_name: payload.partner_name.trim(),
-      description: payload.description.trim(),
-      media_type: payload.media_type,
-      location: (payload.location ?? "").trim() || "-",
-      uploaded_date: todayLocalYmd(),
-      status: "published",
-    },
-    ...mockPosts,
-  ];
 }

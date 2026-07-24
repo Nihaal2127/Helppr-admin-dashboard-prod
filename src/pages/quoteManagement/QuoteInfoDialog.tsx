@@ -139,6 +139,7 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
       isSuccess || isAccepted
         ? displayQuote.services_summary
         : undefined,
+      displayQuote.service_name,
       displayQuote.requested_services,
       serviceFees?.label,
     ];
@@ -148,6 +149,7 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
     }
     return "-";
   }, [
+    displayQuote.service_name,
     displayQuote.requested_services,
     displayQuote.services_summary,
     isSuccess,
@@ -230,6 +232,7 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
           <h6 className={QUOTE_SECTION_TITLE_CLASS}>Quote details</h6>
           <Row className="g-2">
             <Col xs={12} md={6} className="info-detail-fields-col">
+              <DetailsRow title="Quote ID" value={displayQuote.quote_id} />
               <DetailsRow title="Service" value={serviceLabel} />
               <DetailsRow
                 title="Category"

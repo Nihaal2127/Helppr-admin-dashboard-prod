@@ -1,13 +1,13 @@
 import React from "react";
 import { initialsFromName } from "../../lib/chat/chatDisplayHelpers";
+import { AppConstant } from "../../lib/global/AppConstant";
 
-const CHAT_AVATAR_IMAGE_BASE_URL = "https://d2snwgkdggvp65.cloudfront.net/";
 
 function resolveChatAvatarImageSrc(imageUrl?: string | null): string | null {
   const raw = String(imageUrl ?? "").trim();
   if (!raw) return null;
   if (/^https?:\/\//i.test(raw)) return raw;
-  return `${CHAT_AVATAR_IMAGE_BASE_URL}${raw.replace(/^\//, "")}`;
+  return `${AppConstant.CHAT_AVATAR_IMAGE_BASE_URL}${raw.replace(/^\//, "")}`;
 }
 
 type ChatAvatarProps = {

@@ -29,7 +29,7 @@ const AboutUs = () => {
           }}
         >
           <img src={appLogo} alt="logo" style={{ height: "40px" }} />
-          <h1 style={{ color: "var(--bg-color)", margin: 0 }}>helper!</h1>
+          <h1 style={{ color: "var(--bg-color)", margin: 0 }}>HelpPR!</h1>
         </div>
 
         <h1 style={{ color: "var(--bg-color)", marginTop: "20px" }}>

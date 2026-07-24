@@ -85,6 +85,8 @@ export type QuoteRow = {
   employee_profile_url?: string | null;
   category_id?: string;
   category_name?: string;
+  /** Resolved catalog service display name (parallel to `category_name`). */
+  service_name?: string;
   area?: string;
   landmark?: string;
   state?: string;
