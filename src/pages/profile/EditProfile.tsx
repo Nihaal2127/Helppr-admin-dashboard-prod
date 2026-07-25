@@ -166,7 +166,6 @@ const EditProfile = ({
                       register={register}
                       error={errors.email}
                       asCol={false}
-                      isEditable={false}
                       validation={{ required: "Email is required" }}
                     />
                   </Col>
