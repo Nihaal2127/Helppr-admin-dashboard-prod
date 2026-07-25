@@ -20,6 +20,7 @@ import {
   PersonalAccountDetailsGrid,
 } from "../../helper/utility";
 import { CustomImagePreviewDialog } from "../../components/CustomImagePreview";
+import { resolveExistingImageSrc } from "../../components/CustomImageUploader";
 import { showErrorAlert, showSuccessAlert } from "../../lib/global/alertHelper";
 import { openDialog } from "../../lib/global/DialogManager";
 import editIcon from "../../assets/icons/edit_red.svg";
@@ -30,6 +31,7 @@ import { AppConstant } from "../../lib/global/AppConstant";
 import {
   updatePartnerDocument,
   updateStatusDocument,
+  createPartnerDocument,
 } from "../../services/partnerDocumentService";
 import CustomUploadDialog from "../../components/CustomUpload";
 import { createOrUpdateDocument } from "../../services/documentUploadService";
@@ -41,7 +43,13 @@ import {
 } from "../../lib/partner/partnerCategoryServiceView";
 import EditPartnerCategoriesServicesDialog from "./EditPartnerCategoriesServicesDialog";
 import AddEditUserDialog from "./AddEditUserDialog";
-import { partnerBankAccountsFromUser } from "../../lib/partner/partnerFormDocuments";
+import {
+  partnerBankAccountsFromUser,
+  partnerDocumentDisplayTitle,
+  partnerDocumentMatchesSlot,
+  partnerVerificationSlotApiName,
+} from "../../lib/partner/partnerFormDocuments";
+import type { PartnerVerificationSlotId } from "../../lib/partner/partnerFormDocuments";
 import { resolvePartnerFranchiseFieldsFromUser } from "../../lib/partner/partnerFranchiseDisplay";
 import { formatGenderLabel } from "../../lib/user/genderOptions";
 import PartnerSubscriptionDetailsRows from "../../components/partner/PartnerSubscriptionDetailsRows";
@@ -58,57 +66,25 @@ type CatalogServiceLite = {
 };
 
 type PartnerVerificationDocSlot = {
-  id: string;
+  id: PartnerVerificationSlotId;
   title: string;
-  match: (normalizedName: string) => boolean;
 };
 
 /** Fixed rows; matched to `documents[].name` from the API (case-insensitive). */
 const PARTNER_VERIFICATION_DOCUMENT_SLOTS: PartnerVerificationDocSlot[] = [
-  {
-    id: "pan_card",
-    title: "PAN Card",
-    match: (n) => n.includes("pan") && n.includes("card"),
-  },
-  {
-    id: "aadhar_card",
-    title: "Aadhar Card",
-    match: (n) => n.includes("aadhar") || n.includes("aadhaar"),
-  },
-  {
-    id: "driving_license", 
-    title: "Driving License",
-    match: (n) => n.includes("driving") && n.includes("license"),
-  },
-  {
-    id: "vehicle_registration",
-    title: "Vehicle Registration",
-    match: (n) => n.includes("vehicle") && n.includes("registration"),
-  },
-  {
-    id: "police_verification",
-    title: "Others",
-    match: (n) =>
-      (n.includes("police") && n.includes("verification")) ||
-      n.includes("police_verification_certificate"),
-  },
+  { id: "pan_card", title: "PAN Card" },
+  { id: "aadhar_card", title: "Aadhar Card" },
+  { id: "driving_license", title: "Driving License" },
+  { id: "vehicle_registration", title: "Vehicle Registration" },
+  { id: "police_verification", title: "Others" },
 ];
-
-function normalizePartnerDocName(name: string | null | undefined): string {
-  return String(name ?? "")
-    .trim()
-    .toLowerCase();
-}
 
 function findPartnerVerificationDocForSlot(
   documents: DocumentModel[] | undefined,
   slot: PartnerVerificationDocSlot
 ): DocumentModel | undefined {
   if (!documents?.length) return undefined;
-  return documents.find((d) => {
-    const n = normalizePartnerDocName(d.name);
-    return Boolean(n) && slot.match(n);
-  });
+  return documents.find((d) => partnerDocumentMatchesSlot(d.name, slot.id));
 }
 
 type PartnerVerificationReviewModalProps = {
@@ -271,35 +247,62 @@ function PartnerVerificationReviewModalView({
   }, [userDetails]);
 
   const addDocument = useCallback(
-    (document: DocumentModel) => {
-      CustomUploadDialog.show(async (files, _replaceUrls) => {
-        const formData = new FormData();
-        formData.append("type", "1");
-        files.forEach((file) => formData.append("files", file));
+    (
+      document: DocumentModel | undefined,
+      slot: PartnerVerificationDocSlot
+    ) => {
+      const existingImage = String(document?.document_image ?? "").trim();
+      const modalTitle =
+        slot.title ||
+        partnerDocumentDisplayTitle(document?.name) ||
+        "Document";
 
-        const { response, fileList } = await createOrUpdateDocument(
-          formData,
-          false
-        );
+      CustomUploadDialog.show(
+        async (files, _replaceUrls) => {
+          const formData = new FormData();
+          formData.append("type", "1");
+          files.forEach((file) => formData.append("files", file));
 
-        if (response) {
-          const payload = { image_url: fileList[0] };
-          if (!document?._id) {
-            showErrorAlert("Unable to update. ID is missing.");
+          const { response, fileList } = await createOrUpdateDocument(
+            formData,
+            false
+          );
+
+          if (!response || !fileList[0]) return;
+
+          const imageUrl = fileList[0];
+
+          if (document?._id) {
+            const responseUpdate = await updatePartnerDocument(
+              { image_url: imageUrl },
+              document._id
+            );
+            if (responseUpdate.response) {
+              void onRefreshuser();
+            }
             return;
           }
 
-          const responseUpdate = await updatePartnerDocument(
-            payload,
-            document._id
-          );
-          if (responseUpdate) {
+          const partnerId = String(userDetails?._id ?? "").trim();
+          if (!partnerId) {
+            showErrorAlert("Unable to upload. Partner id is missing.");
+            return;
+          }
+
+          const created = await createPartnerDocument({
+            partner_id: partnerId,
+            name: partnerVerificationSlotApiName(slot.id),
+            image_url: imageUrl,
+          });
+          if (created) {
             void onRefreshuser();
           }
-        }
-      });
+        },
+        existingImage ? [existingImage] : undefined,
+        modalTitle
+      );
     },
-    [onRefreshuser]
+    [onRefreshuser, userDetails?._id]
   );
 
   const openPartnerLevelVerificationModal = useCallback(() => {
@@ -512,8 +515,12 @@ function PartnerVerificationReviewModalView({
                   flexShrink: 0,
                 }}
                 onClick={() =>
-                  AddEditUserDialog.show(2, true, userDetails, () =>
-                    void onRefreshuser()
+                  AddEditUserDialog.show(
+                    2,
+                    true,
+                    userDetails,
+                    () => void onRefreshuser(),
+                    { partnerStatusMode: "verification" }
                   )
                 }
               />
@@ -527,9 +534,9 @@ function PartnerVerificationReviewModalView({
                   userDetails &&
                   String(userDetails.profile_url ?? "").trim() &&
                   !partnerProfileImgFailed
-                    ? `${AppConstant.IMAGE_BASE_URL}${String(
-                        userDetails.profile_url
-                      ).trim()}?t=${Date.now()}`
+                    ? resolveExistingImageSrc(
+                        String(userDetails.profile_url).trim()
+                      )
                     : profileIcon
                 }
                 alt={
@@ -811,13 +818,7 @@ function PartnerVerificationReviewModalView({
                             style={{ cursor: "pointer" }}
                             onClick={(e) => {
                               e.preventDefault();
-                              if (doc) {
-                                addDocument(doc);
-                              } else {
-                                showErrorAlert(
-                                  "No document record for this type yet."
-                                );
-                              }
+                              addDocument(doc, slot);
                             }}
                           >
                             Add
@@ -849,7 +850,7 @@ function PartnerVerificationReviewModalView({
                               onClick={(e) => {
                                 e.preventDefault();
                                 if (!canAct || !doc?._id) return;
-                                if (doc) addDocument(doc);
+                                addDocument(doc, slot);
                               }}
                             >
                               Update

@@ -2,7 +2,7 @@ import ReactDOM from "react-dom";
 import { Modal } from "react-bootstrap";
 import CustomCloseButton from "./CustomCloseButton";
 import { DocumentModel } from "../lib/models/DocumentModel";
-import { AppConstant } from "../lib/global/AppConstant";
+import { resolveMediaAssetSrc } from "../services/documentUploadService";
 import { partnerDocumentDisplayTitle } from "../lib/partner/partnerFormDocuments";
 function formatDocumentPreviewTitle(name: string | null | undefined): string {
   const trimmed = String(name ?? "").trim();
@@ -45,7 +45,7 @@ export const CustomImagePreviewDialog = (documentPreview: DocumentModel) => {
       </Modal.Header>
       <Modal.Body className="d-flex justify-content-center align-items-center">
         <img
-          src={`${AppConstant.IMAGE_BASE_URL}${documentPreview.document_image}`}
+          src={resolveMediaAssetSrc(documentPreview.document_image)}
           alt="document"
           className="img-fluid"
           style={{ maxWidth: "80%", maxHeight: "80%" }}

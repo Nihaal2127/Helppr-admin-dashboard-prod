@@ -3,6 +3,15 @@ import { ApiPaths } from "../lib/global/remote/apiPaths";
 import { AppConstant } from "../lib/global/AppConstant";
 import { showLog } from "../helper/utility";
 
+function mediaAssetBaseUrl(): string {
+  const fromEnv = process.env.REACT_APP_IMAGE_BASE_URL?.trim();
+  if (fromEnv) return fromEnv.replace(/\/?$/, "/");
+  const fromConstant = AppConstant.IMAGE_BASE_URL.trim();
+  if (fromConstant) return fromConstant.replace(/\/?$/, "/");
+  // Help Pr Live: API often returns storage keys like `user_profile/...`.
+  return "https://d20g1bd5nfpo8h.cloudfront.net/";
+}
+
 /** Browser-ready URL for API/storage paths (relative key, CDN URL, blob, or data URI). */
 export function resolveMediaAssetSrc(url?: string | null): string {
   const u = String(url ?? "").trim();
@@ -10,7 +19,7 @@ export function resolveMediaAssetSrc(url?: string | null): string {
   if (u.startsWith("data:") || u.startsWith("blob:")) return u;
   if (u.startsWith("http://") || u.startsWith("https://")) return u;
   if (u.startsWith("//")) return `https:${u}`;
-  const base = AppConstant.IMAGE_BASE_URL.replace(/\/?$/, "/");
+  const base = mediaAssetBaseUrl();
   return `${base}${u.replace(/^\//, "")}`;
 }
 
@@ -24,9 +33,14 @@ export function isNonStorageImageUrl(url: string | null | undefined): boolean {
 export function toStorageRelativePath(url: string | null | undefined): string {
   const u = String(url ?? "").trim();
   if (!u || isNonStorageImageUrl(u)) return "";
-  const base = AppConstant.IMAGE_BASE_URL.replace(/\/?$/, "/");
-  if (u.startsWith(base)) {
-    return u.slice(base.length).replace(/^\//, "");
+  const bases = [
+    mediaAssetBaseUrl(),
+    AppConstant.IMAGE_BASE_URL.replace(/\/?$/, "/"),
+  ].filter(Boolean);
+  for (const base of bases) {
+    if (u.startsWith(base)) {
+      return u.slice(base.length).replace(/^\//, "");
+    }
   }
   if (u.startsWith("http://") || u.startsWith("https://")) {
     try {

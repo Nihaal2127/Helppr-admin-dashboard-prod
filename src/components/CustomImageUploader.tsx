@@ -200,6 +200,9 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
   const [fileInputs, setFileInputs] = useState<(File | null)[]>([null]);
   const [replaceUrls, setReplaceUrls] = useState<string[]>([]);
   const [dragDepth, setDragDepth] = useState(0);
+  const [existingPreviewFailed, setExistingPreviewFailed] = useState<
+    Record<number, boolean>
+  >({});
   const inputRefs = useRef<Array<HTMLInputElement | null>>([]);
   const initKeyRef = useRef<string>("");
   const existingImagesKey = existingImages.join("|");
@@ -218,6 +221,7 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
       : [null];
     setFileInputs(initialFileInputs);
     setReplaceUrls([]);
+    setExistingPreviewFailed({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditable, existingImages.length, existingImagesKey]);
 
@@ -342,7 +346,9 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
           >
             {fileInputs.map((file, index) => {
               const existing = (existingImages[index] ?? "").trim();
-              const hasPreview = Boolean(file || existing);
+              const hasPreview = Boolean(
+                file || (existing && !existingPreviewFailed[index])
+              );
 
               if (isSingle) {
                 return (
@@ -418,13 +424,19 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                         >
                           {file ? (
                             <LocalFilePreview file={file} />
-                          ) : existing ? (
+                          ) : existing && !existingPreviewFailed[index] ? (
                             <img
                               alt=""
                               src={resolveExistingImageSrc(existing)}
                               width={RECOMMENDED_IMAGE_SIZE_PX}
                               height={RECOMMENDED_IMAGE_SIZE_PX}
                               style={squarePreviewImageStyle}
+                              onError={() =>
+                                setExistingPreviewFailed((prev) => ({
+                                  ...prev,
+                                  [index]: true,
+                                }))
+                              }
                             />
                           ) : (
                             <div
@@ -599,13 +611,19 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                     >
                       {file ? (
                         <LocalFilePreview file={file} />
-                      ) : existing ? (
+                      ) : existing && !existingPreviewFailed[index] ? (
                         <img
                           alt=""
                           src={resolveExistingImageSrc(existing)}
                           width={RECOMMENDED_IMAGE_SIZE_PX}
                           height={RECOMMENDED_IMAGE_SIZE_PX}
                           style={squarePreviewImageStyle}
+                          onError={() =>
+                            setExistingPreviewFailed((prev) => ({
+                              ...prev,
+                              [index]: true,
+                            }))
+                          }
                         />
                       ) : (
                         <div

@@ -749,27 +749,42 @@ export async function deleteMobileUserAddress(
   return Boolean(response.success);
 }
 
-/** Super admin approve/reject partner verification (`PUT /user/update/:id`). */
+export type PartnerVerificationDecisionInput =
+  | {
+      status: "approve" | "reject" | "pending";
+      verification_rejection_reason?: string;
+    }
+  | {
+      approved: boolean;
+      verification_rejection_reason?: string;
+    };
+
+/** Super admin approve/reject/pending partner verification (`PUT /user/update/:id`). */
 export async function updatePartnerVerificationDecision(
   partnerUserId: string,
-  decision: {
-    approved: boolean;
-    verification_rejection_reason?: string;
-  }
+  decision: PartnerVerificationDecisionInput
 ): Promise<boolean> {
   const id = String(partnerUserId ?? "").trim();
   if (!id) return false;
+
+  const status =
+    "status" in decision
+      ? decision.status
+      : decision.approved
+        ? "approve"
+        : "reject";
+
   const body: Record<string, unknown> = {
-    is_verified: decision.approved
-      ? PARTNER_VERIFICATION.APPROVED
-      : PARTNER_VERIFICATION.REJECTED,
-    ...(decision.approved
-      ? { verification_rejection_reason: "" }
-      : {
-          verification_rejection_reason: String(
-            decision.verification_rejection_reason ?? ""
-          ).trim(),
-        }),
+    is_verified:
+      status === "approve"
+        ? PARTNER_VERIFICATION.APPROVED
+        : status === "reject"
+          ? PARTNER_VERIFICATION.REJECTED
+          : PARTNER_VERIFICATION.PENDING,
+    verification_rejection_reason:
+      status === "reject"
+        ? String(decision.verification_rejection_reason ?? "").trim()
+        : "",
   };
   return createOrUpdateUser(body, true, id, null);
 }

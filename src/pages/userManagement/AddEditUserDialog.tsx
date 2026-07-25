@@ -14,11 +14,11 @@ import {
   getStatusOptions,
   DetailsRowLinkDocument,
 } from "../../helper/utility";
-import { showErrorAlert } from "../../lib/global/alertHelper";
+import { showErrorAlert, showSuccessAlert } from "../../lib/global/alertHelper";
 import { fetchCityDropDownForForm } from "../../services/cityService";
 import { fetchStateDropDown } from "../../services/stateService";
 import { fetchAreasByCityForForm } from "../../services/areaService";
-import { createOrUpdateUser } from "../../services/userService";
+import { createOrUpdateUser, updatePartnerVerificationDecision } from "../../services/userService";
 import {
   documentUploadFailureMessage,
   normalizeReplaceStoragePaths,
@@ -69,10 +69,15 @@ import {
 } from "../../components/RequiredFieldMark";
 import { getLocalStorage } from "../../lib/global/localStorageHelper";
 import { AppConstant, UserRole } from "../../lib/global/AppConstant";
-import { PARTNER_VERIFICATION } from "../../lib/partner/partnerVerification";
+import {
+  PARTNER_VERIFICATION,
+  normalizePartnerVerification,
+  partnerVerificationLabel,
+} from "../../lib/partner/partnerVerification";
 import {
   PARTNER_CREATE_DOCUMENT_FIELDS,
   PARTNER_CREATE_DOCUMENT_SLOTS,
+  partnerDocumentMatchesSlot,
 } from "../../lib/partner/partnerFormDocuments";
 import { openDialog } from "../../lib/global/DialogManager";
 import {
@@ -92,13 +97,40 @@ import {
   PartnerCatalogStatusToggle,
 } from "../../components/partnerCatalogBlockUi";
 import type { UserMultipartUploads } from "../../services/userService";
-import type { PartnerCreateDocumentKey } from "../../lib/partner/partnerFormDocuments";
+import type {
+  PartnerCreateDocumentKey,
+  PartnerVerificationSlotId,
+} from "../../lib/partner/partnerFormDocuments";
 import type {
   PartnerCategoryBlock,
   PartnerCatalogServiceLite,
   PartnerServiceRow,
   PartnerCatalogFlattenOk,
 } from "../../components/partnerCatalogBlockUi";
+
+const PARTNER_MANDATORY_VERIFICATION_SLOTS: {
+  id: PartnerVerificationSlotId;
+  title: string;
+}[] = [
+  { id: "pan_card", title: "PAN Card" },
+  { id: "aadhar_card", title: "Aadhar Card" },
+];
+
+function missingMandatoryPartnerVerificationDocs(
+  user: UserModel | null | undefined
+): string[] {
+  const documents = user?.documents;
+  const missing: string[] = [];
+  for (const slot of PARTNER_MANDATORY_VERIFICATION_SLOTS) {
+    const doc = documents?.find((d) =>
+      partnerDocumentMatchesSlot(d.name, slot.id)
+    );
+    if (!String(doc?.document_image ?? "").trim()) {
+      missing.push(slot.title);
+    }
+  }
+  return missing;
+}
 
 const PARTNER_ROLE = 2;
 const FRANCHISE_EMPLOYEE_ROLE = 3;
@@ -180,6 +212,8 @@ type AddEditUserDialogProps = {
   user: UserModel | null;
   onClose: () => void;
   onRefreshData: () => void;
+  /** Partner verification review: Status uses pending / rejected instead of active / inactive. */
+  partnerStatusMode?: "active" | "verification";
 };
 
 const normalizeIdLike = (value: unknown): string => {
@@ -250,11 +284,23 @@ function AddEditUserDialogView({
   user,
   onClose,
   onRefreshData,
+  partnerStatusMode = "active",
 }: AddEditUserDialogProps) {
   const isAddPartner = role === PARTNER_ROLE && !isEditable;
   const isPartnerEdit = role === PARTNER_ROLE && isEditable;
   const isUserUpdate = role === USER_ROLE && isEditable;
   const isFranchiseEmployeeRole = role === FRANCHISE_EMPLOYEE_ROLE;
+  const usePartnerVerificationStatus =
+    isPartnerEdit && partnerStatusMode === "verification";
+  const partnerVerificationNorm = normalizePartnerVerification(
+    user?.is_verified
+  );
+  const partnerVerificationApproved =
+    partnerVerificationNorm === PARTNER_VERIFICATION.APPROVED;
+  const [partnerVerificationDecision, setPartnerVerificationDecision] =
+    useState<"approve" | "reject" | "pending">("pending");
+  const [partnerVerificationRejectReason, setPartnerVerificationRejectReason] =
+    useState("");
 
   const {
     register,
@@ -1241,6 +1287,30 @@ function AddEditUserDialogView({
       }
     }
 
+    if (
+      usePartnerVerificationStatus &&
+      !partnerVerificationApproved
+    ) {
+      if (
+        partnerVerificationDecision === "reject" &&
+        !partnerVerificationRejectReason.trim()
+      ) {
+        showErrorAlert("Please enter a rejection reason.");
+        return;
+      }
+      if (partnerVerificationDecision === "approve") {
+        const missingMandatoryDocs = missingMandatoryPartnerVerificationDocs(
+          user
+        );
+        if (missingMandatoryDocs.length > 0) {
+          showErrorAlert(
+            `${missingMandatoryDocs.join(" and ")} must be uploaded before approving the partner.`
+          );
+          return;
+        }
+      }
+    }
+
     const bankIsActive =
       data.bank_account_is_active === undefined ||
       data.bank_account_is_active === null
@@ -1255,7 +1325,9 @@ function AddEditUserDialogView({
         : typeof data.is_active === "boolean"
         ? data.is_active
         : true;
-    const isBlockedPayload = isUserUpdate
+    const isBlockedPayload = usePartnerVerificationStatus
+      ? Boolean((user as any)?.is_blocked)
+      : isUserUpdate
       ? Boolean((user as any)?.is_blocked)
       : typeof (data as any).is_blocked === "string"
         ? String((data as any).is_blocked) === "true"
@@ -1407,6 +1479,34 @@ function AddEditUserDialogView({
     }
 
     if (responseUser) {
+      if (
+        usePartnerVerificationStatus &&
+        !partnerVerificationApproved &&
+        user?._id
+      ) {
+        const verificationOk = await updatePartnerVerificationDecision(
+          user._id,
+          {
+            status: partnerVerificationDecision,
+            ...(partnerVerificationDecision === "reject"
+              ? {
+                  verification_rejection_reason:
+                    partnerVerificationRejectReason.trim(),
+                }
+              : {}),
+          }
+        );
+        if (!verificationOk) {
+          return;
+        }
+        showSuccessAlert(
+          partnerVerificationDecision === "approve"
+            ? "Partner verified successfully."
+            : partnerVerificationDecision === "reject"
+              ? "Partner verification rejected."
+              : "Partner verification set to pending."
+        );
+      }
       if (isPartnerEdit && user?._id) {
         const subId = String(data.partner_subscription_id ?? "").trim();
         if (subId) {
@@ -1508,6 +1608,23 @@ function AddEditUserDialogView({
         : "",
     });
   }, [isEditable, user, isAddPartner, isPartnerEdit, reset]);
+
+  useEffect(() => {
+    if (!usePartnerVerificationStatus || !user) return;
+    const norm = normalizePartnerVerification(user.is_verified);
+    if (norm === PARTNER_VERIFICATION.REJECTED) {
+      setPartnerVerificationDecision("reject");
+      setPartnerVerificationRejectReason(
+        String(user.verification_rejection_reason ?? "").trim()
+      );
+    } else if (norm === PARTNER_VERIFICATION.PENDING) {
+      setPartnerVerificationDecision("pending");
+      setPartnerVerificationRejectReason("");
+    } else {
+      setPartnerVerificationDecision("approve");
+      setPartnerVerificationRejectReason("");
+    }
+  }, [usePartnerVerificationStatus, user]);
 
   useEffect(() => {
     if (!isAddPartner || !isSuperAdminOrStaff) return;
@@ -2182,19 +2299,121 @@ function AddEditUserDialogView({
                 {isEditable ? (
                   <>
                     {role !== USER_ROLE ? (
-                      <CustomTextFieldRadio
-                        label="Status"
-                        name="is_blocked"
-                        options={[
-                          { value: "false", label: "Active" },
-                          { value: "true", label: "Inactive" },
-                        ]}
-                        defaultValue={String(
-                          watch("is_blocked") ?? (user as any)?.is_blocked ?? false
-                        )}
-                        isEditable={true}
-                        setValue={setValue}
-                      />
+                      usePartnerVerificationStatus ? (
+                        partnerVerificationApproved ? (
+                          <Row className="align-items-start">
+                            <Col sm={4} className="d-flex align-items-start">
+                              <label className="custom-profile-lable mb-0">
+                                Verification status
+                              </label>
+                            </Col>
+                            <Col>
+                              <span className="custom-active">
+                                {partnerVerificationLabel(user?.is_verified)}
+                              </span>
+                            </Col>
+                          </Row>
+                        ) : (
+                          <>
+                            <Row className="align-items-start g-2 mb-0">
+                              <Col sm={4} className="d-flex align-items-start">
+                                <label className="custom-profile-lable mb-0">
+                                  Verification status
+                                </label>
+                              </Col>
+                              <Col>
+                                <div className="d-flex flex-wrap gap-3 align-items-center">
+                                  <Form.Check
+                                    type="radio"
+                                    id={`add-edit-partner-approve-${user?._id ?? "new"}`}
+                                    name="partner-verification-decision"
+                                    className="custom-radio-check"
+                                    label={
+                                      <span className="custom-radio-text">
+                                        Approve
+                                      </span>
+                                    }
+                                    checked={
+                                      partnerVerificationDecision === "approve"
+                                    }
+                                    onChange={() =>
+                                      setPartnerVerificationDecision("approve")
+                                    }
+                                  />
+                                  <Form.Check
+                                    type="radio"
+                                    id={`add-edit-partner-reject-${user?._id ?? "new"}`}
+                                    name="partner-verification-decision"
+                                    className="custom-radio-check"
+                                    label={
+                                      <span className="custom-radio-text">
+                                        Reject
+                                      </span>
+                                    }
+                                    checked={
+                                      partnerVerificationDecision === "reject"
+                                    }
+                                    onChange={() =>
+                                      setPartnerVerificationDecision("reject")
+                                    }
+                                  />
+                                  <Form.Check
+                                    type="radio"
+                                    id={`add-edit-partner-pending-${user?._id ?? "new"}`}
+                                    name="partner-verification-decision"
+                                    className="custom-radio-check"
+                                    label={
+                                      <span className="custom-radio-text">
+                                        Pending
+                                      </span>
+                                    }
+                                    checked={
+                                      partnerVerificationDecision === "pending"
+                                    }
+                                    onChange={() =>
+                                      setPartnerVerificationDecision("pending")
+                                    }
+                                  />
+                                </div>
+                              </Col>
+                            </Row>
+                            {partnerVerificationDecision === "reject" ? (
+                              <Form.Group className="mt-3 mb-0">
+                                <Form.Label className="custom-profile-lable mb-1">
+                                  Rejection reason
+                                </Form.Label>
+                                <Form.Control
+                                  as="textarea"
+                                  rows={4}
+                                  placeholder="Enter rejection reason"
+                                  value={partnerVerificationRejectReason}
+                                  onChange={(e) =>
+                                    setPartnerVerificationRejectReason(
+                                      e.target.value
+                                    )
+                                  }
+                                />
+                              </Form.Group>
+                            ) : null}
+                          </>
+                        )
+                      ) : (
+                        <CustomTextFieldRadio
+                          label="Status"
+                          name="is_blocked"
+                          options={[
+                            { value: "false", label: "Active" },
+                            { value: "true", label: "Inactive" },
+                          ]}
+                          defaultValue={String(
+                            watch("is_blocked") ??
+                              (user as any)?.is_blocked ??
+                              false
+                          )}
+                          isEditable={true}
+                          setValue={setValue}
+                        />
+                      )
                     ) : null}
                   </>
                 ) : null}
@@ -2623,7 +2842,8 @@ const AddEditUserDialog = Object.assign(AddEditUserDialogView, {
     role: number,
     isEditable: boolean,
     user: UserModel | null,
-    onRefreshData: () => void
+    onRefreshData: () => void,
+    options?: { partnerStatusMode?: "active" | "verification" }
   ) {
     openDialog("add-user-details-modal", (close) => (
       <AddEditUserDialogView
@@ -2632,6 +2852,7 @@ const AddEditUserDialog = Object.assign(AddEditUserDialogView, {
         user={user}
         onClose={close}
         onRefreshData={onRefreshData}
+        partnerStatusMode={options?.partnerStatusMode}
       />
     ));
   },
@@ -2640,7 +2861,8 @@ const AddEditUserDialog = Object.assign(AddEditUserDialogView, {
     role: number,
     isEditable: boolean,
     user: UserModel | null,
-    onRefreshData: () => void
+    onRefreshData: () => void,
+    options?: { partnerStatusMode?: "active" | "verification" }
   ) => void;
 };
 

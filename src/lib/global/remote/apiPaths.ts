@@ -98,6 +98,7 @@ export const ApiPaths = {
   EXPORT_SERVICE: `/export/service`,
   CREATE_BANK_ACCOUNT: "/bank_account/create",
   UPDATE_BANK_ACCOUNT: (id: string) => `/bank_account/update/${id}`,
+  CREATE_PARTNER_DOCUMENT: "/partner_document/create",
   UPDATE_PARTNER_DOCUMENT: (id: string) =>
     `/partner_document/updateDocument/${id}`,
   DELETE_PARTNER_DOCUMENT: (id: string) => `/partner_document/delete/${id}`,

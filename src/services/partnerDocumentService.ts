@@ -2,6 +2,27 @@ import { apiRequest } from "../lib/global/remote/apiHelper";
 import { ApiPaths } from "../lib/global/remote/apiPaths";
 import { showLog } from "../helper/utility";
 
+export type CreatePartnerDocumentPayload = {
+  partner_id: string;
+  name: string;
+  image_url: string;
+};
+
+export const createPartnerDocument = async (
+  payload: CreatePartnerDocumentPayload
+): Promise<boolean> => {
+  const response = await apiRequest(
+    ApiPaths.CREATE_PARTNER_DOCUMENT,
+    "POST",
+    payload
+  );
+  if (response.success) {
+    return true;
+  }
+  showLog("Document create fail:", response.message || "Unknown error");
+  return false;
+};
+
 export const updatePartnerDocument = async (
   payload: any,
   id: string

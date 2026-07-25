@@ -12,6 +12,75 @@ export const PARTNER_CREATE_DOCUMENT_FIELDS = {
 
 export type PartnerCreateDocumentKey = keyof typeof PARTNER_CREATE_DOCUMENT_FIELDS;
 
+export type PartnerVerificationSlotId = PartnerCreateDocumentKey;
+
+export function normalizePartnerDocName(
+  name: string | null | undefined
+): string {
+  return String(name ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+/** Match API `documents[].name` to a fixed verification slot. */
+export function partnerDocumentMatchesSlot(
+  documentName: string | null | undefined,
+  slotId: PartnerVerificationSlotId
+): boolean {
+  const n = normalizePartnerDocName(documentName);
+  if (!n) return false;
+
+  switch (slotId) {
+    case "pan_card":
+      return (n.includes("pan") && n.includes("card")) || n === "pan_card";
+    case "aadhar_card":
+      return (
+        n.includes("aadhar") ||
+        n.includes("aadhaar") ||
+        n === "aadhar_card"
+      );
+    case "driving_license":
+      return (
+        (n.includes("driving") && n.includes("license")) ||
+        n === "driving_license"
+      );
+    case "vehicle_registration":
+      return (
+        (n.includes("vehicle") && n.includes("registration")) ||
+        n === "vehicle_registration"
+      );
+    case "police_verification":
+      return (
+        (n.includes("police") && n.includes("verification")) ||
+        n.includes("police_verification_certificate") ||
+        n === "others" ||
+        n === "other"
+      );
+    default:
+      return false;
+  }
+}
+
+/** API document `name` used when creating a missing partner document row. */
+export function partnerVerificationSlotApiName(
+  slotId: PartnerVerificationSlotId
+): string {
+  switch (slotId) {
+    case "pan_card":
+      return "pan card";
+    case "aadhar_card":
+      return "aadhar card";
+    case "driving_license":
+      return "driving license";
+    case "vehicle_registration":
+      return "vehicle registration";
+    case "police_verification":
+      return "others";
+    default:
+      return slotId;
+  }
+}
+
 export const PARTNER_CREATE_DOCUMENT_SLOTS: {
   key: PartnerCreateDocumentKey;
   title: string;
@@ -35,7 +104,9 @@ export function partnerDocumentDisplayTitle(
   const n = trimmed.toLowerCase();
   if (
     (n.includes("police") && n.includes("verification")) ||
-    n.includes("police_verification_certificate")
+    n.includes("police_verification_certificate") ||
+    n === "others" ||
+    n === "other"
   ) {
     return "Others";
   }
