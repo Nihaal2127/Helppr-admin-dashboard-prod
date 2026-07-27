@@ -739,10 +739,21 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     [form.requested_date]
   );
 
-  const userSelectOptions = useMemo<OptionType[]>(
-    () => quoteUserOptions.map((u) => ({ value: u.value, label: u.label })),
-    [quoteUserOptions]
-  );
+  const userSelectOptions = useMemo<OptionType[]>(() => {
+    const base = quoteUserOptions.map((u) => ({ value: u.value, label: u.label }));
+    const uid = String(form.user_id ?? quoteRow?.user_id ?? "").trim();
+    const uname =
+      String(form.user_name ?? quoteRow?.user_name ?? "").trim() || uid;
+    if (!uid) return base;
+    if (base.some((o) => o.value === uid)) return base;
+    return [{ value: uid, label: uname }, ...base];
+  }, [
+    quoteUserOptions,
+    form.user_id,
+    form.user_name,
+    quoteRow?.user_id,
+    quoteRow?.user_name,
+  ]);
 
   const franchiseSelectOptions = useMemo<OptionType[]>(() => {
     const id = String(form.franchise_id ?? quoteRow?.franchise_id ?? "").trim();
