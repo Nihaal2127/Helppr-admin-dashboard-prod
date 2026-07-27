@@ -26,7 +26,7 @@ const TermsConditions = () => {
             gap: "10px",
           }}
         >
-          <h1 style={{ color: "var(--bg-color)", margin: 0 }}>Helper</h1>
+          <h1 style={{ color: "var(--bg-color)", margin: 0 }}>HelpPR</h1>
         </div>
 
         <h1 style={{ color: "var(--bg-color)", marginTop: "20px" }}>

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect, useCallback } from "react";
 import { Form, Col } from "react-bootstrap";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -22,7 +22,7 @@ interface CustomDatePickerProps {
   asCol?: boolean;
   setValue: UseFormSetValue<any>;
   groupClassName?: string;
-  /** Second copy of the same field: still calls `setValue(controlId, …)` but skips the hidden `register` input. */
+  /** Second copy of the same field: still calls `setValue(controlId, …)` but skips `register`. */
   suppressHiddenRegister?: boolean;
   /** Date of birth: year/month dropdowns, past dates only. */
   birthDatePicker?: boolean;
@@ -62,7 +62,45 @@ const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
   const wrapperProps = asCol ? { xs: 12, md: 4 } : {};
 
   const datePickerRef = useRef<DatePicker | null>(null);
+  const groupRef = useRef<HTMLDivElement>(null);
+  const prevErrorRef = useRef(false);
   const [isOpen, setIsOpen] = useState(false);
+  const registration = suppressHiddenRegister
+    ? null
+    : register(controlId, validation);
+  const rhfRef = registration?.ref;
+
+  const syncVisibleInputRef = useCallback(() => {
+    if (!rhfRef) return;
+    const inputEl =
+      (datePickerRef.current as { input?: HTMLInputElement } | null)?.input ??
+      null;
+    if (!inputEl) return;
+    if (typeof rhfRef === "function") {
+      rhfRef(inputEl);
+      return;
+    }
+    (rhfRef as React.MutableRefObject<HTMLInputElement | null>).current =
+      inputEl;
+  }, [rhfRef]);
+
+  useEffect(() => {
+    syncVisibleInputRef();
+  }, [syncVisibleInputRef, isOpen, selectedDate]);
+
+  useEffect(() => {
+    const hasError = Boolean(error);
+    if (hasError && !prevErrorRef.current) {
+      groupRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      const inputEl =
+        (datePickerRef.current as { input?: HTMLInputElement } | null)?.input;
+      inputEl?.focus({ preventScroll: true });
+    }
+    prevErrorRef.current = hasError;
+  }, [error]);
 
   /** Latest selectable DOB when `birthDatePicker`: defaults to 18+, can be relaxed for add-user flows. */
   const maxDobWithAgeRule = () => {
@@ -93,7 +131,7 @@ const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
   const handleDateChange = (date: Date | null) => {
     const normalized = normalizePickerDate(date);
     const ymd = normalized ? dateToLocalYmd(normalized) : "";
-    setValue(controlId, ymd || null, { shouldValidate: true });
+    setValue(controlId, ymd || null, { shouldValidate: true, shouldDirty: true, shouldTouch: true, });
     onChange(normalized);
     setIsOpen(false);
   };
@@ -112,6 +150,7 @@ const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
   return (
     <Wrapper {...wrapperProps}>
       <Form.Group
+        ref={groupRef}
         controlId={groupControlId ?? controlId}
         className={groupClassName ?? "mb-3 w-100"}
       >
@@ -129,6 +168,7 @@ const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
             onSelect={() => setIsOpen(false)}
             onClickOutside={() => setIsOpen(false)}
             onInputClick={() => setIsOpen(true)}
+            onBlur={registration?.onBlur}
             dateFormat={
               pickerMode === "month"
                 ? "MMMM yyyy"
@@ -188,13 +228,6 @@ const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
           </Form.Control.Feedback>
         )}
       </Form.Group>
-      {!suppressHiddenRegister ? (
-        <input
-          type="hidden"
-          {...register(controlId, validation)}
-          value={selectedDate || ""}
-        />
-      ) : null}
     </Wrapper>
   );
 };

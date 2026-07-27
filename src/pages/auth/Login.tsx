@@ -97,7 +97,7 @@ const Login = () => {
             style={{width: "90px",height: "90px",objectFit: "contain",marginBottom: "10px",}}
             
             />
-            <h2 className="mb-4 title">Helper!</h2>
+            <h2 className="mb-4 title">HelpPR!</h2>
             <form
               noValidate
               name="login-form"

@@ -8,28 +8,22 @@ interface CustomTextFieldSelectProps {
   controlId: string;
   options: { value: string; label: string }[];
   register: any;
+  validation?: any;
   fieldName: string;
   error?: any;
   requiredMessage?: string;
   defaultValue?: string;
   setValue?: (name: string, value: any) => void;
-  onChange?: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  onChange?: (value: any) => void;
   labelSize?: number;
   asCol?: boolean;
-  /** Passed to react-select (e.g. "Select employee"). */
   placeholder?: string;
-  /** Use inside Bootstrap modals so the menu is not clipped. */
   menuPortal?: boolean;
-  /** Omit default `mb-4` on the label row (e.g. dense stacks in modals). */
   noRowBottomMargin?: boolean;
-  /** Passed to `CustomFormSelect` — removes control bottom margin. */
   noBottomMargin?: boolean;
-  /** When true (default), user can clear the selection (react-select ×). Pass `false` to disable. */
   isClearable?: boolean;
-  /** Passed to `CustomFormSelect` — prepends `{ value: "" }` (default true). */
   includeEmptyOption?: boolean;
   emptyOptionLabel?: string;
-  /** Disables the select (e.g. until franchise is chosen in Add Quote). */
   isDisabled?: boolean;
 }
 
@@ -38,6 +32,7 @@ const CustomTextFieldSelect: React.FC<CustomTextFieldSelectProps> = ({
   controlId,
   options,
   register,
+  validation,
   fieldName,
   error,
   requiredMessage,
@@ -45,7 +40,6 @@ const CustomTextFieldSelect: React.FC<CustomTextFieldSelectProps> = ({
   setValue,
   onChange,
   labelSize = 4,
-  asCol = false,
   placeholder,
   menuPortal = false,
   noRowBottomMargin = false,
@@ -55,7 +49,12 @@ const CustomTextFieldSelect: React.FC<CustomTextFieldSelectProps> = ({
   emptyOptionLabel,
   isDisabled = false,
 }) => {
-  const rowMarginClass = noRowBottomMargin ? "" : labelSize !== 4 ? "mb-4" : "";
+  const rowMarginClass = noRowBottomMargin
+    ? ""
+    : labelSize !== 4
+    ? "mb-4"
+    : "";
+
   return (
     <Row
       className={["align-items-start", rowMarginClass]
@@ -64,15 +63,20 @@ const CustomTextFieldSelect: React.FC<CustomTextFieldSelectProps> = ({
     >
       <Col sm={labelSize} className="d-flex align-items-start">
         <label className="custom-profile-lable">
-          <FieldLabelText label={label} required={!!requiredMessage} />
+          <FieldLabelText
+            label={label}
+            required={!!requiredMessage}
+          />
         </label>
       </Col>
+
       <Col>
         <CustomFormSelect
           label=""
           controlId={controlId}
           options={options}
           register={register}
+          validation={validation}
           fieldName={fieldName}
           error={error}
           requiredMessage={requiredMessage}

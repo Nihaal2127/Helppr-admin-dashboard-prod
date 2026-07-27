@@ -38,6 +38,7 @@ interface CustomFormSelectProps {
   includeEmptyOption?: boolean;
   /** Label for the empty-value row when `includeEmptyOption` is true (default: `Select`). */
   emptyOptionLabel?: string;
+  validation?: any;
   /**
    * When the user clears the react-select (×), set this value instead of `""`.
    * Use `"all"` for the global franchise header so “clear” means all franchises.

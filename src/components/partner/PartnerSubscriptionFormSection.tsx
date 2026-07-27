@@ -70,36 +70,45 @@ const PartnerSubscriptionFormSection: React.FC<
       }
     : { start: undefined, end: undefined };
 
-  const planSelect = (
-    <CustomFormSelect
-      label="Subscription Plan"
-      controlId="subscription_plan_id"
-      options={planOptions}
-      register={rhfRegister(register)}
-      fieldName="subscription_plan_id"
-      error={errors.subscription_plan_id}
-      asCol={false}
-      defaultValue={watchedPlanId}
-      setValue={rhfSetValue(setValue)}
-      placeholder="Select subscription plan"
-      menuPortal
-      requiredMessage={
-        subscriptionDatesRequired
-          ? "Please select a subscription plan"
-          : undefined
-      }
-      onChange={(e) => {
-        const v = String((e.target as HTMLSelectElement).value ?? "");
-        const opt = planOptions.find((o) => o.value === v);
-        const slug = (opt?.label ?? "")
-          .trim()
-          .toLowerCase()
-          .replace(/\s+/g, "");
-        setValue("subscription_plan", slug, { shouldValidate: false });
-      }}
-    />
-  );
+ const planSelect = (
+  <CustomFormSelect
+    label="Subscription Plan"
+    controlId="subscription_plan_id"
+    options={planOptions}
+    register={rhfRegister(register)}
+    fieldName="subscription_plan_id"
+    error={errors.subscription_plan_id}
+    asCol={false}
+    defaultValue={watchedPlanId}
+    setValue={rhfSetValue(setValue)}
+    placeholder="Select subscription plan"
+    menuPortal
+    requiredMessage={
+      subscriptionDatesRequired
+        ? "Please select a subscription plan"
+        : undefined
+    }
+    onChange={(e) => {
+      const value = String(
+        (e.target as HTMLSelectElement).value ?? ""
+      );
 
+      const selectedPlan = planOptions.find(
+        (plan) => plan.value === value
+      );
+
+      const planSlug = (selectedPlan?.label ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "");
+
+      setValue("subscription_plan", planSlug, {
+        shouldValidate: true,
+        shouldDirty: true,
+      });
+    }}
+  />
+);
   const startDatePicker = (
     <CustomDatePicker
       label="Subscription Start Date"
