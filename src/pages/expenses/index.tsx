@@ -21,9 +21,7 @@ import {
 import { DetailsRow, capitalizeString, formatDate } from "../../helper/utility";
 import { showErrorAlert } from "../../lib/global/alertHelper";
 import {
-  ensureSettingsSeedData,
   fetchExpenseCategoriesPage,
-  getExpenseCategories,
 } from "../../services/settingsService";
 import {
   createOrUpdateExpense,
@@ -243,7 +241,6 @@ const ExpensesPage = () => {
 
   useEffect(() => {
     let cancelled = false;
-    ensureSettingsSeedData();
     const franchiseId = effectiveFormFranchiseId;
     if (!franchiseId) {
       setExpenseCategories([]);
@@ -259,11 +256,7 @@ const ExpensesPage = () => {
         const chunk = await fetchExpenseCategoriesPage(page, batch, { franchiseId });
         if (cancelled) return;
         if (!chunk) {
-          setExpenseCategories(
-            getExpenseCategories().filter(
-              (item) => String(item.franchiseId ?? "").trim() === franchiseId
-            )
-          );
+          setExpenseCategories([]);
           return;
         }
         if (chunk.rows.length === 0) break;

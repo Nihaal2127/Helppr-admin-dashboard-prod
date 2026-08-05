@@ -3,7 +3,7 @@
  */
 import html2pdf from "html2pdf.js";
 import { formatDate, formatUtcToLocalTime } from "../../helper/utility";
-import logoDark from "../../assets/icons/login_logo.svg";
+import logoDark from "../../assets/images/helper-logo.png";
 import { AppConstant } from "../../lib/global/AppConstant";
 import {
   fetchOrderById,

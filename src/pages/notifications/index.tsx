@@ -321,71 +321,10 @@ const NotificationsPage: React.FC = () => {
         key={`notifications-utility-${utilitySearchKey}`}
         searchHint="Search title / message / reference / event"
         hideMoreIcon
+        searchOnlyToolbar
         toolsInlineRow
-        controlSlot={
-          <>
-            <div style={{ minWidth: "11rem" }}>
-              <CustomFormSelect
-                label="Category"
-                controlId="notification_category"
-                options={categoryOptions.map((item) => ({
-                  value: item.value,
-                  label: item.label,
-                }))}
-                register={register}
-                fieldName="notification_category"
-                asCol={false}
-                selectWidth="11rem"
-                noBottomMargin
-                defaultValue={filters.category || "all"}
-                setValue={setValue}
-                onChange={(e) => {
-                  setCurrentPage(1);
-                  setFilters((prev) => ({
-                    ...prev,
-                    category: e.target.value as NotificationCategory | "all",
-                  }));
-                }}
-              />
-            </div>
-            <div style={{ minWidth: "11rem" }}>
-              <CustomFormSelect
-                label="Status"
-                controlId="notification_status"
-                options={statusOptions.map((item) => ({
-                  value: item.value,
-                  label: item.label,
-                }))}
-                register={register}
-                fieldName="notification_status"
-                asCol={false}
-                selectWidth="11rem"
-                noBottomMargin
-                defaultValue={filters.status || "all"}
-                setValue={setValue}
-                onChange={(e) => {
-                  setCurrentPage(1);
-                  setFilters((prev) => ({
-                    ...prev,
-                    status: e.target.value as "all" | "read" | "unread",
-                  }));
-                }}
-              />
-            </div>
-          </>
-        }
-        afterSearchSlot={
-          <Button
-            variant="outline-secondary"
-            size="sm"
-            className="custom-btn-secondary partner-payout-clear-btn px-3"
-            type="button"
-            disabled={clearFiltersDisabled}
-            onClick={clearNotificationFilters}
-          >
-            Clear
-          </Button>
-        }
+        
+        
         hideUtilityActions
         onSearch={(value) => {
           setCurrentPage(1);
@@ -397,8 +336,60 @@ const NotificationsPage: React.FC = () => {
         searchClearVersion={searchClearVersion}
       />
 
-      <Row className="g-3 mb-3 align-items-end">
-        <Col xs={12} sm={6} md={4} lg={3}>
+      <Row className="order-payments-filters-row g-3 mt-1 mb-3 align-items-end flex-wrap">
+       <Col xs={12} sm={6} md="auto" className="order-payments-filter-col">
+       <CustomFormSelect
+        label="Category"
+        controlId="notification_category"
+        options={categoryOptions.map((item) => ({
+          value: item.value,
+          label: item.label,
+        }))}
+        register={register}
+        fieldName="notification_category"
+        asCol={false}
+        noBottomMargin
+        defaultValue={filters.category || "all"}
+        setValue={setValue}
+        onChange={(e) => {
+          setCurrentPage(1);
+          setFilters((prev) => ({
+            ...prev,
+            category: e.target.value as NotificationCategory | "all",
+          }));
+        }}
+      />
+    </Col>
+    <Col xs={12} sm={6} md="auto" className="order-payments-filter-col">
+     <CustomFormSelect
+        label="Status"
+        controlId="notification_status"
+      options={statusOptions.map((item) => ({
+      value: item.value,
+      label: item.label,
+    }))}
+    register={register}
+    fieldName="notification_status"
+    asCol={false}
+    noBottomMargin
+    defaultValue={filters.status || "all"}
+    setValue={setValue}
+    onChange={(e) => {
+      setCurrentPage(1);
+      setFilters((prev) => ({
+        ...prev,
+        status: e.target.value as "all" | "read" | "unread",
+      }));
+    }}
+    />
+    </Col>
+        <Col
+          xs={12}
+          sm={6}
+          md="auto"
+          className="order-payments-filter-col"
+          style={{ minWidth: 200 }}
+        >
           <CustomDatePicker
             label="From Date"
             controlId="notification_from_date"
@@ -416,7 +407,13 @@ const NotificationsPage: React.FC = () => {
             filterDate={() => true}
           />
         </Col>
-        <Col xs={12} sm={6} md={4} lg={3}>
+        <Col
+          xs={12}
+          sm={6}
+          md="auto"
+          className="order-payments-filter-col"
+          style={{ minWidth: 200 }}
+        >
           <CustomDatePicker
             label="To Date"
             controlId="notification_to_date"
@@ -434,6 +431,23 @@ const NotificationsPage: React.FC = () => {
             filterDate={() => true}
           />
         </Col>
+        <Col
+          xs={12}
+          sm={6}
+          md="auto"
+          className="order-payments-filter-col d-flex align-items-end ms-md-auto"
+        >
+        <Button
+          variant="outline-secondary"
+          size="sm"
+        className="custom-btn-secondary partner-payout-clear-btn px-3"
+          type="button"
+          disabled={clearFiltersDisabled}
+          onClick={clearNotificationFilters}
+        >
+         Clear
+         </Button>
+       </Col>
       </Row>
 
       <CustomTable

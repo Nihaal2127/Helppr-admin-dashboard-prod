@@ -299,11 +299,11 @@ const CustomTable = (props: CustomTableProps) => {
                       >
                         <span
                           className={classNames(
-                            "d-flex flex-row align-items-center min-w-0",
-                            {
-                              "justify-content-center": srNo,
-                              "justify-content-between": !srNo,
-                            }
+                            "d-flex flex-row align-items-center justify-content-center min-w-0",
+                            // {
+                            //   "justify-content-center": srNo,
+                            //   "justify-content-between": !srNo,
+                            // }
                           )}
                         >
                           <span
@@ -318,7 +318,7 @@ const CustomTable = (props: CustomTableProps) => {
                           </span>
 
                           {column.sort && (
-                            <span className="d-flex flex-column">
+                            <span className="d-flex flex-column ms-3">
                               <i
                                 className="bi bi-caret-up-fill"
                                 style={{

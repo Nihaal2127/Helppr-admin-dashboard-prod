@@ -128,9 +128,9 @@ const Login = () => {
                 Login
               </Button>
             </form>
-            <Link to={ROUTES.FORGOT_PASSWORD.path} className="custom-link">
+            {/* <Link to={ROUTES.FORGOT_PASSWORD.path} className="custom-link">
               Forgot Password?
-            </Link>
+            </Link> */}
           </Card.Body>
         </Card>
       </Col>

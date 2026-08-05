@@ -364,12 +364,12 @@ const UserDetailsDialog: React.FC<UserDetailsDialogProps> & {
               <p>Personal</p>
               <img
                 src={
-                  userDetails?.profile_url
-                    ? `${AppConstant.IMAGE_BASE_URL}${
-                        userDetails?.profile_url
-                      }?t=${Date.now()}`
+                userDetails?.profile_url
+                  ? userDetails.profile_url.startsWith("http")
+                    ? `${userDetails.profile_url}?t=${Date.now()}`
+                    : `${AppConstant.IMAGE_BASE_URL}${userDetails.profile_url}?t=${Date.now()}`
                     : profileIcon
-                }
+              }
                 alt="User profile"
                 width="160px"
                 height="160px"

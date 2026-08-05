@@ -584,14 +584,6 @@ const SubscriptionPlans = ({ onBack }: SubscriptionPlansProps) => {
         accessor: "remaining_days",
         Cell: ({ row }: { row: any }) => {
           const r = row.original as PartnerSubscriptionModel;
-          if (r.remaining_days_demo != null) {
-            return (
-              <span className="text-danger fw-semibold">
-                {r.remaining_days_demo} day
-                {r.remaining_days_demo === 1 ? "" : "s"}
-              </span>
-            );
-          }
           return remainingDaysCell(String(r.subscription_end_date ?? ""));
         },
       },

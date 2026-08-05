@@ -15,6 +15,8 @@ type ScreenPermissionChecklistProps = {
   idPrefix: string;
   title?: string;
   headClassName?: string;
+  /** When true, shows checked state but cannot be changed (e.g. inherited from franchise admin). */
+  readOnly?: boolean;
 };
 
 export default function ScreenPermissionChecklist({
@@ -24,6 +26,7 @@ export default function ScreenPermissionChecklist({
   idPrefix,
   title = "Screen Permissions",
   headClassName = "fw-medium mb-1",
+  readOnly = false,
 }: ScreenPermissionChecklistProps) {
   const allKeys = useMemo(() => screenPermissionKeysFromItems(items), [items]);
   const allSelected = isAllScreenPermissionsSelected(selectedKeys, allKeys);
@@ -40,7 +43,9 @@ export default function ScreenPermissionChecklist({
           className="custom-checkbox-check mb-2"
           label={<span className="custom-radio-text">Select All</span>}
           checked={allSelected}
+          disabled={readOnly}
           onChange={(e) => {
+            if (readOnly) return;
             onChange(applyScreenPermissionSelectAll(allKeys, e.target.checked));
           }}
         />
@@ -59,7 +64,9 @@ export default function ScreenPermissionChecklist({
               className="custom-checkbox-check"
               label={<span className="custom-radio-text">{label}</span>}
               checked={selectedKeys.includes(key)}
+              disabled={readOnly}
               onChange={() => {
+                if (readOnly) return;
                 onChange(toggleScreenPermissionKey(selectedKeys, key));
               }}
             />

@@ -29,6 +29,7 @@ import {
   createQuote,
   deleteQuote,
   deriveQuoteScheduleMetrics,
+  deriveQuoteScheduleEndFromDuration,
   fetchFranchiseRelatedCatalog,
   fetchQuoteCounts,
   fetchQuotes,
@@ -38,6 +39,9 @@ import {
   filterPartnerServicesForCategory,
   getPartnerActiveServiceProvidingRow,
   getQuoteScheduleModeForPartnerService,
+  getQuoteScheduleDurationUnit,
+  quoteScheduleBillingHintText,
+  quoteScheduleDurationFieldLabel,
   mapRelatedCatalogToQuoteOptions,
   mergeQuoteServiceFeesForBreakdown,
   normalizeQuoteListSort,
@@ -64,8 +68,6 @@ import {
   parseCatalogAddressRecord,
   QUOTE_MODAL_LAYOUT,
   SCHEDULE_TIME_PICKER_INTERVAL_MINUTES,
-  scheduleEndTimeMaxForDay,
-  scheduleEndTimeMinAfterStart,
   setQuoteFranchiseCatalogSnapshot,
   toQuoteViewData,
 } from "../../lib/quote/quoteHelpers";
@@ -169,25 +171,6 @@ function compareIsoDateOnlyAsc(aIso: string, bIso: string): number | null {
   return startOfLocalDay(a).getTime() - startOfLocalDay(b).getTime();
 }
 
-function minutesFromScheduleTimeStorage(st: string): number | null {
-  const t = String(st ?? "").trim();
-  if (!t) return null;
-  const m = t.match(/T(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
-  return hh * 60 + mm;
-}
-
-/** Same calendar day: end clock must be strictly after start (rejects e.g. 08:00 start / 06:00 end). */
-function isScheduleEndAfterStartSameDay(start: string, end: string): boolean {
-  const a = minutesFromScheduleTimeStorage(start);
-  const b = minutesFromScheduleTimeStorage(end);
-  if (a == null || b == null) return false;
-  return b > a;
-}
-
 const addQuoteTimePickerAllowAllHours = (): boolean => true;
 
 const QuoteManagement = () => {
@@ -231,6 +214,7 @@ const QuoteManagement = () => {
       employee_id: "",
       category_id: "",
       requested_date: "",
+      schedule_duration: "",
       requested_date_to: "",
       requested_time: "",
       requested_time_from: "",
@@ -301,6 +285,7 @@ const QuoteManagement = () => {
     setAddQuoteValue("requested_partner", "", { shouldValidate: false });
     setAddQuoteValue("employee_id", "", { shouldValidate: false });
     setAddQuoteValue("requested_date", "", { shouldValidate: false });
+    setAddQuoteValue("schedule_duration", "", { shouldValidate: false });
     setAddQuoteValue("requested_date_to", "", { shouldValidate: false });
     setAddQuoteValue("requested_time", "", { shouldValidate: false });
     setAddQuoteValue("requested_time_from", "", { shouldValidate: false });
@@ -468,25 +453,6 @@ const QuoteManagement = () => {
     selectedPartnerCatalogRecord,
   ]);
 
-  const isAddQuoteScheduleComplete = useMemo(() => {
-    if (!hasAddQuoteServiceSelected) return false;
-    const d = String(addQuote.requested_date ?? "").trim();
-    const dTo = String(addQuote.requested_date_to ?? "").trim();
-    const tFrom = String(addQuote.requested_time_from ?? "").trim();
-    const tTo = String(addQuote.requested_time_to ?? "").trim();
-    if (scheduleMode === "range") {
-      return Boolean(d && dTo && tFrom && tTo);
-    }
-    return Boolean(d && tFrom && tTo);
-  }, [
-    hasAddQuoteServiceSelected,
-    scheduleMode,
-    addQuote.requested_date,
-    addQuote.requested_date_to,
-    addQuote.requested_time_from,
-    addQuote.requested_time_to,
-  ]);
-
   const selectedAddQuoteServiceOption = useMemo(() => {
     const sid = addQuoteServiceId;
     if (!sid) return undefined;
@@ -507,6 +473,47 @@ const QuoteManagement = () => {
     ]
   );
 
+  const addQuoteScheduleDurationUnit = useMemo(
+    () =>
+      getQuoteScheduleDurationUnit(
+        String(addQuoteFeeOptionForBreakdown?.payment_type ?? "").trim()
+      ),
+    [addQuoteFeeOptionForBreakdown?.payment_type]
+  );
+
+  const addQuoteBillingHint = useMemo(() => {
+    if (!hasAddQuoteServiceSelected) return "";
+    const raw = String(addQuoteFeeOptionForBreakdown?.payment_type ?? "").trim();
+    if (!raw) return "";
+    return quoteScheduleBillingHintText(raw);
+  }, [hasAddQuoteServiceSelected, addQuoteFeeOptionForBreakdown?.payment_type]);
+
+  const addQuoteScheduleDurationLabel = quoteScheduleDurationFieldLabel(
+    addQuoteScheduleDurationUnit
+  );
+
+  const isAddQuoteScheduleComplete = useMemo(() => {
+    if (!hasAddQuoteServiceSelected) return false;
+    const dur = Number.parseInt(
+      String(addQuote.schedule_duration ?? "").trim(),
+      10
+    );
+    const d = String(addQuote.requested_date ?? "").trim();
+    const tFrom = String(addQuote.requested_time_from ?? "").trim();
+    const dTo = String(addQuote.requested_date_to ?? "").trim();
+    const tTo = String(addQuote.requested_time_to ?? "").trim();
+    return Boolean(
+      Number.isFinite(dur) && dur >= 1 && d && tFrom && dTo && tTo
+    );
+  }, [
+    hasAddQuoteServiceSelected,
+    addQuote.schedule_duration,
+    addQuote.requested_date,
+    addQuote.requested_date_to,
+    addQuote.requested_time_from,
+    addQuote.requested_time_to,
+  ]);
+
   const addQuotePriceBreakdown = useMemo(
     () =>
       computeQuotePriceBreakdown(
@@ -514,12 +521,6 @@ const QuoteManagement = () => {
         addQuoteFeeOptionForBreakdown
       ),
     [addQuote.service_price, addQuoteFeeOptionForBreakdown]
-  );
-
-  const addQuoteEndMinTime = useMemo(
-    () =>
-      scheduleEndTimeMinAfterStart(String(addQuote.requested_time_from ?? "")),
-    [addQuote.requested_time_from]
   );
 
   const addQuoteSchedulePricePreview = useMemo(() => {
@@ -563,29 +564,63 @@ const QuoteManagement = () => {
   ]);
 
   useEffect(() => {
-    const from = String(addQuote.requested_time_from ?? "").trim();
-    const to = String(addQuote.requested_time_to ?? "").trim();
-    if (!from || !to) return;
-    if (!isScheduleEndAfterStartSameDay(from, to)) {
-      setAddQuoteValue("requested_time_to", "", { shouldValidate: false });
+    if (!hasAddQuoteServiceSelected) return;
+    const dur = Number.parseInt(
+      String(addQuote.schedule_duration ?? "").trim(),
+      10
+    );
+    const d = String(addQuote.requested_date ?? "").trim();
+    const tFrom = String(addQuote.requested_time_from ?? "").trim();
+    const dTo = String(addQuote.requested_date_to ?? "").trim();
+    const tTo = String(addQuote.requested_time_to ?? "").trim();
+    if (!Number.isFinite(dur) || dur < 1 || !d || !tFrom) {
+      if (dTo) {
+        setAddQuoteValue("requested_date_to", "", { shouldValidate: false });
+      }
+      if (tTo) {
+        setAddQuoteValue("requested_time_to", "", { shouldValidate: false });
+      }
+      return;
     }
-  }, [addQuote.requested_time_from, addQuote.requested_time_to, setAddQuoteValue]);
+    const end = deriveQuoteScheduleEndFromDuration({
+      unit: addQuoteScheduleDurationUnit,
+      duration: dur,
+      startDate: d,
+      startTimeStorage: tFrom,
+    });
+    if (!end) {
+      if (dTo) {
+        setAddQuoteValue("requested_date_to", "", { shouldValidate: false });
+      }
+      if (tTo) {
+        setAddQuoteValue("requested_time_to", "", { shouldValidate: false });
+      }
+      return;
+    }
+    if (dTo !== end.to_date) {
+      setAddQuoteValue("requested_date_to", end.to_date, {
+        shouldValidate: false,
+      });
+    }
+    if (tTo !== end.end_time_storage) {
+      setAddQuoteValue("requested_time_to", end.end_time_storage, {
+        shouldValidate: false,
+      });
+    }
+  }, [
+    hasAddQuoteServiceSelected,
+    addQuoteScheduleDurationUnit,
+    addQuote.schedule_duration,
+    addQuote.requested_date,
+    addQuote.requested_date_to,
+    addQuote.requested_time_from,
+    addQuote.requested_time_to,
+    setAddQuoteValue,
+  ]);
 
   const addQuoteScheduleFromDateFilter = useCallback((date: Date) => {
     return startOfLocalDay(date) >= startOfTodayLocal();
   }, []);
-
-  const addQuoteScheduleToDateFilter = useCallback(
-    (date: Date) => {
-      if (startOfLocalDay(date) < startOfTodayLocal()) return false;
-      const fromIso = String(addQuote.requested_date ?? "").trim();
-      if (!fromIso) return true;
-      const from = parseIsoDateOnly(fromIso);
-      if (!from) return true;
-      return startOfLocalDay(date) >= startOfLocalDay(from);
-    },
-    [addQuote.requested_date]
-  );
 
   const userSelectOptions = useMemo<OptionType[]>(
     () => quoteUserOptions.map((u) => ({ value: u.value, label: u.label })),
@@ -758,6 +793,7 @@ const QuoteManagement = () => {
     setAddQuoteValue("category_id", "", { shouldValidate: false });
     setAddQuoteValue("requested_services", "", { shouldValidate: false });
     setAddQuoteValue("requested_date", "", { shouldValidate: false });
+    setAddQuoteValue("schedule_duration", "", { shouldValidate: false });
     setAddQuoteValue("requested_date_to", "", { shouldValidate: false });
     setAddQuoteValue("requested_time", "", { shouldValidate: false });
     setAddQuoteValue("requested_time_from", "", { shouldValidate: false });
@@ -1121,6 +1157,7 @@ const QuoteManagement = () => {
       employee_id: "",
       category_id: "",
       requested_date: "",
+      schedule_duration: "",
       requested_date_to: "",
       requested_time: "",
       requested_time_from: "",
@@ -1197,36 +1234,29 @@ const QuoteManagement = () => {
       return;
     }
 
-    if (scheduleMode === "range") {
-      if (!String(data.requested_date ?? "").trim()) {
-        showErrorAlert("Please select from date.");
-        return;
-      }
-      if (!String(data.requested_date_to ?? "").trim()) {
-        showErrorAlert("Please select to date.");
-        return;
-      }
-      if (!String(data.requested_time_from ?? "").trim()) {
-        showErrorAlert("Please select start time.");
-        return;
-      }
-      if (!String(data.requested_time_to ?? "").trim()) {
-        showErrorAlert("Please select end time.");
-        return;
-      }
-    } else {
-      if (!String(data.requested_date ?? "").trim()) {
-        showErrorAlert("Please select a date.");
-        return;
-      }
-      if (!String(data.requested_time_from ?? "").trim()) {
-        showErrorAlert("Please select start time.");
-        return;
-      }
-      if (!String(data.requested_time_to ?? "").trim()) {
-        showErrorAlert("Please select end time.");
-        return;
-      }
+    if (!String(data.requested_date ?? "").trim()) {
+      showErrorAlert("Please select start date.");
+      return;
+    }
+    const dur = Number.parseInt(String(data.schedule_duration ?? "").trim(), 10);
+    if (!Number.isFinite(dur) || dur < 1) {
+      showErrorAlert(
+        `Please enter ${addQuoteScheduleDurationLabel.toLowerCase()}.`
+      );
+      return;
+    }
+    if (!String(data.requested_time_from ?? "").trim()) {
+      showErrorAlert("Please select start time.");
+      return;
+    }
+    if (
+      !String(data.requested_date_to ?? "").trim() ||
+      !String(data.requested_time_to ?? "").trim()
+    ) {
+      showErrorAlert(
+        "Schedule could not be calculated. Check duration, start date, and start time."
+      );
+      return;
     }
 
     if (!isCalendarDateNotBeforeToday(String(data.requested_date ?? "").trim())) {
@@ -1250,17 +1280,6 @@ const QuoteManagement = () => {
         showErrorAlert("End date must be on or after the start date.");
         return;
       }
-    }
-    if (
-      !isScheduleEndAfterStartSameDay(
-        String(data.requested_time_from ?? "").trim(),
-        String(data.requested_time_to ?? "").trim()
-      )
-    ) {
-      showErrorAlert(
-        "End time must be after start time on the same day (use a later time, not earlier in the morning than the start)."
-      );
-      return;
     }
 
     // POST .../quote/create — only service_price is sent as price; tax / commission / min. deposit are UI-only.
@@ -1785,6 +1804,9 @@ const QuoteManagement = () => {
                               setAddQuoteValue("requested_date", "", {
                                 shouldValidate: false,
                               });
+                              setAddQuoteValue("schedule_duration", "", {
+                                shouldValidate: false,
+                              });
                               setAddQuoteValue("requested_date_to", "", {
                                 shouldValidate: false,
                               });
@@ -1841,6 +1863,9 @@ const QuoteManagement = () => {
                                 shouldValidate: false,
                               });
                               setAddQuoteValue("requested_date", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("schedule_duration", "", {
                                 shouldValidate: false,
                               });
                               setAddQuoteValue("requested_date_to", "", {
@@ -1903,6 +1928,9 @@ const QuoteManagement = () => {
                             );
                             if (name === "requested_services") {
                               setAddQuoteValue("requested_date", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("schedule_duration", "", {
                                 shouldValidate: false,
                               });
                               setAddQuoteValue("requested_date_to", "", {
@@ -1978,6 +2006,9 @@ const QuoteManagement = () => {
                               setAddQuoteValue("requested_date", "", {
                                 shouldValidate: false,
                               });
+                              setAddQuoteValue("schedule_duration", "", {
+                                shouldValidate: false,
+                              });
                               setAddQuoteValue("requested_date_to", "", {
                                 shouldValidate: false,
                               });
@@ -2032,6 +2063,9 @@ const QuoteManagement = () => {
                                 shouldValidate: false,
                               });
                               setAddQuoteValue("requested_date", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("schedule_duration", "", {
                                 shouldValidate: false,
                               });
                               setAddQuoteValue("requested_date_to", "", {
@@ -2098,6 +2132,9 @@ const QuoteManagement = () => {
                               setAddQuoteValue("requested_date", "", {
                                 shouldValidate: false,
                               });
+                              setAddQuoteValue("schedule_duration", "", {
+                                shouldValidate: false,
+                              });
                               setAddQuoteValue("requested_date_to", "", {
                                 shouldValidate: false,
                               });
@@ -2143,6 +2180,11 @@ const QuoteManagement = () => {
 
               {hasAddQuoteServiceSelected ? (
                 <>
+                  {addQuoteBillingHint ? (
+                    <p className="small text-muted mb-0 mt-2">
+                      {addQuoteBillingHint}
+                    </p>
+                  ) : null}
                   <Row className="mt-4 mb-2">
                     <Col xs={12}>
                       <label
@@ -2160,204 +2202,102 @@ const QuoteManagement = () => {
 
                   <div className="add-quote-schedule-panel">
                     <Row className="gy-3 gx-md-4">
-                      {scheduleMode === "range" ? (
-                        <>
-                          <Col xs={12} md={3}>
-                            <CustomTextFieldDatePicket
-                              label="From date"
-                              controlId="requested_date"
-                              selectedDate={addQuote.requested_date || null}
-                              onChange={(date) => {
-                                const next = toIsoCalendarDate(date) ?? "";
-                                setAddQuoteValue("requested_date", next, {
-                                  shouldValidate: true,
-                                });
-                              }}
-                              register={
-                                addQuoteRegister as unknown as UseFormRegister<any>
-                              }
-                              setValue={
-                                setAddQuoteValue as (
-                                  name: string,
-                                  value: any
-                                ) => void
-                              }
-                              asCol={false}
-                              labelSize={12}
-                              placeholderText="From date"
-                              filterDate={addQuoteScheduleFromDateFilter}
+                      <Col xs={12} md={4}>
+                        <Form.Group controlId="schedule_duration">
+                          <Form.Label className="fw-medium mb-1">
+                            <FieldLabelText
+                              label={addQuoteScheduleDurationLabel}
                               required
                             />
-                          </Col>
-                          <Col xs={12} md={3}>
-                            <CustomTextFieldDatePicket
-                              label="To date"
-                              controlId="requested_date_to"
-                              selectedDate={addQuote.requested_date_to || null}
-                              onChange={(date) => {
-                                const next = toIsoCalendarDate(date) ?? "";
-                                setAddQuoteValue("requested_date_to", next, {
-                                  shouldValidate: true,
-                                });
-                              }}
-                              register={
-                                addQuoteRegister as unknown as UseFormRegister<any>
-                              }
-                              setValue={
-                                setAddQuoteValue as (
-                                  name: string,
-                                  value: any
-                                ) => void
-                              }
-                              asCol={false}
-                              labelSize={12}
-                              placeholderText="To date"
-                              filterDate={addQuoteScheduleToDateFilter}
-                              required
-                            />
-                          </Col>
-                          <Col xs={12} md={3}>
-                            <CustomTextFieldTimePicket
-                              label="Start time"
-                              controlId="requested_time_from"
-                              selectedTime={timeStorageOrNull(
-                                addQuote.requested_time_from
+                          </Form.Label>
+                          <Form.Control
+                            type="number"
+                            min={1}
+                            step={1}
+                            inputMode="numeric"
+                            disabled={addQuoteFieldsLocked}
+                            className={`custom-form-input${
+                              addQuoteErrors.schedule_duration
+                                ? " is-invalid"
+                                : ""
+                            }`}
+                            style={partnerCatalogControlStyle}
+                            placeholder={`Enter ${addQuoteScheduleDurationLabel.toLowerCase()}`}
+                            {...addQuoteRegister("schedule_duration", {
+                              required: `${addQuoteScheduleDurationLabel} is required`,
+                              min: {
+                                value: 1,
+                                message: "Must be at least 1",
+                              },
+                            })}
+                          />
+                          {addQuoteErrors.schedule_duration ? (
+                            <div className="text-danger small mt-1">
+                              {String(
+                                (
+                                  addQuoteErrors.schedule_duration as {
+                                    message?: string;
+                                  }
+                                )?.message ?? ""
                               )}
-                              onChange={(date) =>
-                                setAddQuoteValue(
-                                  "requested_time_from",
-                                  toTimeStorageFromDate(date),
-                                  { shouldValidate: true }
-                                )
-                              }
-                              placeholderText="Select start time"
-                              error={addQuoteErrors.requested_time_from}
-                              register={addQuoteRegister}
-                              validation={{
-                                required: "Start time is required",
-                              }}
-                              setValue={setAddQuoteValue}
-                              asCol={false}
-                              labelSize={12}
-                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                              filterTime={addQuoteTimePickerAllowAllHours}
-                            />
-                          </Col>
-                          <Col xs={12} md={3}>
-                            <CustomTextFieldTimePicket
-                              label="End time"
-                              controlId="requested_time_to"
-                              selectedTime={timeStorageOrNull(
-                                addQuote.requested_time_to
-                              )}
-                              onChange={(date) =>
-                                setAddQuoteValue(
-                                  "requested_time_to",
-                                  toTimeStorageFromDate(date),
-                                  { shouldValidate: true }
-                                )
-                              }
-                              placeholderText="After start time"
-                              error={addQuoteErrors.requested_time_to}
-                              register={addQuoteRegister}
-                              validation={{
-                                required: "End time is required",
-                              }}
-                              setValue={setAddQuoteValue}
-                              asCol={false}
-                              labelSize={12}
-                              minTime={addQuoteEndMinTime}
-                              maxTime={scheduleEndTimeMaxForDay()}
-                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                            />
-                          </Col>
-                        </>
-                      ) : (
-                        <>
-                          <Col xs={12} md={4}>
-                            <CustomTextFieldDatePicket
-                              label="Date"
-                              controlId="requested_date"
-                              selectedDate={addQuote.requested_date || null}
-                              onChange={(date) => {
-                                const next = toIsoCalendarDate(date) ?? "";
-                                setAddQuoteValue("requested_date", next, {
-                                  shouldValidate: true,
-                                });
-                              }}
-                              register={
-                                addQuoteRegister as unknown as UseFormRegister<any>
-                              }
-                              setValue={
-                                setAddQuoteValue as (
-                                  name: string,
-                                  value: any
-                                ) => void
-                              }
-                              asCol={false}
-                              labelSize={12}
-                              placeholderText="Select date"
-                              filterDate={addQuoteScheduleFromDateFilter}
-                              required
-                            />
-                          </Col>
-                          <Col xs={12} md={4}>
-                            <CustomTextFieldTimePicket
-                              label="Start time"
-                              controlId="requested_time_from"
-                              selectedTime={timeStorageOrNull(
-                                addQuote.requested_time_from
-                              )}
-                              onChange={(date) =>
-                                setAddQuoteValue(
-                                  "requested_time_from",
-                                  toTimeStorageFromDate(date),
-                                  { shouldValidate: true }
-                                )
-                              }
-                              placeholderText="Select start time"
-                              error={addQuoteErrors.requested_time_from}
-                              register={addQuoteRegister}
-                              validation={{
-                                required: "Start time is required",
-                              }}
-                              setValue={setAddQuoteValue}
-                              asCol={false}
-                              labelSize={12}
-                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                              filterTime={addQuoteTimePickerAllowAllHours}
-                            />
-                          </Col>
-                          <Col xs={12} md={4}>
-                            <CustomTextFieldTimePicket
-                              label="End time"
-                              controlId="requested_time_to"
-                              selectedTime={timeStorageOrNull(
-                                addQuote.requested_time_to
-                              )}
-                              onChange={(date) =>
-                                setAddQuoteValue(
-                                  "requested_time_to",
-                                  toTimeStorageFromDate(date),
-                                  { shouldValidate: true }
-                                )
-                              }
-                              placeholderText="After start time"
-                              error={addQuoteErrors.requested_time_to}
-                              register={addQuoteRegister}
-                              validation={{
-                                required: "End time is required",
-                              }}
-                              setValue={setAddQuoteValue}
-                              asCol={false}
-                              labelSize={12}
-                              minTime={addQuoteEndMinTime}
-                              maxTime={scheduleEndTimeMaxForDay()}
-                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                            />
-                          </Col>
-                        </>
-                      )}
+                            </div>
+                          ) : null}
+                        </Form.Group>
+                      </Col>
+                      <Col xs={12} md={4}>
+                        <CustomTextFieldDatePicket
+                          label="Start date"
+                          controlId="requested_date"
+                          selectedDate={addQuote.requested_date || null}
+                          onChange={(date) => {
+                            const next = toIsoCalendarDate(date) ?? "";
+                            setAddQuoteValue("requested_date", next, {
+                              shouldValidate: true,
+                            });
+                          }}
+                          register={
+                            addQuoteRegister as unknown as UseFormRegister<any>
+                          }
+                          setValue={
+                            setAddQuoteValue as (
+                              name: string,
+                              value: any
+                            ) => void
+                          }
+                          asCol={false}
+                          labelSize={12}
+                          placeholderText="Start date"
+                          filterDate={addQuoteScheduleFromDateFilter}
+                          required
+                        />
+                      </Col>
+                      <Col xs={12} md={4}>
+                        <CustomTextFieldTimePicket
+                          label="Start time"
+                          controlId="requested_time_from"
+                          selectedTime={timeStorageOrNull(
+                            addQuote.requested_time_from
+                          )}
+                          onChange={(date) =>
+                            setAddQuoteValue(
+                              "requested_time_from",
+                              toTimeStorageFromDate(date),
+                              { shouldValidate: true }
+                            )
+                          }
+                          placeholderText="Select start time"
+                          error={addQuoteErrors.requested_time_from}
+                          register={addQuoteRegister}
+                          validation={{
+                            required: "Start time is required",
+                          }}
+                          setValue={setAddQuoteValue}
+                          asCol={false}
+                          labelSize={12}
+                          timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
+                          filterTime={addQuoteTimePickerAllowAllHours}
+                        />
+                      </Col>
                     </Row>
 
                     {addQuoteSchedulePricePreview ? (

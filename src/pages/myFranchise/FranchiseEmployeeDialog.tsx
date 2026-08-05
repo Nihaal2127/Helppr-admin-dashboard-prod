@@ -111,10 +111,20 @@ const FranchiseEmployeeDialog: React.FC<FranchiseEmployeeDialogProps> & {
   const [profileUrl, setProfileUrl] = useState("");
   const [profileImageFile, setProfileImageFile] = useState<File | null>(null);
 
-  const franchiseScreenMenuItems = useMemo(
-    () => getFranchiseEmployeeScreenMenuItems(),
-    []
+ const franchiseScreenMenuItems = useMemo(() => {
+  const hiddenScreens = [
+    "Location Management",
+    "Franchise Management",
+    "Service Management",
+    "Content Management",
+    "Settings",
+  ];
+
+  return getFranchiseEmployeeScreenMenuItems().filter(
+    (item) => !hiddenScreens.includes(item.label)
   );
+}, []);
+
   const franchiseScreenPermissionKeys = useMemo(
     () => screenPermissionKeysFromItems(franchiseScreenMenuItems),
     [franchiseScreenMenuItems]

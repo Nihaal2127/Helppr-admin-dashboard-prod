@@ -63,6 +63,17 @@ function rowMatchesCatalogStatus(
   return true;
 }
 
+/** Active catalogue rows only — for assign-service / add-service category pickers. */
+export function isCategoryActiveForSelect(row: {
+  is_active?: unknown;
+}): boolean {
+  const v = row.is_active;
+  if (v === false || v === 0 || v === "0") return false;
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "false" || s === "inactive" || s === "no") return false;
+  return true;
+}
+
 /** Franchise-scoped `all_categories`: prefer `franchise_active` for Active/Inactive filter (see global catalog franchise doc). */
 function rowMatchesFranchiseScopedCatalogRow(
   row: Record<string, unknown>,
@@ -165,10 +176,12 @@ export async function fetchCategoryDropDown(
 
   if (response.success) {
     const rows = extractCategoryDropDownRecords(response.data);
-    return rows.map((category: any) => ({
-      value: String(category._id ?? ""),
-      label: String(category.name ?? ""),
-    }));
+    return rows
+      .filter((category: any) => isCategoryActiveForSelect(category))
+      .map((category: any) => ({
+        value: String(category._id ?? ""),
+        label: String(category.name ?? ""),
+      }));
   } else {
     showLog(response.message || "Failed to fetch category");
     return [];
@@ -357,15 +370,22 @@ export const fetchCategoriesAsSelectOptions = async (opts?: {
     is_request?: string;
     is_rejected?: string;
   };
+  /** When true (default), inactive categories are omitted from the list. */
+  activeOnly?: boolean;
 }): Promise<{ value: string; label: string }[]> => {
   const pageSize = opts?.pageSize ?? 200;
-  const filters = opts?.filters ?? {};
+  const activeOnly = opts?.activeOnly !== false;
+  const filters = {
+    ...(opts?.filters ?? {}),
+    ...(activeOnly && !opts?.filters?.status ? { status: "true" } : {}),
+  };
   const byId = new Map<string, { value: string; label: string }>();
   let page = 1;
   for (;;) {
     const res = await fetchCategory(page, pageSize, filters, []);
     if (!res.response) break;
     for (const c of res.categories) {
+      if (activeOnly && !isCategoryActiveForSelect(c)) continue;
       const id = String((c as { _id?: string })._id ?? "").trim();
       if (!id) continue;
       byId.set(id, {

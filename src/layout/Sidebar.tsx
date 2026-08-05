@@ -21,7 +21,6 @@ import {
 
 import { AppConstant } from "../lib/global/AppConstant";
 
-import { isMockAuthSession } from "../lib/global/authSessionHelper";
 
 import { logout } from "../services/adminService";
 
@@ -107,11 +106,9 @@ const Sidebar: React.FC = () => {
 
         async () => {
 
-          const isMockSession = isMockAuthSession();
-
           const isAdmin = getLocalStorage(AppConstant.isAdmin);
 
-          const response = isMockSession ? true : await logout();
+          const response = await logout();
 
           if (response) {
 

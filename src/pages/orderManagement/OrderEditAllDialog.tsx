@@ -344,6 +344,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       employee_id: "",
       category_id: "",
       requested_date: "",
+      schedule_duration: "",
       requested_date_to: "",
       requested_time: "",
       requested_time_from: "",

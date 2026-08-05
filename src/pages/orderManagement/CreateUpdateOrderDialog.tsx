@@ -97,8 +97,13 @@ import {
   filterPartnerServicesForCategory,
   getPartnerActiveServiceProvidingRow,
   getQuoteScheduleModeForPartnerService,
+  getQuoteScheduleDurationUnit,
+  quoteScheduleBillingHintText,
+  quoteScheduleDurationFieldLabel,
   mergeQuoteServiceFeesForBreakdown,
   deriveQuoteScheduleMetrics,
+  deriveQuoteScheduleEndFromDuration,
+  deriveQuoteScheduleDurationFromStored,
   buildQuoteSchedulePricePreview,
   computeAutoQuotePriceFromPartner,
   resolveFranchiseIdForQuoteForm,
@@ -114,19 +119,16 @@ import {
   collectFranchiseAreaIds,
   compareIsoDateOnlyAsc,
   isCalendarDateNotBeforeToday,
-  isScheduleEndAfterStartSameDay,
-  parseIsoDateOnly,
   QUOTE_MODAL_LAYOUT,
   quoteScheduleTimePickerAllowAllHours,
   SCHEDULE_TIME_PICKER_INTERVAL_MINUTES,
-  scheduleEndTimeMaxForDay,
-  scheduleEndTimeMinAfterStart,
   setQuoteFranchiseCatalogSnapshot,
   startOfLocalDay,
   startOfTodayLocal,
   toIsoCalendarDate,
   useQuoteCustomerAddressPanel,
 } from "../../lib/quote/quoteHelpers";
+import type { QuoteScheduleDurationUnit } from "../../services/quoteService";
 import OrderAmountSummaryPanel from "../../components/order/OrderAmountSummaryPanel";
 import { deriveOrderScheduleMetrics } from "../../lib/order/orderScheduleMetrics";
 import OrderCouponAction from "../../components/order/OrderCouponAction";
@@ -623,6 +625,33 @@ const servicePriceFieldValidation = {
   },
 };
 
+function paymentTypeForOrderItem(
+  item: OrderItemModel,
+  serviceOptions: ServiceDropDownOption[]
+): string {
+  const sid = String(item.service_id ?? "").trim();
+  const opt = serviceOptions.find((o) => o.value === sid);
+  const info = item.service_info as
+    | { payment_type?: string; min_deposit_type?: string }
+    | undefined;
+  return String(
+    info?.payment_type ??
+      info?.min_deposit_type ??
+      opt?.payment_type ??
+      opt?.min_deposit_type ??
+      ""
+  ).trim();
+}
+
+function scheduleDurationUnitForOrderItem(
+  item: OrderItemModel,
+  serviceOptions: ServiceDropDownOption[]
+): QuoteScheduleDurationUnit {
+  return getQuoteScheduleDurationUnit(
+    paymentTypeForOrderItem(item, serviceOptions)
+  );
+}
+
 type ServiceItemFormProps = {
   taxDetails: TaxOtherChargesModel;
   categoryId: string;
@@ -670,9 +699,7 @@ const ServiceItemForm: React.FC<ServiceItemFormProps> = ({
   unregister,
   serviceAddressSeedUser,
 }) => {
-  const [services, setService] = useState<
-    { value: string; label: string; price?: number }[]
-  >([]);
+  const [services, setService] = useState<ServiceDropDownOption[]>([]);
   const [partners, setPartner] = useState<{ value: string; label: string }[]>(
     []
   );
@@ -686,6 +713,7 @@ const ServiceItemForm: React.FC<ServiceItemFormProps> = ({
       service_date: "",
       service_from_time: "",
       service_to_time: "",
+      schedule_duration: "",
       sub_total: 0,
       tax: 0,
       user_paltform_fee: 0,
@@ -918,6 +946,33 @@ const ServiceItemForm: React.FC<ServiceItemFormProps> = ({
     }
   };
 
+  const applyAutoScheduleEnd = useCallback(
+    (index: number, item: OrderItemModel): OrderItemModel => {
+      const unit = scheduleDurationUnitForOrderItem(item, services);
+      const dur = Number.parseInt(String(item.schedule_duration ?? "").trim(), 10);
+      const d = String(item.service_date ?? "").trim();
+      const tFrom = String(item.service_from_time ?? "").trim();
+      if (!Number.isFinite(dur) || dur < 1 || !d || !tFrom) {
+        return item;
+      }
+      const end = deriveQuoteScheduleEndFromDuration({
+        unit,
+        duration: dur,
+        startDate: d,
+        startTimeStorage: tFrom,
+      });
+      if (!end) return item;
+      if (index === 0) {
+        setValue("service_date_to", end.to_date, { shouldValidate: false });
+      }
+      setValue(`serviceItems.${index}.service_to_time`, end.end_time_storage, {
+        shouldValidate: false,
+      });
+      return { ...item, service_to_time: end.end_time_storage };
+    },
+    [services, setValue]
+  );
+
   const handleInputChange = (
     index: number,
     field: keyof OrderItemModel,
@@ -939,6 +994,10 @@ const ServiceItemForm: React.FC<ServiceItemFormProps> = ({
           service_id: value,
           per_hour_price: perHourPrice,
           service_price: 0,
+          schedule_duration: "",
+          service_date: "",
+          service_from_time: "",
+          service_to_time: "",
           ...calculateServiceDetails(0),
         };
         setValue(`serviceItems.${index}.service_id`, value);
@@ -980,6 +1039,16 @@ const ServiceItemForm: React.FC<ServiceItemFormProps> = ({
           [field]: value,
         };
         setValue(`serviceItems.${index}.${field}` as any, value);
+      }
+      if (
+        field === "schedule_duration" ||
+        field === "service_date" ||
+        field === "service_from_time"
+      ) {
+        updatedServices[index] = applyAutoScheduleEnd(
+          index,
+          updatedServices[index]
+        );
       }
       return updatedServices;
     });
@@ -1181,82 +1250,95 @@ const ServiceItemForm: React.FC<ServiceItemFormProps> = ({
         </Row>
       )}
       {!omitSchedule && (
-        <Row className="mt-3">
-          <Col xs={4}>
-            <CustomTextFieldDatePicket
-              label="Service Date"
-              controlId={`serviceItems.${index}.service_date`}
-              selectedDate={
-                serviceItems[index].service_date ??
-                getValues(`serviceItems.${index}.service_date` as any)
-              }
-              onChange={(date) =>
-                handleInputChange(
-                  index,
-                  "service_date",
-                  toIsoCalendarDate(date) ?? ""
-                )
-              }
-              placeholderText="Select Date"
-              error={errors.serviceItems?.[index]?.service_date}
-              register={register}
-              validation={{ required: "Service date is required" }}
-              setValue={setValue}
-            />
-          </Col>
-          <Col xs={4}>
-            <CustomTextFieldTimePicket
-              label="From Time"
-              controlId={`serviceItems.${index}.service_from_time`}
-              selectedTime={
-                serviceItems[index].service_from_time ??
-                getValues(`serviceItems.${index}.service_from_time` as any)
-              }
-              onChange={(date) =>
-                handleInputChange(
-                  index,
-                  "service_from_time",
-                  datePickerTimeToScheduleStorage(date)
-                )
-              }
-              placeholderText="Select Time"
-              error={errors.serviceItems?.[index]?.service_from_time}
-              register={register}
-              validation={{ required: "From time is required" }}
-              setValue={setValue}
-              filterTime={(time) => {
-                const hour = time.getHours();
-                return hour >= 8 && hour <= 23;
-              }}
-            />
-          </Col>
-          <Col xs={4}>
-            <CustomTextFieldTimePicket
-              label="To Time"
-              controlId={`serviceItems.${index}.service_to_time`}
-              selectedTime={
-                serviceItems[index].service_to_time ??
-                getValues(`serviceItems.${index}.service_to_time` as any)
-              }
-              onChange={(date) =>
-                handleInputChange(
-                  index,
-                  "service_to_time",
-                  datePickerTimeToScheduleStorage(date)
-                )
-              }
-              placeholderText="Select Time"
-              error={errors.serviceItems?.[index]?.service_to_time}
-              register={register}
-              validation={{ required: "To time is required" }}
-              setValue={setValue}
-              filterTime={(time) => {
-                const hour = time.getHours();
-                return hour >= 8 && hour <= 23;
-              }}
-            />
-          </Col>
-        </Row>
+        <>
+          {paymentTypeForOrderItem(service, services) ? (
+            <p className="small text-muted mb-2 mt-3">
+              {quoteScheduleBillingHintText(
+                paymentTypeForOrderItem(service, services)
+              )}
+            </p>
+          ) : null}
+          <Row className="mt-2">
+            <Col xs={4}>
+              <Form.Group controlId={`serviceItems.${index}.schedule_duration`}>
+                <Form.Label className="fw-medium mb-1">
+                  <FieldLabelText
+                    label={quoteScheduleDurationFieldLabel(
+                      scheduleDurationUnitForOrderItem(service, services)
+                    )}
+                    required
+                  />
+                </Form.Label>
+                <Form.Control
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  className="custom-form-input"
+                  placeholder={`Enter ${quoteScheduleDurationFieldLabel(
+                    scheduleDurationUnitForOrderItem(service, services)
+                  ).toLowerCase()}`}
+                  value={service.schedule_duration ?? ""}
+                  onChange={(e) =>
+                    handleInputChange(
+                      index,
+                      "schedule_duration",
+                      e.target.value
+                    )
+                  }
+                />
+              </Form.Group>
+            </Col>
+            <Col xs={4}>
+              <CustomTextFieldDatePicket
+                label="Start date"
+                controlId={`serviceItems.${index}.service_date`}
+                selectedDate={
+                  service.service_date ??
+                  getValues(`serviceItems.${index}.service_date` as any)
+                }
+                onChange={(date) =>
+                  handleInputChange(
+                    index,
+                    "service_date",
+                    toIsoCalendarDate(date) ?? ""
+                  )
+                }
+                placeholderText="Start date"
+                error={errors.serviceItems?.[index]?.service_date}
+                register={register}
+                validation={{ required: "Start date is required" }}
+                setValue={setValue}
+              />
+            </Col>
+            <Col xs={4}>
+              <CustomTextFieldTimePicket
+                label="Start time"
+                controlId={`serviceItems.${index}.service_from_time`}
+                selectedTime={
+                  service.service_from_time ??
+                  getValues(`serviceItems.${index}.service_from_time` as any)
+                }
+                onChange={(date) =>
+                  handleInputChange(
+                    index,
+                    "service_from_time",
+                    datePickerTimeToScheduleStorage(date)
+                  )
+                }
+                placeholderText="Select start time"
+                error={errors.serviceItems?.[index]?.service_from_time}
+                register={register}
+                validation={{ required: "Start time is required" }}
+                setValue={setValue}
+                filterTime={(time) => {
+                  const hour = time.getHours();
+                  return hour >= 8 && hour <= 23;
+                }}
+              />
+            </Col>
+          </Row>
+        </>
       )}
       {useAddressCards && addressStateOptions && addressCityRows ? (
         <ServiceAddressCardsPanel
@@ -1583,6 +1665,9 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
   const createScheduleDateToWatch = watch("service_date_to") as
     | string
     | undefined;
+  const createScheduleDurationWatch = watch("service_schedule_duration") as
+    | string
+    | undefined;
 
   const currentUserRole = getLocalStorage(AppConstant.userRole);
   const isSuperAdminOrStaff =
@@ -1762,6 +1847,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
     setValue("requested_partner", "", { shouldValidate: false });
     setValue("created_by_id", "", { shouldValidate: false });
     setValue("create_service_price", "", { shouldValidate: false });
+    setValue("service_schedule_duration", "", { shouldValidate: false });
     setCreateOrderAddressId("");
     setSelectedUser(undefined);
     setSelectedCategory("");
@@ -1864,19 +1950,41 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
     ]
   );
 
+  const createOrderScheduleDurationUnit = useMemo(
+    () =>
+      getQuoteScheduleDurationUnit(
+        String(createOrderFeeOption?.payment_type ?? "").trim()
+      ),
+    [createOrderFeeOption?.payment_type]
+  );
+
+  const createOrderBillingHint = useMemo(() => {
+    if (!hasCreateOrderServiceSelected) return "";
+    const raw = String(createOrderFeeOption?.payment_type ?? "").trim();
+    if (!raw) return "";
+    return quoteScheduleBillingHintText(raw);
+  }, [hasCreateOrderServiceSelected, createOrderFeeOption?.payment_type]);
+
+  const createOrderScheduleDurationLabel = quoteScheduleDurationFieldLabel(
+    createOrderScheduleDurationUnit
+  );
+
   const isCreateOrderScheduleComplete = useMemo(() => {
     if (!hasCreateOrderServiceSelected) return false;
+    const dur = Number.parseInt(
+      String(createScheduleDurationWatch ?? "").trim(),
+      10
+    );
     const d = String(serviceItems[0]?.service_date ?? "").trim();
     const dTo = String(createScheduleDateToWatch ?? "").trim();
     const tFrom = String(serviceItems[0]?.service_from_time ?? "").trim();
     const tTo = String(serviceItems[0]?.service_to_time ?? "").trim();
-    if (scheduleMode === "range") {
-      return Boolean(d && dTo && tFrom && tTo);
-    }
-    return Boolean(d && tFrom && tTo);
+    return Boolean(
+      Number.isFinite(dur) && dur >= 1 && d && tFrom && dTo && tTo
+    );
   }, [
     hasCreateOrderServiceSelected,
-    scheduleMode,
+    createScheduleDurationWatch,
     serviceItems,
     createScheduleDateToWatch,
   ]);
@@ -1920,29 +2028,9 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
     createOrderFeeOption?.payment_type,
   ]);
 
-  const createOrderEndMinTime = useMemo(
-    () =>
-      scheduleEndTimeMinAfterStart(
-        String(serviceItems[0]?.service_from_time ?? "")
-      ),
-    [serviceItems]
-  );
-
   const createOrderScheduleFromDateFilter = useCallback((date: Date) => {
     return startOfLocalDay(date) >= startOfTodayLocal();
   }, []);
-
-  const createOrderScheduleToDateFilter = useCallback(
-    (date: Date) => {
-      if (startOfLocalDay(date) < startOfTodayLocal()) return false;
-      const fromIso = String(serviceItems[0]?.service_date ?? "").trim();
-      if (!fromIso) return true;
-      const from = parseIsoDateOnly(fromIso);
-      if (!from) return true;
-      return startOfLocalDay(date) >= startOfLocalDay(from);
-    },
-    [serviceItems]
-  );
 
   const fetchCategoryFromApi = async (cityId: string) => {
     if (fetchRef.current) return;
@@ -2015,6 +2103,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
     setValue("requested_services", "");
     setValue("category_id", "");
     setValue("create_service_price", "");
+    setValue("service_schedule_duration", "", { shouldValidate: false });
     setSelectedCategory("");
     setSelectedUser(undefined);
     setServiceItems([
@@ -2520,9 +2609,36 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
       }
       setServiceItems(
         order.service_items?.length
-          ? order.service_items.map((s) => ({ ...s }))
+          ? order.service_items.map((s) => {
+              const fromDate = String(s.service_date ?? "").trim();
+              const toDate = String(order.to_date ?? order.from_date ?? fromDate).trim();
+              const paymentType = paymentTypeForOrderItem(s, []);
+              const unit = getQuoteScheduleDurationUnit(paymentType);
+              const duration =
+                fromDate &&
+                s.service_from_time &&
+                s.service_to_time
+                  ? deriveQuoteScheduleDurationFromStored({
+                      unit,
+                      fromDate,
+                      toDate: toDate || fromDate,
+                      startTimeStorage: s.service_from_time,
+                      endTimeStorage: s.service_to_time,
+                    })
+                  : 1;
+              return {
+                ...s,
+                schedule_duration: String(duration),
+              };
+            })
           : []
       );
+      const toYmd = String(order.to_date ?? order.from_date ?? "").trim();
+      if (toYmd) {
+        setValue("service_date_to", toYmd.slice(0, 10), {
+          shouldValidate: false,
+        });
+      }
     };
     void init();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- populate form when order identity changes; avoids re-running on every order field tick
@@ -2822,6 +2938,9 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
       value: string
     ) => {
       if (field === "service_date_to") {
+        const current = String(getValues("service_date_to") ?? "").trim();
+        const next = String(value ?? "").trim();
+        if (current === next) return;
         setValue("service_date_to", value, { shouldValidate: true });
         return;
       }
@@ -2844,6 +2963,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
             total_price: 0,
             admin_earning: 0,
           } as OrderItemModel);
+        if (String(base[field] ?? "") === String(value ?? "")) return prev;
         const next0 = { ...base, [field]: value };
         const next = prev.length ? [next0, ...prev.slice(1)] : [next0];
         setValue(`serviceItems.0.${field}` as any, value, {
@@ -2852,8 +2972,69 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
         return next;
       });
     },
-    [setValue]
+    [setValue, getValues]
   );
+
+  const createScheduleDateWatch = String(serviceItems[0]?.service_date ?? "");
+  const createScheduleTimeFromWatch = String(
+    serviceItems[0]?.service_from_time ?? ""
+  );
+  const createScheduleTimeToWatch = String(
+    serviceItems[0]?.service_to_time ?? ""
+  );
+
+  useEffect(() => {
+    if (isEditable || !hasCreateOrderServiceSelected) return;
+    const dur = Number.parseInt(
+      String(createScheduleDurationWatch ?? "").trim(),
+      10
+    );
+    const d = createScheduleDateWatch.trim();
+    const tFrom = createScheduleTimeFromWatch.trim();
+    const currentDateTo = String(createScheduleDateToWatch ?? "").trim();
+    const currentTimeTo = createScheduleTimeToWatch.trim();
+    if (!Number.isFinite(dur) || dur < 1 || !d || !tFrom) {
+      if (currentDateTo) {
+        setValue("service_date_to", "", { shouldValidate: false });
+      }
+      if (currentTimeTo) {
+        patchCreateScheduleField("service_to_time", "");
+      }
+      return;
+    }
+    const end = deriveQuoteScheduleEndFromDuration({
+      unit: createOrderScheduleDurationUnit,
+      duration: dur,
+      startDate: d,
+      startTimeStorage: tFrom,
+    });
+    if (!end) {
+      if (currentDateTo) {
+        setValue("service_date_to", "", { shouldValidate: false });
+      }
+      if (currentTimeTo) {
+        patchCreateScheduleField("service_to_time", "");
+      }
+      return;
+    }
+    if (currentDateTo !== end.to_date) {
+      setValue("service_date_to", end.to_date, { shouldValidate: false });
+    }
+    if (currentTimeTo !== end.end_time_storage) {
+      patchCreateScheduleField("service_to_time", end.end_time_storage);
+    }
+  }, [
+    isEditable,
+    hasCreateOrderServiceSelected,
+    createOrderScheduleDurationUnit,
+    createScheduleDurationWatch,
+    createScheduleDateWatch,
+    createScheduleTimeFromWatch,
+    createScheduleTimeToWatch,
+    createScheduleDateToWatch,
+    setValue,
+    patchCreateScheduleField,
+  ]);
 
   /** Same as Add Quote — drop stale category when partner-scoped list changes. */
   useEffect(() => {
@@ -2871,6 +3052,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
     patchCreateScheduleField("service_date_to", "");
     patchCreateScheduleField("service_from_time", "");
     patchCreateScheduleField("service_to_time", "");
+    setValue("service_schedule_duration", "", { shouldValidate: false });
   }, [
     isEditable,
     createOrderPartnerSelected,
@@ -2980,34 +3162,34 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
       const schedTo = String(data.service_date_to ?? "").trim();
       const tFrom = String(serviceItems[0]?.service_from_time ?? "").trim();
       const tTo = String(serviceItems[0]?.service_to_time ?? "").trim();
-      if (scheduleMode === "range") {
-        if (!schedDate || !schedTo || !tFrom || !tTo) {
-          showErrorAlert("Please complete the schedule (dates and times).");
-          return;
-        }
-      } else if (!schedDate || !tFrom || !tTo) {
-        showErrorAlert("Please complete the schedule (date and times).");
+      const dur = Number.parseInt(
+        String(data.service_schedule_duration ?? "").trim(),
+        10
+      );
+      if (
+        !Number.isFinite(dur) ||
+        dur < 1 ||
+        !schedDate ||
+        !tFrom ||
+        !schedTo ||
+        !tTo
+      ) {
+        showErrorAlert(
+          "Please complete the schedule (duration, start date, and start time)."
+        );
         return;
       }
       if (!isCalendarDateNotBeforeToday(schedDate)) {
         showErrorAlert("Schedule date must be today or a future date.");
         return;
       }
-      if (scheduleMode === "range" && !isCalendarDateNotBeforeToday(schedTo)) {
+      if (!isCalendarDateNotBeforeToday(schedTo)) {
         showErrorAlert("End date must be today or a future date.");
         return;
       }
-      if (scheduleMode === "range") {
-        const cmp = compareIsoDateOnlyAsc(schedDate, schedTo);
-        if (cmp != null && cmp > 0) {
-          showErrorAlert("End date must be on or after the start date.");
-          return;
-        }
-      }
-      if (!isScheduleEndAfterStartSameDay(tFrom, tTo)) {
-        showErrorAlert(
-          "End time must be after start time on the same day (use a later time, not earlier in the morning than the start)."
-        );
+      const cmp = compareIsoDateOnlyAsc(schedDate, schedTo);
+      if (cmp != null && cmp > 0) {
+        showErrorAlert("End date must be on or after the start date.");
         return;
       }
     }
@@ -3463,6 +3645,9 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                                 patchCreateScheduleField("service_date_to", "");
                                 patchCreateScheduleField("service_from_time", "");
                                 patchCreateScheduleField("service_to_time", "");
+                                setValue("service_schedule_duration", "", {
+                                  shouldValidate: false,
+                                });
                                 setValue("create_service_price", "", {
                                   shouldValidate: false,
                                 });
@@ -3498,6 +3683,9 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                                 patchCreateScheduleField("service_date_to", "");
                                 patchCreateScheduleField("service_from_time", "");
                                 patchCreateScheduleField("service_to_time", "");
+                                setValue("service_schedule_duration", "", {
+                                  shouldValidate: false,
+                                });
                                 setValue("create_service_price", "", {
                                   shouldValidate: false,
                                 });
@@ -3550,6 +3738,9 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                                 patchCreateScheduleField("service_date_to", "");
                                 patchCreateScheduleField("service_from_time", "");
                                 patchCreateScheduleField("service_to_time", "");
+                                setValue("service_schedule_duration", "", {
+                                  shouldValidate: false,
+                                });
                                 setValue("create_service_price", "", {
                                   shouldValidate: false,
                                 });
@@ -3575,6 +3766,11 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
 
                       {hasCreateOrderServiceSelected ? (
                         <>
+                          {createOrderBillingHint ? (
+                            <p className="small text-muted mb-0 mt-2">
+                              {createOrderBillingHint}
+                            </p>
+                          ) : null}
                           <Row className="mt-4 mb-2">
                             <Col xs={12}>
                               <label
@@ -3591,122 +3787,77 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                       </Row>
                           <div className="add-quote-schedule-panel">
                             <Row className="gy-3 gx-md-4">
-                              {scheduleMode === "range" ? (
-                                <>
-                                  <Col xs={12} md={3}>
-                          <CustomTextFieldDatePicket
-                                      label="From date"
-                                      controlId="create-order-from-date"
-                            selectedDate={
-                                        serviceItems[0]?.service_date || null
-                            }
-                                      onChange={(date) => {
-                              patchCreateScheduleField(
-                                "service_date",
-                                          toIsoCalendarDate(date) ?? ""
-                                        );
-                                      }}
-                                      register={register}
-                                      setValue={setValue}
-                                      asCol={false}
-                                      labelSize={12}
-                                      placeholderText="From date"
-                                      filterDate={createOrderScheduleFromDateFilter}
+                              <Col xs={12} md={4}>
+                                <Form.Group controlId="service_schedule_duration">
+                                  <Form.Label className="fw-medium mb-1">
+                                    <FieldLabelText
+                                      label={createOrderScheduleDurationLabel}
                                       required
                                     />
-                                  </Col>
-                                  <Col xs={12} md={3}>
-                                    <CustomTextFieldDatePicket
-                                      label="To date"
-                                      controlId="create-order-to-date"
-                                      selectedDate={
-                                        createScheduleDateToWatch || null
-                                      }
-                                      onChange={(date) => {
-                                        patchCreateScheduleField(
-                                          "service_date_to",
-                                          toIsoCalendarDate(date) ?? ""
-                                        );
-                                      }}
-                            register={register}
-                                      setValue={setValue}
-                                      asCol={false}
-                                      labelSize={12}
-                                      placeholderText="To date"
-                                      filterDate={createOrderScheduleToDateFilter}
-                                      required
-                                    />
-                                  </Col>
-                                </>
-                              ) : (
-                                <Col xs={12} md={3}>
-                                  <CustomTextFieldDatePicket
-                                    label="Date"
-                                    controlId="create-order-date"
-                                    selectedDate={
-                                      serviceItems[0]?.service_date || null
-                                    }
-                                    onChange={(date) => {
-                                      patchCreateScheduleField(
-                                        "service_date",
-                                        toIsoCalendarDate(date) ?? ""
-                                      );
-                                    }}
-                                    register={register}
-                            setValue={setValue}
-                                    asCol={false}
-                                    labelSize={12}
-                                    placeholderText="Date"
-                                    filterDate={createOrderScheduleFromDateFilter}
-                                    required
-                          />
-                        </Col>
-                              )}
-                              <Col xs={12} md={3}>
-                          <CustomTextFieldTimePicket
+                                  </Form.Label>
+                                  <Form.Control
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    inputMode="numeric"
+                                    disabled={createOrderFieldsLocked}
+                                    className="custom-form-input"
+                                    style={partnerCatalogControlStyle}
+                                    placeholder={`Enter ${createOrderScheduleDurationLabel.toLowerCase()}`}
+                                    {...register("service_schedule_duration", {
+                                      required: `${createOrderScheduleDurationLabel} is required`,
+                                      min: {
+                                        value: 1,
+                                        message: "Must be at least 1",
+                                      },
+                                    })}
+                                  />
+                                </Form.Group>
+                              </Col>
+                              <Col xs={12} md={4}>
+                                <CustomTextFieldDatePicket
+                                  label="Start date"
+                                  controlId="create-order-from-date"
+                                  selectedDate={
+                                    serviceItems[0]?.service_date || null
+                                  }
+                                  onChange={(date) => {
+                                    patchCreateScheduleField(
+                                      "service_date",
+                                      toIsoCalendarDate(date) ?? ""
+                                    );
+                                  }}
+                                  register={register}
+                                  setValue={setValue}
+                                  asCol={false}
+                                  labelSize={12}
+                                  placeholderText="Start date"
+                                  filterDate={createOrderScheduleFromDateFilter}
+                                  required
+                                />
+                              </Col>
+                              <Col xs={12} md={4}>
+                                <CustomTextFieldTimePicket
                                   label="Start time"
                                   controlId="create-order-time-from"
-                            selectedTime={
+                                  selectedTime={
                                     serviceItems[0]?.service_from_time || null
-                            }
+                                  }
                                   onChange={(date) => {
-                              patchCreateScheduleField(
-                                "service_from_time",
+                                    patchCreateScheduleField(
+                                      "service_from_time",
                                       datePickerTimeToScheduleStorage(date)
                                     );
                                   }}
-                            register={register}
-                            setValue={setValue}
+                                  register={register}
+                                  setValue={setValue}
                                   asCol={false}
                                   labelSize={12}
                                   placeholderText="Start time"
                                   filterTime={quoteScheduleTimePickerAllowAllHours}
-                                  timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                                  suppressHiddenRegister
-                                  required
-                          />
-                        </Col>
-                              <Col xs={12} md={3}>
-                          <CustomTextFieldTimePicket
-                                  label="End time"
-                                  controlId="create-order-time-to"
-                            selectedTime={
-                                    serviceItems[0]?.service_to_time || null
-                            }
-                                  onChange={(date) => {
-                              patchCreateScheduleField(
-                                "service_to_time",
-                                      datePickerTimeToScheduleStorage(date)
-                                    );
-                                  }}
-                            register={register}
-                            setValue={setValue}
-                                  asCol={false}
-                                  labelSize={12}
-                                  placeholderText="After start time"
-                                  minTime={createOrderEndMinTime}
-                                  maxTime={scheduleEndTimeMaxForDay()}
-                                  timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
+                                  timeIntervals={
+                                    SCHEDULE_TIME_PICKER_INTERVAL_MINUTES
+                                  }
                                   suppressHiddenRegister
                                   required
                                 />

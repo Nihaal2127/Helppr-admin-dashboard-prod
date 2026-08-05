@@ -13,6 +13,7 @@ import { ApiPaths } from "../lib/global/remote/apiPaths";
 import {
   createOrUpdateUser,
   createWebManagementUser,
+  deleteUser,
   fetchUserById,
   menuKeysFromUserAccess,
   mapMenuKeysToAvailablePages,
@@ -38,20 +39,7 @@ function dobFromApiRaw(raw: Record<string, unknown>): string | undefined {
   return ymd || undefined;
 }
 
-// In-memory caches synced from API (no seed data).
-let mockOffers: OfferModel[] = [];
-let mockRoles: RoleSettingsModel[] = [];
-let mockExpenseCategories: ExpenseCategoryModel[] = [];
-let mockStaff: StaffSettingsModel[] = [];
-
-// Kept for backward compatibility with existing page calls.
-export const ensureSettingsSeedData = () => {};
-
-// Offers API (mock, in-memory)
-
-export const getOffers = (): OfferModel[] => {
-  return [...mockOffers];
-};
+// In-memory caches removed — settings pages load from API directly.
 
 function pickOfferRows(payload: Record<string, unknown>): Record<string, unknown>[] {
   const data = payload.data;
@@ -120,12 +108,6 @@ export function isOfferNotExpired(
   return isOfferWithinValidityPeriod(offer, todayYmd);
 }
 
-function activeValidOffersForToday(offers: OfferModel[]): OfferModel[] {
-  return offers.filter(
-    (o) => o.status === "active" && isOfferWithinValidityPeriod(o)
-  );
-}
-
 /** `GET /offer/getAll?is_active=true` — coupons valid for today (start ≤ today ≤ end). */
 export async function fetchActiveOffers(): Promise<OfferModel[]> {
   try {
@@ -154,65 +136,6 @@ export async function fetchActiveOffers(): Promise<OfferModel[]> {
     return [];
   }
 }
-
-export const saveOffer = (
-  payload: Omit<OfferModel, "id" | "createdAt">,
-  id?: string
-) => {
-  if (id) {
-    mockOffers = mockOffers.map((item) =>
-      item.id === id ? { ...item, ...payload } : item
-    );
-    return;
-  }
-
-  const now = new Date().toISOString();
-  const newOffer: OfferModel = {
-    ...payload,
-    id: generateId(),
-    createdAt: now,
-    startDate: payload.startDate || now,
-    endDate: payload.endDate || now,
-  };
-
-  mockOffers = [newOffer, ...mockOffers];
-};
-
-export const voidOffer = (id: string) => {
-  mockOffers = mockOffers.map((item) =>
-    item.id === id ? { ...item, status: "inactive" as const } : item
-  );
-};
-
-export const getRoles = (): RoleSettingsModel[] => [...mockRoles];
-export const saveRole = (
-  payload: Omit<RoleSettingsModel, "id" | "createdDate">,
-  id?: string,
-  opts?: { newId?: string }
-) => {
-  if (id) {
-    mockRoles = mockRoles.map((item) =>
-      item.id === id ? { ...item, ...payload } : item
-    );
-    return;
-  }
-
-  mockRoles = [
-    {
-      ...payload,
-      id: opts?.newId ?? generateId(),
-      createdDate: new Date().toISOString(),
-    },
-    ...mockRoles,
-  ];
-};
-export const voidRole = (id: string) => {
-  mockRoles = mockRoles.map((item) =>
-    item.id === id ? { ...item, status: "inactive" as const } : item
-  );
-};
-
-export const getStaff = (): StaffSettingsModel[] => [...mockStaff];
 
 type SettingsRoleStaffApiData = {
   roles: RoleSettingsModel[];
@@ -513,9 +436,6 @@ export const fetchRoleAndStaffFromApi =
       ],
       staff: staff.map(mapApiUserToStaffSettingsModel),
     };
-    // Keep existing `getRoles/getStaff/save*` flow consistent with API-loaded data.
-    mockRoles = mapped.roles.map((r) => ({ ...r }));
-    mockStaff = mapped.staff.map((s) => ({ ...s }));
     return mapped;
   };
 
@@ -543,28 +463,6 @@ export const fetchSettingsSectionByType = async (
     (u) => Number((u as Record<string, unknown>).type) === Number(type)
   );
   return mapRowsByType(type, filtered);
-};
-
-export const saveStaff = (
-  payload: Omit<StaffSettingsModel, "id" | "createdDate">,
-  id?: string,
-  opts?: { newId?: string }
-) => {
-  if (id) {
-    mockStaff = mockStaff.map((item) =>
-      item.id === id ? { ...item, ...payload } : item
-    );
-    return;
-  }
-
-  mockStaff = [
-    {
-      ...payload,
-      id: opts?.newId ?? generateId(),
-      createdDate: new Date().toISOString(),
-    },
-    ...mockStaff,
-  ];
 };
 
 function profileUrlForApi(profileUrl?: string): string | undefined {
@@ -596,8 +494,7 @@ function normalizedPagesFromPermKeys(keys: string[]) {
 }
 
 /**
- * Create franchise admin / franchise employee via `POST /user/create` (Postman web types),
- * then append to in-memory list for the settings UI.
+ * Create franchise admin / franchise employee via `POST /user/create` (Postman web types).
  */
 export const createRoleUserWithApi = async (
   payload: Omit<RoleSettingsModel, "id" | "createdDate">,
@@ -656,26 +553,6 @@ export const createRoleUserWithApi = async (
 
   const raw = result.record as Record<string, unknown> | null | undefined;
   const serverId = pickRecordId(raw);
-  const roleId = String(
-    raw?.user_id ?? raw?.userId ?? payload.roleId ?? serverId ?? generateId()
-  );
-  const isActive = raw?.is_active !== false;
-
-  saveRole(
-    {
-      ...payload,
-      roleId,
-      roleName: String(raw?.name ?? payload.roleName),
-      email: (raw?.email as string | undefined) ?? payload.email,
-      phone_number:
-        (raw?.phone_number as string | undefined) ?? payload.phone_number,
-      profile_url:
-        (raw?.profile_url as string | undefined) ?? payload.profile_url,
-      status: isActive ? "active" : "inactive",
-    },
-    undefined,
-    serverId ? { newId: serverId } : undefined
-  );
   return { ok: true, newUserId: serverId };
 };
 
@@ -722,6 +599,13 @@ export const updateRoleUserWithApi = async (
     imageFile ? { image: imageFile } : undefined,
     { suppressSuccessAlert: Boolean(options?.suppressSuccessAlert) }
   );
+};
+
+/** Delete franchise admin / franchise employee via `DELETE /user/delete/:id`. */
+export const voidRoleUserWithApi = async (id: string): Promise<boolean> => {
+  const userId = String(id ?? "").trim();
+  if (!userId) return false;
+  return deleteUser(userId);
 };
 
 /**
@@ -800,7 +684,7 @@ export const assignFranchiseToAdminUser = async (params: {
 };
 
 /**
- * Create staff (Postman `type: 6`) via `POST /user/create`, then append to in-memory list.
+ * Create staff (Postman `type: 6`) via `POST /user/create`.
  */
 export const createStaffUserWithApi = async (
   payload: Omit<StaffSettingsModel, "id" | "createdDate">,
@@ -839,28 +723,6 @@ export const createStaffUserWithApi = async (
 
   if (!result.ok) return false;
 
-  const raw = result.record as Record<string, unknown> | null | undefined;
-  const serverId = pickRecordId(raw);
-  const staffId = String(
-    raw?.user_id ?? raw?.userId ?? payload.staffId ?? serverId ?? generateId()
-  );
-  const isActive = raw?.is_active !== false;
-
-  saveStaff(
-    {
-      ...payload,
-      staffId,
-      name: String(raw?.name ?? payload.name),
-      email: (raw?.email as string | undefined) ?? payload.email,
-      phone_number:
-        (raw?.phone_number as string | undefined) ?? payload.phone_number,
-      profile_url:
-        (raw?.profile_url as string | undefined) ?? payload.profile_url,
-      status: isActive ? "active" : "inactive",
-    },
-    undefined,
-    serverId ? { newId: serverId } : undefined
-  );
   return true;
 };
 
@@ -899,35 +761,6 @@ export const updateStaffUserWithApi = async (
     true,
     userId,
     imageFile ? { image: imageFile } : undefined
-  );
-};
-
-export const getExpenseCategories = (): ExpenseCategoryModel[] => [
-  ...mockExpenseCategories,
-];
-export const saveExpenseCategory = (
-  payload: Omit<ExpenseCategoryModel, "id" | "createdDate">,
-  id?: string
-) => {
-  if (id) {
-    mockExpenseCategories = mockExpenseCategories.map((item) =>
-      item.id === id ? { ...item, ...payload } : item
-    );
-    return;
-  }
-  mockExpenseCategories = [
-    {
-      ...payload,
-      id: generateId(),
-      createdDate: new Date().toISOString(),
-    },
-    ...mockExpenseCategories,
-  ];
-};
-
-export const voidExpenseCategory = (id: string) => {
-  mockExpenseCategories = mockExpenseCategories.filter(
-    (item) => item.id !== id
   );
 };
 
@@ -1102,7 +935,7 @@ export const fetchExpenseCategoriesPage = async (
 
 const EXPENSE_CATEGORY_FETCH_BATCH = 100;
 
-/** Walks all API pages (page + limit) and refreshes local mock cache. */
+/** Walks all API pages (page + limit). */
 export const fetchAllExpenseCategoriesWithApi = async (): Promise<
   ExpenseCategoryModel[] | null
 > => {
@@ -1121,7 +954,6 @@ export const fetchAllExpenseCategoriesWithApi = async (): Promise<
     page += 1;
     if (page > 500) break;
   }
-  mockExpenseCategories = all.map((item) => ({ ...item }));
   return all;
 };
 
