@@ -11,6 +11,8 @@ export type AddQuoteFormValues = {
   employee_id: string;
   category_id: string;
   requested_date: string;
+  /** Hours, days, or months (label depends on service billing type). */
+  schedule_duration: string;
   /** End date when service schedule mode is `range`. */
   requested_date_to: string;
   requested_time: string;

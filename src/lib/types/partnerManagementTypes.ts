@@ -2,7 +2,7 @@ export type PartnerSubscriptionModel = {
   _id?: string;
   partner_id: string;
   partner_name: string;
-  /** Plan tier slug for display / mock (e.g. `basic`). */
+  /** Plan tier slug for display (e.g. `basic`). */
   subscription_plan: string;
   /** When using live APIs, selected subscription plan document id. */
   subscription_plan_id?: string;
@@ -15,8 +15,6 @@ export type PartnerSubscriptionModel = {
   banner_image?: string;
   /** Optional notes for `/partner-subscription/create|update`. */
   notes?: string;
-  /** Mock-only: force “remaining days” cell to show this value in red (design demo). */
-  remaining_days_demo?: number;
   is_active: boolean;
 };
 

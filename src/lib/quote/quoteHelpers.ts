@@ -1617,6 +1617,7 @@ export function seedEditQuoteFormFromRow(row: QuoteRow): EditQuoteFormValues {
     employee_id: String(row.employee_id ?? "").trim(),
     category_id: String(row.category_id ?? "").trim(),
     requested_date,
+    schedule_duration: "",
     requested_date_to,
     requested_time: "",
     requested_time_from,

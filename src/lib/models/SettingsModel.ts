@@ -26,12 +26,12 @@ export interface RoleSettingsModel {
   franchise_id?: string;
   state_id?: string;
   city_id?: string;
-  /** Contact (settings / mock; optional for backward compatibility). */
+  /** Contact (optional). */
   email?: string;
   phone_number?: string;
   gender?: string;
   date_of_birth?: string;
-  /** Profile image path or URL after upload (mock). */
+  /** Profile image path or URL after upload. */
   profile_url?: string;
   status: ActiveStatus;
   createdDate: string;

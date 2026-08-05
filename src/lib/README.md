@@ -4,7 +4,7 @@
 
 Cross-cutting code only (no `constant/` or `helper/` subfolders anymore):
 
-- **Root `.ts`**: `AppConstant`, `paymentAndCurrency` (`roundMoney`, `formatMoney2`, `formatCurrency`, payment methods), `RoleEnum`, `ResolveStatusEnum`, `VerificationStatusEnum`, `alertHelper`, `DialogManager`, `localStorageHelper`, `authSessionHelper`, `useViewPort`, `serverTableSort`, `getCountRouteType`
+- **Root `.ts`**: `AppConstant`, `paymentAndCurrency` (`roundMoney`, `formatMoney2`, `formatCurrency`, payment methods), `RoleEnum`, `ResolveStatusEnum`, `VerificationStatusEnum`, `alertHelper`, `DialogManager`, `localStorageHelper`, `useViewPort`, `serverTableSort`, `getCountRouteType`
 - **`global/remote/`** — `apiHelper`, `apiPaths`
 
 ## Shared `lib/` folders (not under `global/`)
