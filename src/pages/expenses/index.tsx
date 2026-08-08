@@ -32,7 +32,8 @@ import {
 import { ExpenseModel } from "../../lib/models/ExpenseModel";
 import { ExpenseCategoryModel } from "../../lib/models/SettingsModel";
 import { getLocalStorage } from "../../lib/global/localStorageHelper";
-import { readHeaderFranchisePreference } from "../../lib/franchise/headerFranchisePreference";
+import { franchiseIdForApiQuery } from "../../lib/franchise/headerFranchisePreference";
+import { useFranchiseHeaderForm } from "../../lib/global/hooks/useFranchiseScopedGetCount";
 import { fetchFranchiseDropDown } from "../../services/franchiseService";
 import type { ServerTableSortBy } from "../../lib/global/serverTableSort";
 import { fetchUserById } from "../../services/userService";
@@ -144,6 +145,11 @@ const buildExpenseFormState = (
 };
 
 const ExpensesPage = () => {
+  const {
+    register: headerRegister,
+    setValue: setHeaderValue,
+    franchiseId: headerFranchiseId,
+  } = useFranchiseHeaderForm();
   const { register, setValue } = useForm<any>();
   const currentUserRole = getLocalStorage(AppConstant.userRole);
   const isSuperAdminOrStaff =
@@ -166,9 +172,11 @@ const ExpensesPage = () => {
   // Forces `CustomUtilityBox` remount so its internal search input clears too.
   const [utilitySearchKey, setUtilitySearchKey] = useState(0);
 
-  const [franchiseId, setFranchiseId] = useState(() =>
-    readHeaderFranchisePreference()
-  );
+  /** Super admin/staff header filter — omitted when "all" or franchise portal session. */
+  const listFranchiseId = useMemo(() => {
+    const fid = franchiseIdForApiQuery(headerFranchiseId);
+    return fid || undefined;
+  }, [headerFranchiseId]);
   /** Same franchise as login `partnerId` (API `franchise_id`); used to scope list + detail/delete calls for franchise admin & employee. */
   const [sessionFranchiseId, setSessionFranchiseId] = useState(() => {
     const role = getLocalStorage(AppConstant.userRole);
@@ -397,15 +405,7 @@ const ExpensesPage = () => {
     [isFranchiseScopedUser]
   );
 
-  const effectiveListFranchiseId = useMemo(() => {
-    if (isFranchiseScopedUser) {
-      return undefined;
-    }
-    if (!franchiseId || franchiseId === "all") {
-      return undefined;
-    }
-    return franchiseId;
-  }, [franchiseId, isFranchiseScopedUser]);
+  const effectiveListFranchiseId = listFranchiseId;
 
   const refreshListParams = useCallback(() => {
     listParamsRef.current = {
@@ -418,6 +418,11 @@ const ExpensesPage = () => {
   useEffect(() => {
     refreshListParams();
   }, [refreshListParams]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+    setFilterEpoch((k) => k + 1);
+  }, [headerFranchiseId]);
 
   const fetchData = useCallback(async () => {
     if (fetchRef.current) return;
@@ -436,7 +441,7 @@ const ExpensesPage = () => {
     } finally {
       fetchRef.current = false;
     }
-  }, [currentPage, pageSize, sortBy]);
+  }, [currentPage, pageSize, sortBy, effectiveListFranchiseId, keyword, sort]);
 
   useEffect(() => {
     fetchData();
@@ -737,12 +742,8 @@ const ExpensesPage = () => {
     <div className="main-page-content">
       <CustomHeader
         title="Expenses Management"
-        register={register}
-        setValue={setValue}
-        onLocationChange={(selectedFranchiseId) => {
-          setFranchiseId(selectedFranchiseId);
-          setCurrentPage(1);
-        }}
+        register={headerRegister}
+        setValue={setHeaderValue}
       />
 
       <div className="box-container">

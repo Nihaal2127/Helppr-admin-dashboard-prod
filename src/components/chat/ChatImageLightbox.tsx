@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect } from "react";
 import { Modal } from "react-bootstrap";
 import CustomCloseButton from "../CustomCloseButton";
 import {
   downloadChatMediaFile,
   ChatGalleryImageItem,
-  resolveChatMediaUrlCandidates,
 } from "../../lib/chat/chatDisplayHelpers";
+import { useChatMediaSrc } from "../../lib/chat/useChatMediaSrc";
 import { showErrorAlert } from "../../lib/global/alertHelper";
 
 type ChatImageLightboxProps = {
@@ -24,24 +24,11 @@ const ChatImageLightbox: React.FC<ChatImageLightboxProps> = ({
   onIndexChange,
 }) => {
   const current = images[currentIndex];
-  const candidates = useMemo(
-    () => resolveChatMediaUrlCandidates(current?.fileUrl),
-    [current?.fileUrl]
-  );
-
-  const [srcIndex, setSrcIndex] = useState(0);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const { src, loadFailed, onError } = useChatMediaSrc(current?.fileUrl);
 
   const isFirst = currentIndex <= 0;
   const isLast = currentIndex >= images.length - 1;
-  const src = candidates[srcIndex] ?? "";
-  const hasMoreCandidates = srcIndex < candidates.length - 1;
   const downloadName = current?.fileName || current?.alt || "image.jpg";
-
-  useEffect(() => {
-    setSrcIndex(0);
-    setLoadFailed(false);
-  }, [current?.fileUrl, currentIndex]);
 
   useEffect(() => {
     if (!show) return;
@@ -63,16 +50,6 @@ const ChatImageLightbox: React.FC<ChatImageLightboxProps> = ({
   }, [show, isFirst, isLast, currentIndex, onClose, onIndexChange]);
 
   if (!current) return null;
-
-  const tryNextSrc = () => {
-    setSrcIndex((prev) => {
-      if (prev < candidates.length - 1) {
-        return prev + 1;
-      }
-      setLoadFailed(true);
-      return prev;
-    });
-  };
 
   const handleDownload = () => {
     const key = String(current.fileUrl ?? "").trim();
@@ -137,11 +114,11 @@ const ChatImageLightbox: React.FC<ChatImageLightboxProps> = ({
           </div>
         ) : (
           <img
-            key={`lightbox-${currentIndex}-${srcIndex}-${src}`}
+            key={`lightbox-${currentIndex}-${src}`}
             src={src}
             alt={current.alt}
             className="normal-chat-image-lightbox-img"
-            onError={tryNextSrc}
+            onError={onError}
           />
         )}
       </div>

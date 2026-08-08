@@ -2297,6 +2297,21 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
   );
   const landmark = str(addr.landmark ?? r.landmark);
   const pincode = str(addr.pincode ?? r.pincode);
+  const contact_name =
+    str(
+      addr.contact_name ??
+        addr.contactName ??
+        r.contact_name ??
+        r.contactName
+    ) || undefined;
+  const contact_number =
+    str(
+      addr.contact_number ??
+        addr.contactNumber ??
+        addr.phone_number ??
+        r.contact_number ??
+        r.contactNumber
+    ) || undefined;
   const freeformAddress = str(addr.address);
   const address_line = freeformAddress;
   const explicitStreet = str(addr.street ?? addr.street_name ?? r.street);
@@ -2414,11 +2429,12 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
       str(
         r.phone_number ??
           userRef?.phone_number ??
-          r.user_phone ??
-          addr.contact_number
-      ) || undefined,
+          r.user_phone
+      ) || contact_number || undefined,
     user_email: str(r.user_email ?? userRef?.email) || undefined,
     user_city: str(r.user_city ?? userRef?.city_name ?? city) || undefined,
+    contact_name: contact_name || undefined,
+    contact_number: contact_number || undefined,
     profile_url: (() => {
       const s = str(
         r.profile_url ?? userRef?.profile_url ?? userRef?.image_url

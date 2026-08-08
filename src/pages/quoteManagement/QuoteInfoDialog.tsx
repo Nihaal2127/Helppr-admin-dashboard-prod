@@ -303,6 +303,14 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
           <h6 className={QUOTE_SECTION_TITLE_CLASS}>Service address</h6>
           <Row className="g-2 mb-0">
             <Col xs={12} md={6} className="info-detail-fields-col">
+              <InfoDetailInlineRow label="Contact Name" value={serviceAddress.contact_name} />
+            </Col>
+            <Col xs={12} md={6} className="info-detail-fields-col">
+              <InfoDetailInlineRow label="Contact Number" value={serviceAddress.contact_number} />
+            </Col>
+          </Row>
+          <Row className="g-2 mb-0">
+            <Col xs={12} md={6} className="info-detail-fields-col">
               <InfoDetailInlineRow label="State" value={serviceAddress.state} />
             </Col>
             <Col xs={12} md={6} className="info-detail-fields-col">

@@ -1773,6 +1773,8 @@ export function partnerPaymentsEditLocked(order?: OrderModel): boolean {
 }
 
 export type OrderServiceAddressDisplay = {
+  contact_name: string;
+  contact_number: string;
   state: string;
   city: string;
   area: string;
@@ -1780,12 +1782,41 @@ export type OrderServiceAddressDisplay = {
   addressLine: string;
 };
 
-/** Structured service address (State / City / Area / Pin / street) — matches quote view. */
+function orderServiceAddressContactFields(
+  order: OrderModel,
+  addrRef: Record<string, unknown> | undefined,
+  parsed: ReturnType<typeof parseCatalogAddressRecord> | null
+): Pick<OrderServiceAddressDisplay, "contact_name" | "contact_number"> {
+  const dash = "-";
+  const parsedContact =
+    parsed?.contactName && parsed.contactName !== "Address"
+      ? str(parsed.contactName)
+      : "";
+  const contact_name =
+    str(addrRef?.contact_name ?? addrRef?.contactName) ||
+    parsedContact ||
+    str(order.user_info?.name) ||
+    str(order.user_name) ||
+    dash;
+  const contact_number =
+    str(
+      addrRef?.contact_number ??
+        addrRef?.contactNumber ??
+        addrRef?.phone_number
+    ) ||
+    str(order.user_info?.phone_number) ||
+    dash;
+  return { contact_name, contact_number };
+}
+
+/** Structured service address (contact / State / City / Area / Pin / street) — matches quote view. */
 export function getOrderServiceAddressDisplay(
   order?: OrderModel
 ): OrderServiceAddressDisplay {
   const dash = "-";
   const empty: OrderServiceAddressDisplay = {
+    contact_name: dash,
+    contact_number: dash,
     state: dash,
     city: dash,
     area: dash,
@@ -1797,6 +1828,7 @@ export function getOrderServiceAddressDisplay(
   const rec = order as unknown as Record<string, unknown>;
   const addrRef = orderAddressRecord(rec);
   const parsed = addrRef ? parseCatalogAddressRecord(addrRef) : null;
+  const contact = orderServiceAddressContactFields(order, addrRef, parsed);
 
   const primary = getPrimaryServiceItem(order);
   const flat =
@@ -1841,6 +1873,7 @@ export function getOrderServiceAddressDisplay(
       state = displayStateName(str(franchiseRec?.state_name));
     }
     return {
+      ...contact,
       state: state || dash,
       city: city || dash,
       area: area || dash,
@@ -1866,6 +1899,7 @@ export function getOrderServiceAddressDisplay(
 
   if (composite) {
     return {
+      ...contact,
       state: state || composite.state || dash,
       city: city || composite.city || dash,
       area: composite.area || dash,
@@ -1875,6 +1909,7 @@ export function getOrderServiceAddressDisplay(
   }
 
   return {
+    ...contact,
     state: state || dash,
     city: city || dash,
     area: dash,

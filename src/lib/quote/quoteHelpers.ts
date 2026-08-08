@@ -434,6 +434,8 @@ export type QuoteViewData = {
   phone_number?: string;
   user_email?: string;
   user_city?: string;
+  contact_name?: string;
+  contact_number?: string;
   profile_url?: string | null;
   partner_profile_url?: string | null;
   employee_profile_url?: string | null;
@@ -503,6 +505,8 @@ export type QuoteViewData = {
 };
 
 export type QuoteServiceAddressDisplay = {
+  contact_name: string;
+  contact_number: string;
   state: string;
   city: string;
   area: string;
@@ -514,12 +518,23 @@ export type QuoteServiceAddressDisplay = {
 export function getQuoteServiceAddressDisplay(
   q?: Pick<
     QuoteViewData,
-    "state" | "city" | "area" | "pincode" | "address_line" | "street"
+    | "contact_name"
+    | "contact_number"
+    | "user_name"
+    | "phone_number"
+    | "state"
+    | "city"
+    | "area"
+    | "pincode"
+    | "address_line"
+    | "street"
   >
 ): QuoteServiceAddressDisplay {
   const dash = "-";
   if (!q) {
     return {
+      contact_name: dash,
+      contact_number: dash,
       state: dash,
       city: dash,
       area: dash,
@@ -528,6 +543,10 @@ export function getQuoteServiceAddressDisplay(
     };
   }
   return {
+    contact_name:
+      String(q.contact_name ?? q.user_name ?? "").trim() || dash,
+    contact_number:
+      String(q.contact_number ?? q.phone_number ?? "").trim() || dash,
     state: displayStateName(q.state ?? "") || dash,
     city: String(q.city ?? "").trim() || dash,
     area: String(q.area ?? "").trim() || dash,
@@ -722,6 +741,10 @@ export function mergeQuoteViewData(
     user_name: coalesceText(fresh.user_name, keep.user_name),
     user_email: coalesceText(fresh.user_email, keep.user_email) || undefined,
     phone_number: coalesceText(fresh.phone_number, keep.phone_number) || undefined,
+    contact_name:
+      coalesceText(fresh.contact_name, keep.contact_name) || undefined,
+    contact_number:
+      coalesceText(fresh.contact_number, keep.contact_number) || undefined,
     partner_name: coalesceText(fresh.partner_name, keep.partner_name) || undefined,
     partner_email:
       coalesceText(fresh.partner_email, keep.partner_email) || undefined,
@@ -815,6 +838,8 @@ export function toQuoteViewData(row: QuoteRow): QuoteViewData {
     phone_number: row.phone_number,
     user_email: row.user_email,
     user_city: row.user_city ?? row.city,
+    contact_name: row.contact_name,
+    contact_number: row.contact_number,
     profile_url: row.profile_url,
     partner_profile_url: row.partner_profile_url,
     employee_profile_url: row.employee_profile_url,

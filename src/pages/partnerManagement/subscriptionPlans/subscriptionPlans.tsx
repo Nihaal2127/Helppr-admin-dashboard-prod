@@ -33,10 +33,8 @@ import { fetchAreaDropDown } from "../../../services/areaService";
 import type { ServerTableSortBy } from "../../../lib/global/serverTableSort";
 import { AppConstant, UserRole } from "../../../lib/global/AppConstant";
 import { getLocalStorage } from "../../../lib/global/localStorageHelper";
-import {
-  franchiseHeaderFormDefaults,
-  franchiseIdForApiQuery,
-} from "../../../lib/franchise/headerFranchisePreference";
+import { franchiseIdForApiQuery } from "../../../lib/franchise/headerFranchisePreference";
+import { useFranchiseHeaderForm } from "../../../lib/global/hooks/useFranchiseScopedGetCount";
 import { fetchUserById } from "../../../services/userService";
 
 /** Days from today until `endDateStr` (date-only); negative if already past. */
@@ -117,10 +115,20 @@ const PARTNER_PLAN_TYPE_FILTER_OPTIONS: { value: string; label: string }[] = [
 ];
 
 const SubscriptionPlans = ({ onBack }: SubscriptionPlansProps) => {
-  const { register, setValue, watch } = useForm<any>({
-    defaultValues: franchiseHeaderFormDefaults(),
+  const {
+    register: headerRegister,
+    setValue: headerSetValue,
+    franchiseId: headerFranchiseId,
+  } = useFranchiseHeaderForm();
+  const { register, setValue } = useForm<any>({
+    defaultValues: {
+      partner_sub_plan_type_filter: "all",
+      partner_sub_status_filter: "all",
+      partner_sub_location_filter: "all",
+      partner_sub_start_date_filter: null,
+      partner_sub_end_date_filter: null,
+    },
   });
-  const headerFranchiseId = watch("franchise_id") as string | undefined;
   const currentUserRole = getLocalStorage(AppConstant.userRole);
   const isFranchiseAdminSession = currentUserRole === UserRole.FRANCHISE_ADMIN;
   const [selectedBox, setSelectedBox] = useState<
@@ -213,6 +221,24 @@ const SubscriptionPlans = ({ onBack }: SubscriptionPlansProps) => {
     setCurrentPage(1);
   }, [selectedBox]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [headerFranchiseId]);
+
+  const partnerListFilters = useMemo(() => {
+    const fid = franchiseIdForApiQuery(headerFranchiseId);
+    return {
+      ...partnerFilters,
+      cityId: isFranchiseAdminSession ? sessionCityId : undefined,
+      ...(fid ? { franchiseId: fid } : {}),
+    };
+  }, [
+    headerFranchiseId,
+    partnerFilters,
+    isFranchiseAdminSession,
+    sessionCityId,
+  ]);
+
   /** Summary boxes: `POST /getCount` `{ type: "partner-management", franchise_id? }`. */
   useEffect(() => {
     let cancelled = false;
@@ -264,10 +290,7 @@ const SubscriptionPlans = ({ onBack }: SubscriptionPlansProps) => {
       const partnerRes = await fetchPartnerSubscriptions(
         currentPage,
         pageSize,
-        {
-          ...partnerFilters,
-          cityId: isFranchiseAdminSession ? sessionCityId : undefined,
-        },
+        partnerListFilters,
         partnerSubSortBy
       );
       if (partnerRes.response) {
@@ -288,8 +311,7 @@ const SubscriptionPlans = ({ onBack }: SubscriptionPlansProps) => {
     planSortBy,
     partnerSubSortBy,
     activeBox,
-    isFranchiseAdminSession,
-    sessionCityId,
+    partnerListFilters,
   ]);
 
   useEffect(() => {
@@ -625,8 +647,8 @@ const SubscriptionPlans = ({ onBack }: SubscriptionPlansProps) => {
     <div className="main-page-content">
       <CustomHeader
         title="Subscription Plans"
-        register={register}
-        setValue={setValue}
+        register={headerRegister}
+        setValue={headerSetValue}
         hideFranchiseDropdown={activeBox !== "partner_subscription_list"}
         titlePrefix={
           <button

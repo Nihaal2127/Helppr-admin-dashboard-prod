@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useForm, UseFormRegister } from "react-hook-form";
 import CustomHeader from "../../../components/CustomHeader";
 import CustomSummaryBox from "../../../components/CustomSummaryBox";
 import CustomUtilityBox from "../../../components/CustomUtilityBox";
 import CustomTable from "../../../components/CustomTable";
+import CustomFormSelect from "../../../components/CustomFormSelect";
 import AddEditPostManagementDialog from "./AddEditPostManagementDialog";
 import type { PostModel } from "../../../lib/types/partnerManagementTypes";
 import {
@@ -21,16 +23,35 @@ type PostManagementProps = {
 
 type PostListFilter = "all" | PostModel["status"];
 
+const POST_STATUS_FILTER_OPTIONS: { value: PostListFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "published", label: "Published" },
+  { value: "hidden", label: "Hidden" },
+  { value: "removed", label: "Removed" },
+  { value: "pending", label: "Pending" },
+  { value: "rejected", label: "Rejected" },
+];
+
 const EMPTY_STATS: PostManagementStats = {
   Total: 0,
   Published: 0,
   Hidden: 0,
   Removed: 0,
+  Pending: 0,
+  Rejected: 0,
 };
 
 const PostManagement = ({ onBack }: PostManagementProps) => {
-  const { register, setValue, franchiseId: headerFranchiseId } =
-    useFranchiseHeaderForm();
+  const {
+    register: headerRegister,
+    setValue: setHeaderValue,
+    franchiseId: headerFranchiseId,
+  } = useFranchiseHeaderForm();
+  const { register: filterRegister, setValue: setFilterValue } = useForm<{
+    post_status_filter: PostListFilter;
+  }>({
+    defaultValues: { post_status_filter: "all" },
+  });
   const [selectedStatus, setSelectedStatus] = useState<PostListFilter>("all");
   const [filters, setFilters] = useState<{
     name?: string;
@@ -95,22 +116,10 @@ const PostManagement = ({ onBack }: PostManagementProps) => {
     setFilters((prev) => ({ ...prev, ...next }));
   };
 
-  const handleSummaryClick = (key: string) => {
-    const value = key.toLowerCase();
-    setCurrentPage(1);
-
-    if (value === "total") {
-      setSelectedStatus("all");
-      return;
-    }
-
-    if (value === "published" || value === "hidden" || value === "removed") {
-      setSelectedStatus(value);
-      return;
-    }
-
-    setSelectedStatus("all");
-  };
+  const summaryTotalOnly = useMemo(
+    () => ({ Total: summaryData.Total }),
+    [summaryData.Total]
+  );
 
   const handleView = (post: PostModel): void => {
     AddEditPostManagementDialog.show(false, post, () => {
@@ -186,8 +195,8 @@ const PostManagement = ({ onBack }: PostManagementProps) => {
     <div className="main-page-content">
       <CustomHeader
         title="Post Management"
-        register={register}
-        setValue={setValue}
+        register={headerRegister}
+        setValue={setHeaderValue}
         titlePrefix={
           <button
             type="button"
@@ -203,14 +212,14 @@ const PostManagement = ({ onBack }: PostManagementProps) => {
       <CustomSummaryBox
         divId="box-post-management"
         title="Post Management"
-        data={summaryData}
+        data={summaryTotalOnly}
         onSelect={() => {
           setCurrentPage(1);
           setSelectedStatus("all");
+          setFilterValue("post_status_filter", "all", { shouldValidate: false });
         }}
         isSelected={true}
         onFilterChange={() => {}}
-        onItemClick={handleSummaryClick}
         isAddShow={false}
         addButtonLable="Add post"
         onAddClick={() =>
@@ -223,6 +232,28 @@ const PostManagement = ({ onBack }: PostManagementProps) => {
       <CustomUtilityBox
         title="Post Management"
         searchHint="Search Partner Name"
+        toolsInlineRow
+        hideMoreIcon
+        controlSlot={
+          <div style={{ width: "190px", minWidth: "190px" }}>
+            <CustomFormSelect
+              label="Status"
+              controlId="post_status_filter"
+              options={POST_STATUS_FILTER_OPTIONS as { value: string; label: string }[]}
+              register={filterRegister as unknown as UseFormRegister<any>}
+              fieldName="post_status_filter"
+              asCol={false}
+              noBottomMargin
+              defaultValue={selectedStatus}
+              setValue={setFilterValue as (name: string, value: any, options?: { shouldValidate?: boolean }) => void}
+              onChange={(e) => {
+                const next = e.target.value as PostListFilter;
+                setSelectedStatus(next);
+                setCurrentPage(1);
+              }}
+            />
+          </div>
+        }
         onSearch={(value: string) => {
           handleFilterChange({ name: value });
         }}

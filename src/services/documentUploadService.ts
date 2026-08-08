@@ -3,7 +3,7 @@ import { ApiPaths } from "../lib/global/remote/apiPaths";
 import { AppConstant } from "../lib/global/AppConstant";
 import { showLog } from "../helper/utility";
 
-function mediaAssetBaseUrl(): string {
+export function getMediaAssetBaseUrl(): string {
   const fromEnv = process.env.REACT_APP_IMAGE_BASE_URL?.trim();
   if (fromEnv) return fromEnv.replace(/\/?$/, "/");
   const fromConstant = AppConstant.IMAGE_BASE_URL.trim();
@@ -19,7 +19,7 @@ export function resolveMediaAssetSrc(url?: string | null): string {
   if (u.startsWith("data:") || u.startsWith("blob:")) return u;
   if (u.startsWith("http://") || u.startsWith("https://")) return u;
   if (u.startsWith("//")) return `https:${u}`;
-  const base = mediaAssetBaseUrl();
+  const base = getMediaAssetBaseUrl();
   return `${base}${u.replace(/^\//, "")}`;
 }
 
@@ -34,7 +34,7 @@ export function toStorageRelativePath(url: string | null | undefined): string {
   const u = String(url ?? "").trim();
   if (!u || isNonStorageImageUrl(u)) return "";
   const bases = [
-    mediaAssetBaseUrl(),
+    getMediaAssetBaseUrl(),
     AppConstant.IMAGE_BASE_URL.replace(/\/?$/, "/"),
   ].filter(Boolean);
   for (const base of bases) {

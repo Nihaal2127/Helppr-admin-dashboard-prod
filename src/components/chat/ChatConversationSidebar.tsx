@@ -4,6 +4,7 @@ import {
   ChatTransferHistoryItem,
   downloadChatMediaFile,
 } from "../../lib/chat/chatDisplayHelpers";
+import ChatAttachmentThumb from "./ChatAttachmentThumb";
 import { showErrorAlert } from "../../lib/global/alertHelper";
 import {
   ChatRecordModel,
@@ -157,11 +158,9 @@ const ChatConversationSidebar: React.FC<ChatConversationSidebarProps> = ({
                 const card = (
                   <div className="normal-chat-attachment-card">
                     {att.isImage ? (
-                      <img
-                        src={att.url}
-                        alt={att.fileName}
-                        className="normal-chat-attachment-thumb"
-                        loading="lazy"
+                      <ChatAttachmentThumb
+                        mediaKey={att.mediaKey ?? att.url}
+                        fileName={att.fileName}
                       />
                     ) : (
                       <div className="normal-chat-attachment-file-thumb d-flex align-items-center justify-content-center">

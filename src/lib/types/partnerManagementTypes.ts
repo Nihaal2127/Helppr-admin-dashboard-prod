@@ -11,7 +11,7 @@ export type PartnerSubscriptionModel = {
   rating: string;
   location?: string;
   address?: string;
-  /** Shown for platinum plans (banner / hero image URL or data URL from upload). */
+  /** Platinum banner storage path / URL (`banner_image_url` on update API). */
   banner_image?: string;
   /** Optional notes for `/partner-subscription/create|update`. */
   notes?: string;
@@ -30,8 +30,9 @@ export type PostModel = {
   no_of_videos?: number;
   location: string;
   uploaded_date: string;
-  /** API values from `GET /api/partner-post/getAll` — `published` | `hidden` | `removed`. */
-  status: "published" | "hidden" | "removed";
+  /** API values from `GET /api/partner-post/getAll`. */
+  status: "published" | "hidden" | "removed" | "pending" | "rejected";
+  rejection_reason?: string;
   images?: string[];
   videos?: string[];
 };

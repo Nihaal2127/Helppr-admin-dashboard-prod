@@ -6,6 +6,7 @@ import CustomFormSelect from "../../../components/CustomFormSelect";
 import { resolveExistingImageSrc } from "../../../components/CustomImageUploader";
 import { CustomFormInput } from "../../../components/CustomFormInput";
 import { openDialog } from "../../../lib/global/DialogManager";
+import { showErrorAlert } from "../../../lib/global/alertHelper";
 import { DetailsRow, WideLabelValueBlock } from "../../../helper/utility";
 import {
   moderatePartnerPost,
@@ -65,6 +66,8 @@ const POST_STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "published", label: "Published" },
   { value: "hidden", label: "Hidden" },
   { value: "removed", label: "Removed" },
+  { value: "pending", label: "Pending" },
+  { value: "rejected", label: "Reject" },
 ];
 
 const AddEditPostManagementDialog: React.FC<
@@ -103,6 +106,7 @@ const AddEditPostManagementDialog: React.FC<
   const [statusDraftInModal, setStatusDraftInModal] = useState<
     PostModel["status"]
   >(formData.status);
+  const [rejectionReasonDraft, setRejectionReasonDraft] = useState("");
 
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [selectedMediaIds, setSelectedMediaIds] = useState<number[]>([]);
@@ -117,7 +121,8 @@ const AddEditPostManagementDialog: React.FC<
   useEffect(() => {
     setDisplayStatus(formData.status);
     setStatusDraftInModal(formData.status);
-  }, [formData.status, post?._id, post?.id]);
+    setRejectionReasonDraft(String(formData.rejection_reason ?? "").trim());
+  }, [formData.status, formData.rejection_reason, post?._id, post?.id]);
 
   useEffect(() => {
     if (isAddMode) {
@@ -163,6 +168,11 @@ const AddEditPostManagementDialog: React.FC<
   const openStatusModal = (): void => {
     setStatusDraftInModal(displayStatus);
     setValue("post_moderation_status", displayStatus);
+    setRejectionReasonDraft(
+      displayStatus === "rejected"
+        ? String(formData.rejection_reason ?? "").trim()
+        : ""
+    );
     setStatusModalOpen(true);
   };
 
@@ -481,6 +491,13 @@ const AddEditPostManagementDialog: React.FC<
                 </Col>
                 <Col md={6} className="custom-helper-column">
                   <DetailsRow title="Status" value={statusValueEl} />
+                  {displayStatus === "rejected" &&
+                  String(formData.rejection_reason ?? "").trim() ? (
+                    <DetailsRow
+                      title="Rejection reason"
+                      value={String(formData.rejection_reason ?? "").trim()}
+                    />
+                  ) : null}
                 </Col>
               </Row>
 
@@ -582,6 +599,19 @@ const AddEditPostManagementDialog: React.FC<
             }
             menuPortal
           />
+          {statusDraftInModal === "rejected" ? (
+            <CustomFormInput
+              label="Rejection reason"
+              controlId="post_rejection_reason"
+              placeholder="Enter rejection reason"
+              register={register}
+              asCol={false}
+              as="textarea"
+              rows={3}
+              value={rejectionReasonDraft}
+              onChange={(v) => setRejectionReasonDraft(v)}
+            />
+          ) : null}
         </Modal.Body>
         <Modal.Footer className="border-0 pt-0">
           <Button
@@ -596,10 +626,20 @@ const AddEditPostManagementDialog: React.FC<
             size="sm"
             onClick={() => {
               void (async () => {
+                if (
+                  statusDraftInModal === "rejected" &&
+                  !rejectionReasonDraft.trim()
+                ) {
+                  showErrorAlert("Please enter a rejection reason.");
+                  return;
+                }
                 const postKey = formData._id ?? formData.id;
                 const ok = await moderatePartnerPost(
                   String(postKey ?? ""),
-                  statusDraftInModal
+                  statusDraftInModal,
+                  statusDraftInModal === "rejected"
+                    ? { rejection_reason: rejectionReasonDraft.trim() }
+                    : undefined
                 );
                 if (!ok) return;
                 setDisplayStatus(statusDraftInModal);
@@ -607,6 +647,9 @@ const AddEditPostManagementDialog: React.FC<
                 setStatusModalOpen(false);
               })();
             }}
+            disabled={
+              statusDraftInModal === "rejected" && !rejectionReasonDraft.trim()
+            }
           >
             Save
           </Button>

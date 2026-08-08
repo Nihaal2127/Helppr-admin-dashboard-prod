@@ -1,5 +1,8 @@
 import { AppConstant } from "../global/AppConstant";
-import { resolveMediaAssetSrc } from "../../services/documentUploadService";
+import {
+  getMediaAssetBaseUrl,
+  resolveMediaAssetSrc,
+} from "../../services/documentUploadService";
 import {
   ChatMessageModel,
   ChatRecordModel,
@@ -169,6 +172,18 @@ function parseDocumentUploadTypeFromFilename(name: string): string | null {
   return match?.[1] ?? null;
 }
 
+function chatMediaCdnBases(): string[] {
+  const bases: string[] = [];
+  const add = (raw: string) => {
+    const base = String(raw ?? "").trim().replace(/\/?$/, "/");
+    if (base && !bases.includes(base)) bases.push(base);
+  };
+  // Production category/service assets use this CDN; try it first for chat files too.
+  add(AppConstant.CHAT_AVATAR_IMAGE_BASE_URL);
+  add(getMediaAssetBaseUrl());
+  return bases;
+}
+
 function pushUniqueUrl(urls: string[], value: string) {
   const v = String(value ?? "").trim();
   if (v && !urls.includes(v)) urls.push(v);
@@ -177,11 +192,28 @@ function pushUniqueUrl(urls: string[], value: string) {
 function pushStorageKey(urls: string[], storageKey: string) {
   const key = String(storageKey ?? "").trim().replace(/^\//, "");
   if (!key) return;
-  const resolved = resolveMediaAssetSrc(key);
-  pushUniqueUrl(urls, resolved);
-  if (!/^https?:\/\//i.test(resolved)) {
-    pushUniqueUrl(urls, `${AppConstant.CHAT_AVATAR_IMAGE_BASE_URL}${key}`);
+  for (const base of chatMediaCdnBases()) {
+    pushUniqueUrl(urls, `${base}${key}`);
   }
+  pushUniqueUrl(urls, resolveMediaAssetSrc(key));
+}
+
+function chatAttachmentNameVariants(fileName: string): string[] {
+  const name = String(fileName ?? "").trim();
+  if (!name) return [];
+
+  const variants = new Set<string>([name]);
+  const extMatch = name.match(/^(.+)(\.[a-z0-9]+)$/i);
+  if (extMatch) {
+    const stem = extMatch[1];
+    const ext = extMatch[2];
+    if (!/_(\d+)$/i.test(stem)) {
+      variants.add(`${stem}_7${ext}`);
+    }
+  } else if (!/_(\d+)$/i.test(name)) {
+    variants.add(`${name}_7`);
+  }
+  return Array.from(variants);
 }
 
 function appendStorageCandidatesForFileName(urls: string[], fileName: string) {
@@ -189,14 +221,24 @@ function appendStorageCandidatesForFileName(urls: string[], fileName: string) {
   if (!name || name.includes("/")) return;
 
   const uploadType = parseDocumentUploadTypeFromFilename(name);
+  const nameVariants = chatAttachmentNameVariants(name);
+
   if (uploadType) {
-    for (const folder of DOCUMENT_UPLOAD_FOLDERS_BY_TYPE[uploadType] ?? []) {
-      pushStorageKey(urls, `${folder}/${name}`);
+    for (const variant of nameVariants) {
+      for (const folder of DOCUMENT_UPLOAD_FOLDERS_BY_TYPE[uploadType] ?? []) {
+        pushStorageKey(urls, `${folder}/${variant}`);
+      }
     }
     return;
   }
 
-  pushStorageKey(urls, `chat_attachment/${name}`);
+  // Chat uploads use document type 7 — try common storage layouts.
+  for (const variant of nameVariants) {
+    for (const folder of DOCUMENT_UPLOAD_FOLDERS_BY_TYPE["7"] ?? []) {
+      pushStorageKey(urls, `${folder}/${variant}`);
+    }
+    pushStorageKey(urls, variant);
+  }
 }
 
 /** Build candidate URLs for chat attachments (CDN and storage-key fallbacks). */
@@ -235,6 +277,12 @@ export function resolveChatMediaUrlCandidates(fileUrl?: string | null): string[]
   if (!normalized.includes("/")) {
     appendStorageCandidatesForFileName(urls, normalized);
     return urls;
+  }
+
+  // Path without folder prefix — also try under chat_attachment/.
+  const leaf = normalized.split("/").pop() ?? normalized;
+  if (leaf && leaf !== normalized) {
+    appendStorageCandidatesForFileName(urls, leaf);
   }
 
   pushStorageKey(urls, normalized);

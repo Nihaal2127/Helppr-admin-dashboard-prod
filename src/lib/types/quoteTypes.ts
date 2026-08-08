@@ -82,6 +82,8 @@ export type QuoteRow = {
   phone_number?: string;
   user_email?: string;
   user_city?: string;
+  contact_name?: string;
+  contact_number?: string;
   profile_url?: string | null;
   partner_profile_url?: string | null;
   employee_profile_url?: string | null;

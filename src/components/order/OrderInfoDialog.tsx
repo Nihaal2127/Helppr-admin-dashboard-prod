@@ -14,6 +14,7 @@ import {
   InfoDetailInlineRow,
 } from "../../helper/utility";
 import { fetchOrderById } from "../../lib/order/orders";
+import type { OrderServiceAddressDisplay } from "../../lib/order/orders";
 import { AppConstant } from "../../lib/global/AppConstant";
 import QuoteInfoPersonSection from "../quote/QuoteInfoPersonSection";
 import { showOrderInfoDialog as openOrderInfoDialog } from "./showOrderInfoDialog";
@@ -88,10 +89,9 @@ const OrderInfoDialog: React.FC<OrderInfoDialogProps> & {
 
   const primary = getPrimaryServiceItem(orderDetails);
   const partnerRef = getOrderPartnerRef(orderDetails);
-  const serviceAddress = useMemo(
-    () => getOrderServiceAddressDisplay(orderDetails),
-    [orderDetails]
-  );
+  const serviceAddress = useMemo((): OrderServiceAddressDisplay => {
+    return getOrderServiceAddressDisplay(orderDetails);
+  }, [orderDetails]);
 
   const paymentExt = useMemo(() => {
     if (!orderDetails) return null;
@@ -324,6 +324,14 @@ const OrderInfoDialog: React.FC<OrderInfoDialogProps> & {
           {/* Service address — inline rows so label|value gaps match across pairs + full Address row */}
           <section className="border rounded p-3 mb-3">
             <h6 className={QUOTE_SECTION_TITLE_CLASS}>Service address</h6>
+            <Row className="g-2 mb-0">
+              <Col xs={12} md={6} className="info-detail-fields-col">
+                <InfoDetailInlineRow label="Contact Name" value={serviceAddress.contact_name} />
+              </Col>
+              <Col xs={12} md={6} className="info-detail-fields-col">
+                <InfoDetailInlineRow label="Contact Number" value={serviceAddress.contact_number} />
+              </Col>
+            </Row>
             <Row className="g-2 mb-0">
               <Col xs={12} md={6} className="info-detail-fields-col">
                 <InfoDetailInlineRow label="State" value={serviceAddress.state} />
