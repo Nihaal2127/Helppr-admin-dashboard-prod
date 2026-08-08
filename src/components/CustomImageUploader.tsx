@@ -42,7 +42,10 @@ export function resolveExistingImageSrc(url?: string): string {
   if (resolved.startsWith("data:") || resolved.startsWith("blob:")) {
     return resolved;
   }
-  return `${resolved}${resolved.includes("?") ? "&" : "?"}t=${Date.now()}`;
+  // Do not append cache-busters to URLs that already have query params
+  // (signed S3/CloudFront URLs break when extra params are added).
+  if (resolved.includes("?")) return resolved;
+  return `${resolved}?t=${Date.now()}`;
 }
 
 function LocalFilePreview({
