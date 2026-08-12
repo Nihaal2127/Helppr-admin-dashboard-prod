@@ -48,9 +48,9 @@ export const AppConstant = {
   currencyCode: CURRENCY.code,
   percentageSymbol: "%",
   companyName: "Helper",
-  helplineNumber: "+61434380737",
-  supportEmail: "info@sostyres.com.au",
-  companyLocation: " 8/41 Lensworth St, Coopers plains,4108, Australia",
+  helplineNumber: "+916301981170 ",
+  supportEmail: "Info@helppr.in",
+  companyLocation: "  2nd FLoor, 24-7-207/15/1, beside EPF Office, Revenue Colony, National Institute of Technology Campus, Kazipet, Hanamkonda, Telangana 506004",
 
 };
 
