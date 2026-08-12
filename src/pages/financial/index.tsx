@@ -23,6 +23,7 @@ const Financials = () => {
         title="Financials"
         register={register as any}
         setValue={setValue as any}
+         hideFranchiseDropdown={true}
       />
 
       <div className="custom-grid-box-div">

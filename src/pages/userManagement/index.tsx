@@ -477,6 +477,12 @@ const UserManagement = () => {
         Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
           String(row.original?.email ?? "").trim() || "—",
       },
+      {
+        Header: "Phone",
+        accessor: "phone_number",
+        Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
+          String(row.original?.phone_number ?? "").trim() || "—",
+      },
       { Header: "No. of services", accessor: "no_of_services" },
       {
         Header: "Plan",
