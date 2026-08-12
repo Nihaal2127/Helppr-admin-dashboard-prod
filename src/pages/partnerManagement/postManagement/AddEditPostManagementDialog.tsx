@@ -269,7 +269,7 @@ const AddEditPostManagementDialog: React.FC<
           Videos
         </Button>
       </div>
-      <Button
+      {/* <Button
         variant="outline-secondary"
         size="sm"
         className="custom-btn-secondary"
@@ -277,7 +277,7 @@ const AddEditPostManagementDialog: React.FC<
         disabled={selectedMediaIds.length === 0}
       >
         Delete selected
-      </Button>
+      </Button> */}
     </div>
   );
 
@@ -288,13 +288,13 @@ const AddEditPostManagementDialog: React.FC<
           <Col md={6} lg={4} key={media.id}>
             <div className="h-100 border rounded overflow-hidden bg-white">
               <div className="px-2 pt-2 pb-1">
-                <Form.Check
+                {/* <Form.Check
                   type="checkbox"
                   checked={selectedMediaIds.includes(media.id)}
                   onChange={() => toggleMediaSelection(media.id)}
                   label="Select"
                   className="small"
-                />
+                /> */}
               </div>
               {media.type === "image" ? (
                 <PostMediaImage url={media.url} title={media.title} />

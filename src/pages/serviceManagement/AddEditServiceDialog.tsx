@@ -851,7 +851,7 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
                 </div>
               </Col>
 
-              <Col md={6}>
+              <Col md={8}>
                 <label className="form-label fw-medium mb-2 d-block">
                   <FieldLabelText label="Service image" required />
                 </label>

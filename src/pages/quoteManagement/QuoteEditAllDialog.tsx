@@ -49,6 +49,7 @@ import {
   seedEditQuoteFormFromRow,
   setQuoteFranchiseCatalogSnapshot,
   useQuoteCustomerAddressPanel,
+
 } from "../../lib/quote/quoteHelpers";
 import type { EditQuoteFormValues, QuoteAddressRowUi } from "../../lib/quote/quoteHelpers";
 import QuotePriceBreakdownPanel from "../../components/quote/QuotePriceBreakdownPanel";
@@ -930,8 +931,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     }
 
     const patch: Record<string, unknown> = {
-      category_id: String(data.category_id ?? "").trim(),
-      service_id: String(data.requested_services ?? "").trim(),
+      // category_id: "",
+      // service_id: "",
       partner_id: String(data.requested_partner ?? "").trim() || undefined,
       employee_id: String(data.employee_id ?? "").trim() || undefined,
       address_id: selectedAddressId.trim(),

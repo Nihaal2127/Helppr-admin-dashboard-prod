@@ -1,5 +1,5 @@
 import { Card, Button } from "react-bootstrap";
-import appLogo from "../../assets/icons/login_logo.svg";
+import appLogo from "../../assets/images/helper-logo.png";
 import { ROUTES } from "../../routes/Routes";
 import { getNavigate } from "../../helper/utility";
 
