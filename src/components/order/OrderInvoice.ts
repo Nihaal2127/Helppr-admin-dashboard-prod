@@ -170,29 +170,45 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
                 )
                 .join("")}
               <tr>
-                <td colSpan="3">
-                  <strong>${AppConstant.companyName}</strong><br />
-                  <strong>Helpline Number:</strong> ${AppConstant.helplineNumber}<br />
-                  <strong>Support Email:</strong> ${AppConstant.supportEmail}<br />
-                  <strong>Location:</strong> ${AppConstant.companyLocation}<br />
-                </td>
-                <td colSpan="3" style="text-align: right;">
-                  <strong>Service Amount:</strong> ${AppConstant.currencySymbol} ${
-                    invoiceData?.sub_total ? invoiceData.sub_total.toFixed(2) : 0
-                  }<br />
-                  <strong>User Platform Fee:</strong> ${AppConstant.currencySymbol} ${
-                    invoiceData?.user_paltform_fee
-                      ? invoiceData.user_paltform_fee.toFixed(2)
-                      : 0
-                  }<br />
-                  <strong>Taxes:</strong> ${AppConstant.currencySymbol} ${
-                    invoiceData?.tax ? invoiceData.tax.toFixed(2) : 0
-                  }<br />
-                  <strong>Total Price:</strong> ${AppConstant.currencySymbol} ${
-                    invoiceData?.total_price ? invoiceData.total_price.toFixed(2) : 0
-                  }
-                </td>
-              </tr>
+  <td
+    colSpan="3"
+    style="text-align: left; vertical-align: top;"
+  >
+    <strong>${AppConstant.companyName}</strong><br />
+    <strong>Helpline Number:</strong> ${AppConstant.helplineNumber}<br />
+    <strong>Support Email:</strong> ${AppConstant.supportEmail}<br />
+    <strong>Location:</strong> ${AppConstant.companyLocation}<br />
+  </td>
+
+  <td
+    colSpan="3"
+    style="text-align: right; vertical-align: top;"
+  >
+    <strong>Service Amount:</strong> ${AppConstant.currencySymbol} ${
+      invoiceData?.sub_total
+        ? invoiceData.sub_total.toFixed(2)
+        : 0
+    }<br />
+
+    <strong>User Platform Fee:</strong> ${AppConstant.currencySymbol} ${
+      invoiceData?.user_paltform_fee
+        ? invoiceData.user_paltform_fee.toFixed(2)
+        : 0
+    }<br />
+
+    <strong>Taxes:</strong> ${AppConstant.currencySymbol} ${
+      invoiceData?.tax
+        ? invoiceData.tax.toFixed(2)
+        : 0
+    }<br />
+
+    <strong>Total Price:</strong> ${AppConstant.currencySymbol} ${
+      invoiceData?.total_price
+        ? invoiceData.total_price.toFixed(2)
+        : 0
+    }
+  </td>
+</tr>
             </tbody>
           </table>
         </section>
