@@ -195,6 +195,8 @@ export interface OrderModel {
   order_status_info: OrderStatusInfoModel[] | [];
   /** Display / API: Paid | Unpaid | Partial — falls back to `is_paid` when absent */
   customer_payment_status?: string | null;
+    work_proof_image_urls?: string[] | null;
+
   /** Some order APIs alias customer status as `user_payment_status`. */
   user_payment_status?: string | null;
   partner_payment_status?: string | null;

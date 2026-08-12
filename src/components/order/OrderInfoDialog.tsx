@@ -599,6 +599,48 @@ const OrderInfoDialog: React.FC<OrderInfoDialogProps> & {
                   )}
             </div>
           </section>
+           {(orderDetails?.work_proof_image_urls?.length ?? 0) > 0 && (
+          <section className="custom-other-details mb-3" style={viewPaymentSectionShell}>
+          <h3 className="mb-3 pb-2 border-bottom">Work images</h3>
+
+          <div className="d-flex flex-wrap gap-3">
+            {orderDetails?.work_proof_image_urls?.map(
+              (imageUrl: string, index: number) => {
+                const imageSrc = `${AppConstant.WORK_PROOF_IMAGE_BASE_URL}${imageUrl}`;
+
+          return (
+            <div
+              key={`${imageUrl}-${index}`}
+              style={{
+                  width: "280px",
+                  height: "280px",
+                  border: "1px solid #ddd",
+                  borderRadius: "8px",
+                  overflow: "hidden",
+                  backgroundColor: "#f8f9fa",
+              }}
+            >
+              <img
+                src={imageSrc}
+                alt={`Work proof ${index + 1}`}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                  cursor: "pointer",
+                }}
+                onError={(e) => {
+                  console.error("Work proof image failed:", imageSrc);
+                  e.currentTarget.style.display = "none";
+                }}
+              />
+            </div>
+          );
+        }
+      )}
+    </div>
+  </section>
+)}
         </Modal.Body>
     </Modal>
   );
