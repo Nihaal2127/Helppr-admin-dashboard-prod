@@ -276,7 +276,10 @@ const CustomFormSelect: React.FC<CustomFormSelectProps> = ({
       }),
       ...(menuPortal
         ? {
-            menuPortal: (provided: any) => ({ ...provided, zIndex: 9999 }),
+            menuPortal: (provided: any) => ({
+              ...provided,
+              zIndex: 5000,
+            }),
           }
         : {}),
     }),

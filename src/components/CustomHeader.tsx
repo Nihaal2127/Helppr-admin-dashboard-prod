@@ -247,6 +247,7 @@ const CustomHeader = ({
             clearResetsTo="all"
             asCol={false}
             noBottomMargin
+            menuPortal
           />
         </div>
       )}
