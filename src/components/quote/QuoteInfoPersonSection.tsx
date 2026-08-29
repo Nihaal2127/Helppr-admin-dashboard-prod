@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import profileIcon from "../../assets/icons/profile.svg";
-import { resolveExistingImageSrc } from "../CustomImageUploader";
+import { resolveExistingImageSrc } from "../../services/documentUploadService";
 import { QUOTE_SECTION_TITLE_CLASS } from "../../lib/quote/quoteHelpers";
 
 export type QuoteInfoPersonRole = "customer" | "partner" | "employee";

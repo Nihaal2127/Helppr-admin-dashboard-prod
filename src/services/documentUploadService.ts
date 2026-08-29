@@ -80,6 +80,33 @@ export function resolveMediaAssetSrc(url?: string | null): string {
   return resolveMediaAssetSrcCandidates(url)[0] ?? "";
 }
 
+/**
+ * Display URL for existing images in the UI.
+ * Uses CDN resolution and cache-busts storage keys (not Google avatars).
+ */
+export function resolveExistingImageSrc(url?: string | null): string {
+  const resolved = resolveMediaAssetSrc(url);
+  if (!resolved) return "";
+  if (resolved.startsWith("data:") || resolved.startsWith("blob:")) {
+    return resolved;
+  }
+  // Google (and other) avatar hosts reject extra query params / our Referer.
+  // Cache-bust only our storage/CDN keys.
+  if (/^https?:\/\//i.test(resolved)) {
+    try {
+      const host = new URL(resolved).hostname.toLowerCase();
+      const isGoogleAvatar =
+        host.includes("googleusercontent.com") ||
+        host.includes("ggpht.com") ||
+        host.includes("google.com");
+      if (isGoogleAvatar) return resolved;
+    } catch {
+      return resolved;
+    }
+  }
+  return `${resolved}${resolved.includes("?") ? "&" : "?"}t=${Date.now()}`;
+}
+
 /** Not a server storage key — preview-only (must not go in `update_file_urls`). */
 export function isNonStorageImageUrl(url: string | null | undefined): boolean {
   const u = String(url ?? "").trim().toLowerCase();

@@ -49,7 +49,7 @@ import {
 } from "../../lib/quote/quoteHelpers";
 import { OrderInfoDialogHeaderActions } from "./OrderInfoDialogHeaderActions";
 import OrderAmountSummaryPanel from "./OrderAmountSummaryPanel";
-import { resolveExistingImageSrc } from "../CustomImageUploader";
+import { resolveExistingImageSrc } from "../../services/documentUploadService";
 import profilePlaceholder from "../../assets/icons/profile.svg";
 
 type OrderInfoDialogProps = {

@@ -89,6 +89,13 @@ export interface UserModel {
   service_prices?: (string | number)[] | null;
   /** Partner catalog rows from user-by-id (`category_id` / `service_id` may be populated objects). */
   partner_services?: PartnerServiceApiRow[] | null;
+  /**
+   * Partner list (`GET /user/getAll?type=2`) — available services as
+   * `{ service_id, service_name }[]`. Prefer for "Available Services" count.
+   */
+  services?:
+    | { service_id?: string; service_name?: string; [key: string]: unknown }[]
+    | null;
 
   /** Partner verification: `"pending"` | `"Approved"` | `"Rejected"` (API contract). */
   is_verified?: boolean | string | null;

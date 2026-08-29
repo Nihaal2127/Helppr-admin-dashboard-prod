@@ -10,9 +10,11 @@ import {
   isSupportedImageFile,
 } from "../helper/utility";
 import {
-  resolveMediaAssetSrc,
+  resolveExistingImageSrc,
   toStorageRelativePath,
 } from "../services/documentUploadService";
+
+export { resolveExistingImageSrc };
 
 /** Recommended upload dimensions — center-cropped to this square when needed. */
 const RECOMMENDED_IMAGE_SIZE_PX = 375;
@@ -42,29 +44,6 @@ interface CustomImageUploaderProps {
    * Skips image crop/normalization. Profile photos keep the default image-only path.
    */
   allowAnyFile?: boolean;
-}
-
-export function resolveExistingImageSrc(url?: string): string {
-  const resolved = resolveMediaAssetSrc(url);
-  if (!resolved) return "";
-  if (resolved.startsWith("data:") || resolved.startsWith("blob:")) {
-    return resolved;
-  }
-  // Google (and other) avatar hosts reject extra query params / our Referer.
-  // Cache-bust only our storage/CDN keys.
-  if (/^https?:\/\//i.test(resolved)) {
-    try {
-      const host = new URL(resolved).hostname.toLowerCase();
-      const isGoogleAvatar =
-        host.includes("googleusercontent.com") ||
-        host.includes("ggpht.com") ||
-        host.includes("google.com");
-      if (isGoogleAvatar) return resolved;
-    } catch {
-      return resolved;
-    }
-  }
-  return `${resolved}${resolved.includes("?") ? "&" : "?"}t=${Date.now()}`;
 }
 
 function LocalFilePreview({
