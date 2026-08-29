@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React from "react";
 import {
   downloadChatMediaFile,
-  resolveChatMediaUrlCandidates,
 } from "../../lib/chat/chatDisplayHelpers";
+import { useChatMediaSrc } from "../../lib/chat/useChatMediaSrc";
 import { showErrorAlert } from "../../lib/global/alertHelper";
 
 type ChatMessageImageProps = {
@@ -20,31 +20,11 @@ const ChatMessageImage: React.FC<ChatMessageImageProps> = ({
   className = "normal-chat-bubble-attachment-preview",
   onOpenPreview,
 }) => {
-  const candidates = useMemo(() => resolveChatMediaUrlCandidates(fileUrl), [fileUrl]);
-  const [srcIndex, setSrcIndex] = useState(0);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const { src, loadFailed, onError } = useChatMediaSrc(fileUrl);
 
   const downloadName = fileName || alt || "image.jpg";
 
-  useEffect(() => {
-    setSrcIndex(0);
-    setLoadFailed(false);
-  }, [fileUrl]);
-
-  const src = candidates[srcIndex] ?? "";
-  const hasMoreCandidates = srcIndex < candidates.length - 1;
-
-  if (!src) return null;
-
-  const tryNextSrc = () => {
-    setSrcIndex((prev) => {
-      if (prev < candidates.length - 1) {
-        return prev + 1;
-      }
-      setLoadFailed(true);
-      return prev;
-    });
-  };
+  if (!fileUrl) return null;
 
   const handleDownload = (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -76,22 +56,16 @@ const ChatMessageImage: React.FC<ChatMessageImageProps> = ({
             <i className="bi bi-image" />
             <span>{alt}</span>
           </span>
-        ) : (
+        ) : src ? (
           <img
-            key={`${srcIndex}-${src}`}
+            key={`${fileUrl}-${src}`}
             src={src}
             alt={alt}
             className={className}
             loading="lazy"
-            onError={() => {
-              if (hasMoreCandidates) {
-                tryNextSrc();
-              } else {
-                setLoadFailed(true);
-              }
-            }}
+            onError={onError}
           />
-        )}
+        ) : null}
       </button>
       {!loadFailed && (
         <button

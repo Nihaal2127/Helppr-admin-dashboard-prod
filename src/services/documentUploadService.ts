@@ -3,24 +3,81 @@ import { ApiPaths } from "../lib/global/remote/apiPaths";
 import { AppConstant } from "../lib/global/AppConstant";
 import { showLog } from "../helper/utility";
 
-function mediaAssetBaseUrl(): string {
+const LEGACY_IMAGE_CDN_BASE = "https://d2d4noj5f8gqer.cloudfront.net/";
+const LIVE_IMAGE_CDN_BASE = "https://d20g1bd5nfpo8h.cloudfront.net/";
+
+export function getMediaAssetBaseUrl(): string {
   const fromEnv = process.env.REACT_APP_IMAGE_BASE_URL?.trim();
   if (fromEnv) return fromEnv.replace(/\/?$/, "/");
   const fromConstant = AppConstant.IMAGE_BASE_URL.trim();
   if (fromConstant) return fromConstant.replace(/\/?$/, "/");
   // Help Pr Live: API often returns storage keys like `user_profile/...`.
-  return "https://d20g1bd5nfpo8h.cloudfront.net/";
+  return LIVE_IMAGE_CDN_BASE;
+}
+
+/** Known CDN bases for media fallbacks (order = try order for relative keys). */
+export function getMediaAssetCdnBases(): string[] {
+  const bases: string[] = [];
+  const add = (raw: string) => {
+    const base = String(raw ?? "").trim().replace(/\/?$/, "/");
+    if (base && /^https?:\/\//i.test(base) && !bases.includes(base)) {
+      bases.push(base);
+    }
+  };
+  add(process.env.REACT_APP_IMAGE_BASE_URL ?? "");
+  add(AppConstant.IMAGE_BASE_URL);
+  // Production partner/chat assets often live on this distribution.
+  add(AppConstant.CHAT_AVATAR_IMAGE_BASE_URL);
+  add(getMediaAssetBaseUrl());
+  add(LIVE_IMAGE_CDN_BASE);
+  add(LEGACY_IMAGE_CDN_BASE);
+  return bases;
+}
+
+function pushUniqueUrl(urls: string[], value: string) {
+  const v = String(value ?? "").trim();
+  if (v && !urls.includes(v)) urls.push(v);
+}
+
+/**
+ * Candidate browser URLs for an API/storage path.
+ * Tries multiple CloudFront bases when the first host 404s (same pattern as chat media).
+ */
+export function resolveMediaAssetSrcCandidates(url?: string | null): string[] {
+  const raw = String(url ?? "").trim();
+  if (!raw) return [];
+  if (raw.startsWith("data:") || raw.startsWith("blob:")) return [raw];
+  if (raw.startsWith("//")) return [`https:${raw}`];
+
+  const urls: string[] = [];
+  const bases = getMediaAssetCdnBases();
+
+  if (/^https?:\/\//i.test(raw)) {
+    pushUniqueUrl(urls, raw);
+    try {
+      const parsed = new URL(raw);
+      const path = parsed.pathname.replace(/^\//, "");
+      if (path) {
+        for (const base of bases) {
+          pushUniqueUrl(urls, `${base}${path}`);
+        }
+      }
+    } catch {
+      /* keep original only */
+    }
+    return urls;
+  }
+
+  const key = raw.replace(/^\//, "");
+  for (const base of bases) {
+    pushUniqueUrl(urls, `${base}${key}`);
+  }
+  return urls;
 }
 
 /** Browser-ready URL for API/storage paths (relative key, CDN URL, blob, or data URI). */
 export function resolveMediaAssetSrc(url?: string | null): string {
-  const u = String(url ?? "").trim();
-  if (!u) return "";
-  if (u.startsWith("data:") || u.startsWith("blob:")) return u;
-  if (u.startsWith("http://") || u.startsWith("https://")) return u;
-  if (u.startsWith("//")) return `https:${u}`;
-  const base = mediaAssetBaseUrl();
-  return `${base}${u.replace(/^\//, "")}`;
+  return resolveMediaAssetSrcCandidates(url)[0] ?? "";
 }
 
 /** Not a server storage key — preview-only (must not go in `update_file_urls`). */
@@ -33,10 +90,7 @@ export function isNonStorageImageUrl(url: string | null | undefined): boolean {
 export function toStorageRelativePath(url: string | null | undefined): string {
   const u = String(url ?? "").trim();
   if (!u || isNonStorageImageUrl(u)) return "";
-  const bases = [
-    mediaAssetBaseUrl(),
-    AppConstant.IMAGE_BASE_URL.replace(/\/?$/, "/"),
-  ].filter(Boolean);
+  const bases = getMediaAssetCdnBases();
   for (const base of bases) {
     if (u.startsWith(base)) {
       return u.slice(base.length).replace(/^\//, "");

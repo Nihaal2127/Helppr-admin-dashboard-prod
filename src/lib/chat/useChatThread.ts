@@ -437,6 +437,12 @@ export function useChatThread(chatId: string | null | undefined, opts?: { enable
       const messageType = extra?.type ?? (fileUrl ? "file" : "text");
       const messageContent =
         text || extra?.fileName?.trim() || (messageType === "image" ? "Image" : "File");
+      const attachmentMeta = fileUrl
+        ? {
+            fileName: extra?.fileName?.trim() || undefined,
+            file_url: fileUrl,
+          }
+        : undefined;
 
       const clientMessageId = newClientMessageId();
       const optimistic: ChatMessageModel = {
@@ -446,7 +452,7 @@ export function useChatThread(chatId: string | null | undefined, opts?: { enable
         content: messageContent,
         fileUrl: fileUrl || undefined,
         clientMessageId,
-        metadata: { clientMessageId },
+        metadata: { clientMessageId, ...attachmentMeta },
         createdAt: new Date().toISOString(),
         sendStatus: "sending",
       };
@@ -458,6 +464,7 @@ export function useChatThread(chatId: string | null | undefined, opts?: { enable
         content: messageContent,
         fileUrl: fileUrl || undefined,
         clientMessageId,
+        ...(attachmentMeta ? { metadata: attachmentMeta } : {}),
       };
 
       const sentViaSocket = socketConnected && socketSend(payload);

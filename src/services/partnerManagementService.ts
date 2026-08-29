@@ -13,7 +13,6 @@ import {
   sessionMayUseFranchiseIdApiFilter,
 } from "../lib/franchise/headerFranchisePreference";
 import { getCount } from "./getCountService";
-import { resolveMediaAssetSrc } from "./documentUploadService";
 
 export type PortfolioRow = {
   _id: string;
@@ -1173,38 +1172,60 @@ function countMediaFromPost(raw: Record<string, unknown>): {
   const imageUrls: string[] = [];
   const videoUrls: string[] = [];
   const pushUrl = (url: unknown, bucket: string[]) => {
-    const resolved = resolveMediaAssetSrc(String(url ?? ""));
-    if (resolved) bucket.push(resolved);
+    // Keep the API path/URL as-is — resolve + CDN fallbacks happen at render time.
+    const value = String(url ?? "").trim();
+    if (value) bucket.push(value);
   };
 
-  const images = raw.images;
-  if (Array.isArray(images)) {
-    for (const item of images) {
-      if (typeof item === "string") pushUrl(item, imageUrls);
-      else if (item && typeof item === "object") {
-        const o = item as Record<string, unknown>;
-        pushUrl(o.url ?? o.image_url ?? o.path, imageUrls);
-      }
-    }
-  }
-  const imageUrlsField = raw.image_urls ?? raw.imageUrls;
-  if (Array.isArray(imageUrlsField)) {
-    for (const u of imageUrlsField) pushUrl(u, imageUrls);
-  }
+  const pickMediaUrl = (item: Record<string, unknown>): string =>
+    String(
+      item.url ??
+        item.image_url ??
+        item.video_url ??
+        item.file_url ??
+        item.media_url ??
+        item.path ??
+        item.key ??
+        item.src ??
+        ""
+    ).trim();
 
-  const videos = raw.videos;
-  if (Array.isArray(videos)) {
-    for (const item of videos) {
-      if (typeof item === "string") pushUrl(item, videoUrls);
+  const ingestList = (list: unknown, bucket: string[]) => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      if (typeof item === "string") pushUrl(item, bucket);
       else if (item && typeof item === "object") {
-        const o = item as Record<string, unknown>;
-        pushUrl(o.url ?? o.video_url ?? o.path, videoUrls);
+        pushUrl(pickMediaUrl(item as Record<string, unknown>), bucket);
       }
     }
-  }
-  const videoUrlsField = raw.video_urls ?? raw.videoUrls;
-  if (Array.isArray(videoUrlsField)) {
-    for (const u of videoUrlsField) pushUrl(u, videoUrls);
+  };
+
+  ingestList(raw.images, imageUrls);
+  ingestList(raw.image_urls ?? raw.imageUrls, imageUrls);
+  ingestList(raw.videos, videoUrls);
+  ingestList(raw.video_urls ?? raw.videoUrls, videoUrls);
+
+  // Mixed media arrays (mobile apps often send `media` / `files`).
+  const mixed = raw.media ?? raw.files ?? raw.attachments;
+  if (Array.isArray(mixed)) {
+    for (const item of mixed) {
+      if (typeof item === "string") {
+        const lower = item.toLowerCase();
+        if (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(lower)) pushUrl(item, videoUrls);
+        else pushUrl(item, imageUrls);
+        continue;
+      }
+      if (!item || typeof item !== "object") continue;
+      const o = item as Record<string, unknown>;
+      const type = String(o.type ?? o.media_type ?? o.file_type ?? "").toLowerCase();
+      const url = pickMediaUrl(o);
+      if (!url) continue;
+      if (type.includes("video") || /\.(mp4|mov|webm|m4v)(\?|$)/i.test(url)) {
+        pushUrl(url, videoUrls);
+      } else {
+        pushUrl(url, imageUrls);
+      }
+    }
   }
 
   return { images: imageUrls, videos: videoUrls };

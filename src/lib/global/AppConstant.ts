@@ -2,6 +2,7 @@ import { CURRENCY } from "./paymentAndCurrency";
 
 const CHAT_SERVICE_URL = "https://chat.helppr.in";
 const CHAT_AVATAR_IMAGE_BASE_URL = "https://d2snwgkdggvp65.cloudfront.net/";
+const WORK_PROOF_IMAGE_BASE_URL = "https://d2snwgkdggvp65.cloudfront.net/";
 
 /**
  * Chat base URL for REST + Socket.IO.
@@ -24,10 +25,13 @@ export const AppConstant = {
     return getChatServiceUrl();
   },
    CHAT_AVATAR_IMAGE_BASE_URL,
+   WORK_PROOF_IMAGE_BASE_URL,
   IMAGE_BASE_URL: "", //Help Pr Live
   // BASE_URL: "http://localhost:5001/api",
   // BASE_URL: "https://raamisegei.execute-api.us-east-1.amazonaws.com/dev/api",
   // IMAGE_BASE_URL: "https://d2d4noj5f8gqer.cloudfront.net/",
+
+  
   authToken: "authToken",
   deviceToken: "deviceToken",
 
@@ -48,9 +52,9 @@ export const AppConstant = {
   currencyCode: CURRENCY.code,
   percentageSymbol: "%",
   companyName: "Helper",
-  helplineNumber: "+61434380737",
-  supportEmail: "info@sostyres.com.au",
-  companyLocation: " 8/41 Lensworth St, Coopers plains,4108, Australia",
+  helplineNumber: "+916301981170 ",
+  supportEmail: "Info@helppr.in",
+  companyLocation: "  2nd FLoor, 24-7-207/15/1, beside EPF Office, Revenue Colony, National Institute of Technology Campus, Kazipet, Hanamkonda, Telangana 506004",
 
 };
 

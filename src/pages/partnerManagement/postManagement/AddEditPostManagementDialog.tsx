@@ -3,11 +3,11 @@ import { Modal, Row, Col, Form, Button } from "react-bootstrap";
 import { useForm, UseFormRegister } from "react-hook-form";
 import CustomCloseButton from "../../../components/CustomCloseButton";
 import CustomFormSelect from "../../../components/CustomFormSelect";
-import { resolveExistingImageSrc } from "../../../components/CustomImageUploader";
 import { CustomFormInput } from "../../../components/CustomFormInput";
 import { openDialog } from "../../../lib/global/DialogManager";
 import { showErrorAlert } from "../../../lib/global/alertHelper";
 import { DetailsRow, WideLabelValueBlock } from "../../../helper/utility";
+import { useMediaAssetSrc } from "../../../hooks/useMediaAssetSrc";
 import {
   moderatePartnerPost,
   postStatusDisplayLabel,
@@ -29,32 +29,58 @@ type MediaItem = {
   title: string;
 };
 
-const VIEW_DEMO_MEDIA: MediaItem[] = [
-  {
-    id: 1,
-    type: "image",
-    url: "https://images.unsplash.com/photo-1511285560929-80b456fea0bc?auto=format&fit=crop&w=900&q=80",
-    title: "Wedding Image 1",
-  },
-  {
-    id: 2,
-    type: "image",
-    url: "https://images.unsplash.com/photo-1520854221256-17451cc331bf?auto=format&fit=crop&w=900&q=80",
-    title: "Wedding Image 2",
-  },
-  {
-    id: 3,
-    type: "video",
-    url: "https://www.w3schools.com/html/mov_bbb.mp4",
-    title: "Teaser Video 1",
-  },
-  {
-    id: 4,
-    type: "video",
-    url: "https://www.w3schools.com/html/movie.mp4",
-    title: "Teaser Video 2",
-  },
-];
+function PostMediaImage({ url, title }: { url: string; title: string }) {
+  const { src, loadFailed, onError } = useMediaAssetSrc(url);
+
+  if (loadFailed || !src) {
+    return (
+      <div
+        className="d-flex align-items-center justify-content-center text-muted small"
+        style={{ height: "160px", backgroundColor: "rgba(0,0,0,0.04)" }}
+      >
+        <i className="bi bi-image me-2" aria-hidden />
+        {title}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      key={`${url}-${src}`}
+      src={src}
+      alt={title}
+      className="d-block w-100"
+      style={{ height: "160px", objectFit: "cover" }}
+      onError={onError}
+    />
+  );
+}
+
+function PostMediaVideo({ url }: { url: string }) {
+  const { src, loadFailed, onError } = useMediaAssetSrc(url);
+
+  if (loadFailed || !src) {
+    return (
+      <div
+        className="d-flex align-items-center justify-content-center text-muted small"
+        style={{ height: "160px", backgroundColor: "rgba(0,0,0,0.04)" }}
+      >
+        <i className="bi bi-camera-video" aria-hidden />
+      </div>
+    );
+  }
+
+  return (
+    <video
+      key={`${url}-${src}`}
+      controls
+      className="d-block w-100"
+      style={{ height: "160px", objectFit: "cover" }}
+      src={src}
+      onError={onError}
+    />
+  );
+}
 
 type PostAddFormValues = {
   post_partner_name: string;
@@ -137,22 +163,22 @@ const AddEditPostManagementDialog: React.FC<
       const imageItems: MediaItem[] = (post.images ?? []).map((url, idx) => ({
         id: idx + 1,
         type: "image" as const,
-        url: resolveExistingImageSrc(url),
+        url: String(url ?? "").trim(),
         title: `Image ${idx + 1}`,
       }));
       const videoItems: MediaItem[] = (post.videos ?? []).map((url, idx) => ({
         id: imageItems.length + idx + 1,
         type: "video" as const,
-        url: resolveExistingImageSrc(url),
+        url: String(url ?? "").trim(),
         title: `Video ${idx + 1}`,
       }));
       const fromApi = [...imageItems, ...videoItems].filter((item) =>
-        Boolean(item.url?.trim())
+        Boolean(item.url)
       );
-      setMediaItems(fromApi.length > 0 ? fromApi : VIEW_DEMO_MEDIA);
+      // Prefer real API media; never fall back to demo Unsplash assets when empty.
+      setMediaItems(fromApi);
       setSelectedMediaIds([]);
-      nextMediaIdRef.current =
-        (fromApi.length > 0 ? fromApi.length : VIEW_DEMO_MEDIA.length) + 1;
+      nextMediaIdRef.current = fromApi.length + 1;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when dialog mode/post identity changes
   }, [
@@ -271,23 +297,9 @@ const AddEditPostManagementDialog: React.FC<
                 /> */}
               </div>
               {media.type === "image" ? (
-                <img
-                  src={media.url}
-                  alt={media.title}
-                  className="d-block w-100"
-                  style={{
-                    height: "160px",
-                    objectFit: "cover",
-                  }}
-                />
+                <PostMediaImage url={media.url} title={media.title} />
               ) : (
-                <video
-                  controls
-                  className="d-block w-100"
-                  style={{ height: "160px", objectFit: "cover" }}
-                >
-                  <source src={media.url} type="video/mp4" />
-                </video>
+                <PostMediaVideo url={media.url} />
               )}
               <div
                 className="px-2 py-2 small fw-medium"
