@@ -2,7 +2,7 @@ import { CountModel } from "../lib/models/CountModel";
 import { apiRequest } from "../lib/global/remote/apiHelper";
 import { ApiPaths } from "../lib/global/remote/apiPaths";
 import { showLog } from "../helper/utility";
-import { franchiseIdForUserGetAll } from "../lib/franchise/headerFranchisePreference";
+import { franchiseIdForApiQuery } from "../lib/franchise/headerFranchisePreference";
 
 const COUNT_RECORD_HINT_KEYS = [
   "total_user",
@@ -52,10 +52,10 @@ export type GetCountExtra = {
   to_date?: string;
 };
 
-/** Builds `POST /getCount?franchise_id=…` query string (same scoping as `GET …/getAll?franchise_id=`). */
+/** Builds `POST /getCount` URL; optional `franchise_id` for super admin/staff only (never auto for franchise portal). */
 function buildGetCountEndpoint(extra?: GetCountExtra): string {
   const params = new URLSearchParams();
-  const franchiseIdQuery = franchiseIdForUserGetAll(extra?.franchise_id);
+  const franchiseIdQuery = franchiseIdForApiQuery(extra?.franchise_id);
   if (franchiseIdQuery) params.set("franchise_id", franchiseIdQuery);
   if (extra?.from_date?.trim()) params.set("from_date", extra.from_date.trim());
   if (extra?.to_date?.trim()) params.set("to_date", extra.to_date.trim());
@@ -76,7 +76,7 @@ export const getCount = async (
 }> => {
   try {
     const payload: Record<string, unknown> = { type };
-    const franchiseIdQuery = franchiseIdForUserGetAll(extra?.franchise_id);
+    const franchiseIdQuery = franchiseIdForApiQuery(extra?.franchise_id);
     if (franchiseIdQuery) {
       payload.franchise_id = franchiseIdQuery;
     }

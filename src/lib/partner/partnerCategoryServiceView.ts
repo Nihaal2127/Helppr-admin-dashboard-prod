@@ -283,3 +283,62 @@ export function buildViewCategoryServiceGroupsFromPartnerServices(
     rows: byCat.get(cid)!.rows,
   }));
 }
+
+const MONGO_ID_RE = /^[a-f0-9]{24}$/i;
+
+function isPlaceholderServiceName(name: string, serviceId?: string): boolean {
+  const n = String(name ?? "").trim();
+  if (!n || n === "—") return true;
+  if (serviceId && n === serviceId) return true;
+  return MONGO_ID_RE.test(n);
+}
+
+export type PartnerCatalogNameSource = {
+  partner_services?: PartnerServiceApiRow[] | null;
+  service_names?: string[] | null;
+  service_ids?: string[] | null;
+  ["partner-services"]?: PartnerServiceApiRow[] | null;
+};
+
+/** Unique display names of services this partner provides (catalog rows / name lists). */
+export function collectPartnerProvidedServiceNames(
+  source: PartnerCatalogNameSource | null | undefined
+): { names: string[]; unresolvedIds: string[] } {
+  const seenName = new Set<string>();
+  const names: string[] = [];
+  const unresolved = new Set<string>();
+  const resolvedIds = new Set<string>();
+
+  const addName = (raw: string, serviceId?: string) => {
+    const n = String(raw ?? "").trim();
+    if (isPlaceholderServiceName(n, serviceId)) {
+      if (serviceId) unresolved.add(serviceId);
+      return;
+    }
+    const key = n.toLowerCase();
+    if (serviceId) resolvedIds.add(serviceId);
+    if (seenName.has(key)) return;
+    seenName.add(key);
+    names.push(n);
+  };
+
+  const partnerServices =
+    source?.partner_services ?? source?.["partner-services"] ?? null;
+  const groups =
+    buildViewCategoryServiceGroupsFromPartnerServices(partnerServices);
+  for (const g of groups) {
+    for (const row of g.rows) {
+      addName(row.name, row.serviceId);
+    }
+  }
+
+  const listedNames = source?.service_names ?? [];
+  for (const n of listedNames) addName(String(n ?? ""));
+
+  for (const raw of source?.service_ids ?? []) {
+    const id = String(raw ?? "").trim();
+    if (id && !resolvedIds.has(id)) unresolved.add(id);
+  }
+
+  return { names, unresolvedIds: Array.from(unresolved) };
+}

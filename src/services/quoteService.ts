@@ -40,7 +40,7 @@ export type QuoteUserOption = OptionType & { user_name: string };
 
 /**
  * Maps a service label to schedule UI: one day, date range, or one day with time window.
- * Heuristic over mock labels; with live API, options use real service names from dropdown.
+ * Heuristic over service labels; options use real service names from dropdown.
  */
 export function getQuoteServiceScheduleMode(
   serviceLabel: string
@@ -1410,6 +1410,129 @@ export function deriveQuoteScheduleMetrics(input: {
   };
 }
 
+export type QuoteScheduleDurationUnit = "hour" | "day" | "month";
+
+/** Billing cadence for Add Quote duration field (hours / days / months). */
+export function getQuoteScheduleDurationUnit(
+  paymentTypeKey: string
+): QuoteScheduleDurationUnit {
+  const key = extractMinDepositTypeKey(paymentTypeKey);
+  if (key === "per_hour" || key === "per_consultancy") return "hour";
+  if (key === "per_month") return "month";
+  return "day";
+}
+
+export function quoteScheduleDurationFieldLabel(
+  unit: QuoteScheduleDurationUnit
+): string {
+  if (unit === "hour") return "Hours";
+  if (unit === "month") return "Months";
+  return "Days";
+}
+
+/** Short hint shown under Requested Services in Add Quote. */
+export function quoteScheduleBillingHintText(
+  paymentTypeKey: string
+): string {
+  const unit = getQuoteScheduleDurationUnit(paymentTypeKey);
+  const word =
+    unit === "hour" ? "hourly" : unit === "month" ? "monthly" : "daily";
+  return `This service charges ${word}.`;
+}
+
+const DEFAULT_DAILY_WORK_HOURS = 8;
+
+function addDaysToYmd(ymd: string, dayOffset: number): string {
+  const d = new Date(ymd + "T12:00:00");
+  if (Number.isNaN(d.getTime())) return ymd;
+  d.setDate(d.getDate() + dayOffset);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function hhmmToScheduleTimeStorage(h: number, m: number): string {
+  const hh = Math.min(23, Math.max(0, h));
+  const mm = Math.min(59, Math.max(0, m));
+  return `2000-01-01T${pad2(hh)}:${pad2(mm)}:00`;
+}
+
+/**
+ * Derives `requested_date_to` and `requested_time_to` from duration + start date/time
+ * for the Add Quote simplified schedule (3 fields).
+ */
+export function deriveQuoteScheduleEndFromDuration(input: {
+  unit: QuoteScheduleDurationUnit;
+  duration: number;
+  startDate: string;
+  startTimeStorage: string;
+}): { to_date: string; end_time_storage: string } | null {
+  const from = isoOrDateToYmd(str(input.startDate));
+  const startHhmm = timeStorageToHHmm(input.startTimeStorage);
+  if (!from || !str(input.startTimeStorage).trim()) return null;
+
+  const duration = Math.max(1, Math.floor(Number(input.duration)) || 0);
+  const [sh, sm] = startHhmm.split(":").map((x) => parseInt(x, 10));
+  const startMins = sh * 60 + (sm || 0);
+
+  if (input.unit === "hour") {
+    const endMins = Math.min(startMins + duration * 60, 23 * 60 + 59);
+    const eh = Math.floor(endMins / 60);
+    const em = endMins % 60;
+    if (endMins <= startMins) return null;
+    return {
+      to_date: from,
+      end_time_storage: hhmmToScheduleTimeStorage(eh, em),
+    };
+  }
+
+  const endMins = Math.min(
+    startMins + DEFAULT_DAILY_WORK_HOURS * 60,
+    23 * 60 + 59
+  );
+  const eh = Math.floor(endMins / 60);
+  const em = endMins % 60;
+  const endTime = hhmmToScheduleTimeStorage(eh, em);
+
+  if (input.unit === "month") {
+    const totalDays = duration * 30;
+    return {
+      to_date: addDaysToYmd(from, totalDays - 1),
+      end_time_storage: endTime,
+    };
+  }
+
+  return {
+    to_date: addDaysToYmd(from, duration - 1),
+    end_time_storage: endTime,
+  };
+}
+
+/** Reverse of `deriveQuoteScheduleEndFromDuration` — seeds duration when editing existing schedule. */
+export function deriveQuoteScheduleDurationFromStored(input: {
+  unit: QuoteScheduleDurationUnit;
+  fromDate: string;
+  toDate: string;
+  startTimeStorage: string;
+  endTimeStorage: string;
+}): number {
+  const from = isoOrDateToYmd(str(input.fromDate));
+  const to = isoOrDateToYmd(str(input.toDate)) || from;
+  if (!from) return 1;
+  if (input.unit === "hour") {
+    return Math.max(
+      1,
+      ceilWholeHoursBetweenHHmm(
+        timeStorageToHHmm(input.startTimeStorage),
+        timeStorageToHHmm(input.endTimeStorage)
+      )
+    );
+  }
+  const days = ceilWholeDaysInclusive(from, to);
+  if (input.unit === "month") {
+    return Math.max(1, Math.ceil(days / 30));
+  }
+  return Math.max(1, days);
+}
+
 /** Partner rate + billing type; nested `service` and catalog option fill gaps when partner fields are blank. */
 export function resolvePartnerServiceBillingFields(
   row: Record<string, unknown>,
@@ -1609,6 +1732,7 @@ export function quoteListStatusParam(tab: QuoteTabKey): string {
 
 const QUOTE_SORTABLE_ACCESSORS = new Set([
   "quote_id",
+  "order_id",
   "requested_services",
   "services",
   "requested_partner",
@@ -1617,16 +1741,17 @@ const QUOTE_SORTABLE_ACCESSORS = new Set([
   "service_price",
   "requested_date",
   "scheduled_date",
-  "status",
+  "from_date",
 ]);
 
 /** Table column accessor → `GET /quote/getAll` `sort_by` (Postman). */
 const QUOTE_LIST_SORT_TO_API: Record<string, string> = {
   quote_id: "quote_sequence_id",
+  order_id: "order_id",
   service_price: "service_price",
   requested_date: "from_date",
   scheduled_date: "from_date",
-  status: "status",
+  from_date: "from_date",
   requested_services: "created_at",
   services: "created_at",
   requested_partner: "created_at",
@@ -1917,6 +2042,18 @@ function resolveQuoteOrderDisplayId(
   return undefined;
 }
 
+/** Order document `_id` for Success-tab Order Information dialog. */
+function resolveQuoteOrderMongoId(
+  r: Record<string, unknown>
+): string | undefined {
+  const fromRef =
+    refId(r.order_id) || refId(r.order) || refId(r.order_info);
+  if (fromRef) return fromRef;
+  const raw = str(r.order_id ?? r.orderId);
+  if (raw && isMongoObjectId(raw)) return raw;
+  return undefined;
+}
+
 /** API `from_date` / `to_date` may be full ISO; normalize to `YYYY-MM-DD` for schedule UI. */
 function isoOrDateToYmd(input: string): string {
   const t = str(input);
@@ -2174,6 +2311,21 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
   );
   const landmark = str(addr.landmark ?? r.landmark);
   const pincode = str(addr.pincode ?? r.pincode);
+  const contact_name =
+    str(
+      addr.contact_name ??
+        addr.contactName ??
+        r.contact_name ??
+        r.contactName
+    ) || undefined;
+  const contact_number =
+    str(
+      addr.contact_number ??
+        addr.contactNumber ??
+        addr.phone_number ??
+        r.contact_number ??
+        r.contactNumber
+    ) || undefined;
   const freeformAddress = str(addr.address);
   const address_line = freeformAddress;
   const explicitStreet = str(addr.street ?? addr.street_name ?? r.street);
@@ -2275,6 +2427,7 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
       r.scheduled_time_to ?? r.service_to_time ?? r.scheduled_end_time
     ),
     order_id: resolveQuoteOrderDisplayId(r),
+    order_mongo_id: resolveQuoteOrderMongoId(r),
     cancellation_reason:
       str(r.cancellation_reason ?? r.cancellationReason) || undefined,
     rejection_reason:
@@ -2291,21 +2444,32 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
       str(
         r.phone_number ??
           userRef?.phone_number ??
-          r.user_phone ??
-          addr.contact_number
-      ) || undefined,
+          r.user_phone
+      ) || contact_number || undefined,
     user_email: str(r.user_email ?? userRef?.email) || undefined,
     user_city: str(r.user_city ?? userRef?.city_name ?? city) || undefined,
+    contact_name: contact_name || undefined,
+    contact_number: contact_number || undefined,
     profile_url: (() => {
-      const s = str(r.profile_url ?? userRef?.profile_url);
+      const s = str(
+        r.profile_url ?? userRef?.profile_url ?? userRef?.image_url
+      );
       return s || null;
     })(),
     partner_profile_url: (() => {
-      const s = str(r.partner_profile_url ?? partnerRef?.profile_url);
+      const s = str(
+        r.partner_profile_url ??
+          partnerRef?.profile_url ??
+          partnerRef?.image_url
+      );
       return s || null;
     })(),
     employee_profile_url: (() => {
-      const s = str(r.employee_profile_url ?? employeeRef?.profile_url);
+      const s = str(
+        r.employee_profile_url ??
+          employeeRef?.profile_url ??
+          employeeRef?.image_url
+      );
       return s || null;
     })(),
     category_id: refId(r.category_id) || refId(categoryRef) || undefined,

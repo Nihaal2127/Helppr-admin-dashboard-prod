@@ -25,6 +25,9 @@ interface CustomTextFieldSelectProps {
   includeEmptyOption?: boolean;
   emptyOptionLabel?: string;
   isDisabled?: boolean;
+  onMenuOpen?: () => void;
+  /** Show required asterisk without react-hook-form `requiredMessage`. */
+  showRequiredMark?: boolean;
 }
 
 const CustomTextFieldSelect: React.FC<CustomTextFieldSelectProps> = ({
@@ -48,6 +51,8 @@ const CustomTextFieldSelect: React.FC<CustomTextFieldSelectProps> = ({
   includeEmptyOption,
   emptyOptionLabel,
   isDisabled = false,
+  onMenuOpen,
+  showRequiredMark = false,
 }) => {
   const rowMarginClass = noRowBottomMargin
     ? ""
@@ -65,7 +70,7 @@ const CustomTextFieldSelect: React.FC<CustomTextFieldSelectProps> = ({
         <label className="custom-profile-lable">
           <FieldLabelText
             label={label}
-            required={!!requiredMessage}
+            required={showRequiredMark || !!requiredMessage}
           />
         </label>
       </Col>
@@ -91,6 +96,8 @@ const CustomTextFieldSelect: React.FC<CustomTextFieldSelectProps> = ({
           includeEmptyOption={includeEmptyOption}
           emptyOptionLabel={emptyOptionLabel}
           isDisabled={isDisabled}
+          onMenuOpen={onMenuOpen}
+          showRequiredMark={showRequiredMark}
         />
       </Col>
     </Row>

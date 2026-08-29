@@ -7,7 +7,7 @@ import CustomUtilityBox from "../../components/CustomUtilityBox";
 import { capitalizeString, formatDate } from "../../helper/utility";
 import CustomTable from "../../components/CustomTable";
 import AddEditCategoryDialog from "./AddEditCategoryDialog";
-import AddEditServiceDialog from "./AddEditServiceDialog";
+import { showAddEditServiceDialog } from "./AddEditServiceDialog";
 import { CategoryModel } from "../../lib/models/CategoryModel";
 import { ServiceModel } from "../../lib/models/ServiceModel";
 import {
@@ -512,9 +512,12 @@ const ServiceManagement = () => {
           );
         }
       } else if (isService) {
-        const { response, service } = await fetchServiceById(openId);
+        const { response, service } = await fetchServiceById(
+          openId,
+          catalogFranchiseId
+        );
         if (response && service) {
-          AddEditServiceDialog.show(
+          showAddEditServiceDialog(
             true,
             service,
             openRequestedService,
@@ -529,6 +532,7 @@ const ServiceManagement = () => {
     setSearchParams,
     openRequestedCategory,
     openRequestedService,
+    catalogFranchiseId,
   ]);
 
   const categoryColumns = React.useMemo(
@@ -665,12 +669,15 @@ const ServiceManagement = () => {
                 showErrorAlert("Unable to open service: missing identifier.");
                 return;
               }
-              const { response, service } = await fetchServiceById(sid);
+              const { response, service } = await fetchServiceById(
+                sid,
+                catalogFranchiseId
+              );
               const record =
                 response && service
                   ? mergeServiceDetailForDialog(row.original, service)
                   : (row.original as ServiceModel);
-              AddEditServiceDialog.show(
+              showAddEditServiceDialog(
                 true,
                 record,
                 () => void refreshTableAfterMutation("box-service"),
@@ -690,6 +697,7 @@ const ServiceManagement = () => {
       franchiseCatalogScope,
       catalogListStatusField,
       setCatalogServiceActive,
+      catalogFranchiseId,
     ]
   );
 
@@ -781,12 +789,15 @@ const ServiceManagement = () => {
                 showErrorAlert("Unable to open service: missing identifier.");
                 return;
               }
-              const { response, service } = await fetchServiceById(sid);
+              const { response, service } = await fetchServiceById(
+                sid,
+                catalogFranchiseId
+              );
               const record =
                 response && service
                   ? mergeServiceDetailForDialog(row.original, service)
                   : (row.original as ServiceModel);
-              AddEditServiceDialog.show(
+              showAddEditServiceDialog(
                 true,
                 record,
                 openRequestedService,
@@ -797,7 +808,7 @@ const ServiceManagement = () => {
         ),
       },
     ],
-    [openRequestedService, currentPage, pageSize]
+    [openRequestedService, currentPage, pageSize, catalogFranchiseId]
   );
 
   return (
@@ -843,7 +854,7 @@ const ServiceManagement = () => {
                   ? AddEditCategoryDialog.show(false, null, () =>
                       void refreshTableAfterMutation(selectedBox)
                     )
-                  : AddEditServiceDialog.show(false, null, () =>
+                  : showAddEditServiceDialog(false, null, () =>
                       void refreshTableAfterMutation(selectedBox)
                     );
               }}

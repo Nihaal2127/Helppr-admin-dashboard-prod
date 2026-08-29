@@ -524,6 +524,16 @@ export const partnerCatalogControlStyle: React.CSSProperties = {
   minHeight: "38px",
 };
 
+/** Disabled / locked controls — gray “disabled” look (overrides primary border). */
+export const partnerCatalogDisabledControlStyle: React.CSSProperties = {
+  ...partnerCatalogControlStyle,
+  borderColor: "var(--txtfld-border, rgba(0, 0, 0, 0.12))",
+  backgroundColor: "var(--bs-secondary-bg, #e9ecef)",
+  color: "var(--bs-secondary-color, #6c757d)",
+  cursor: "not-allowed",
+  opacity: 1,
+};
+
 export const partnerCatalogOutlineAddBtn: React.CSSProperties = {
   width: "24px",
   height: "24px",

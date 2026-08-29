@@ -638,7 +638,12 @@ const FranchiseManagement = () => {
       { Header: "Phone", accessor: "phone_number" },
 
       { Header: "State", accessor: "state_name", sort: true },
-      { Header: "City", accessor: "city_name", sort: true },
+      {
+        Header: "City",
+        accessor: "city_name",
+        sort: true,
+        Cell: multiNamesHoverCell("city_name", "city_id"),
+      },
       {
         Header: "Area",
         accessor: "area_name",

@@ -27,7 +27,7 @@ export interface UserModel {
   is_blocked?: boolean;
   is_business: boolean;
   type: number;
-  registration_type: string | null;
+  registration_type: number | string | null;
   device_token: string | null;
   platform_type: number;
   business_info_id: string | null;
@@ -53,6 +53,9 @@ export interface UserModel {
   no_of_services?: number | null;
   total_earnings?: number | null;
   bal_payment?: number | null;
+  /** Partner list/detail — average of customer ratings. */
+  average_rating?: number | null;
+  rating_count?: number | null;
 
   total_payment: number | 0;
   paid_amount: number | 0;

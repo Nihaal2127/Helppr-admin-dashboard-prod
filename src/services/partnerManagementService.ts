@@ -33,6 +33,7 @@ export type PortfolioRow = {
   likes_count: string;
   comments_count: string;
   saves_count: string;
+  shares_count: string;
   ratings: string;
   location: string;
   is_active: boolean;
@@ -242,47 +243,54 @@ export type SubscriptionPlanOption = {
   value: string;
   label: string;
   price: number | null;
+  duration: number | null;
+  duration_type: string;
 };
 
+function mapSubscriptionPlanToOption(
+  plan: SubscriptionPlanModel
+): SubscriptionPlanOption | null {
+  const name = String(plan.plan_name ?? "")
+    .trim()
+    .toLowerCase();
+  if (!name) return null;
+  const id = String(plan._id ?? "").trim();
+  const priceNum = Number(String(plan.price ?? "").replace(/,/g, ""));
+  const durationNum = Number(String(plan.duration ?? "").replace(/,/g, ""));
+  return {
+    value: id || name,
+    label: capitalizeString(name),
+    price: Number.isFinite(priceNum) ? priceNum : null,
+    duration: Number.isFinite(durationNum) ? durationNum : null,
+    duration_type: String(plan.duration_type ?? "months").trim() || "months",
+  };
+}
+
+/** `GET /subscription-plan/getAll` — all catalog rows for partner plan pickers. */
 export async function fetchSubscriptionPlanOptions(): Promise<
   SubscriptionPlanOption[]
 > {
-  const res = await apiRequest(
-    ApiPaths.SUBSCRIPTION_PLAN_GET_DROP_DOWN(),
-    "GET"
-  );
-  if (!res.success) return [];
+  const pageSize = 50;
+  let page = 1;
+  const records: SubscriptionPlanModel[] = [];
 
-  const root = pickSubscriptionPlanListRoot(
-    (res.data ?? {}) as Record<string, unknown>
-  );
-  const rawList = (root.records ??
-    root.list ??
-    res.data?.records ??
-    []) as Record<string, unknown>[];
-  if (!Array.isArray(rawList)) return [];
+  for (;;) {
+    const res = await fetchSubscriptionPlans(page, pageSize, {});
+    if (!res.response) break;
+    records.push(...(res.records ?? []));
+    if (!res.totalPages || page >= res.totalPages) break;
+    page += 1;
+    if (page > 50) break;
+  }
 
   const out: SubscriptionPlanOption[] = [];
-  for (const r of rawList) {
-    const name = String(r.plan_name ?? "")
-      .trim()
-      .toLowerCase();
-    if (!name) continue;
-    if (r.is_active === false) continue;
-    const id =
-      r._id != null && String(r._id).trim() !== "" ? String(r._id) : "";
-    const priceRaw = r.price;
-    const priceNum =
-      typeof priceRaw === "number"
-        ? priceRaw
-        : priceRaw != null && String(priceRaw).trim() !== ""
-        ? Number(priceRaw)
-        : NaN;
-    out.push({
-      value: id || name,
-      label: capitalizeString(name),
-      price: Number.isFinite(priceNum) ? priceNum : null,
-    });
+  const seen = new Set<string>();
+  for (const plan of records) {
+    const opt = mapSubscriptionPlanToOption(plan);
+    if (!opt) continue;
+    if (seen.has(opt.value)) continue;
+    seen.add(opt.value);
+    out.push(opt);
   }
   return out;
 }
@@ -364,7 +372,9 @@ function mapPartnerSubscriptionApiRecord(
     rating: String(raw.rating ?? ""),
     location: String(raw.location ?? ""),
     address: String(raw.address ?? ""),
-    banner_image: String(raw.banner_image ?? ""),
+    banner_image: String(
+      raw.banner_image_url ?? raw.banner_image ?? raw.bannerImageUrl ?? ""
+    ),
     is_active: isActive,
     notes: String(raw.notes ?? ""),
   };
@@ -551,6 +561,30 @@ export async function voidPartnerSubscription(id: string): Promise<boolean> {
   return Boolean(res.success);
 }
 
+function partnerSubscriptionBannerUrlForApi(
+  sub: PartnerSubscriptionModel
+): string {
+  if ((sub.subscription_plan ?? "").toLowerCase() !== "platinum") return "";
+  const u = String(sub.banner_image ?? "").trim();
+  if (!u || u.startsWith("data:") || u.startsWith("blob:")) return "";
+  return u;
+}
+
+function pickPartnerSubscriptionIdFromApiPayload(data: unknown): string {
+  if (!data || typeof data !== "object") return "";
+  const root = data as Record<string, unknown>;
+  const inner =
+    root.data != null && typeof root.data === "object" && !Array.isArray(root.data)
+      ? (root.data as Record<string, unknown>)
+      : root;
+  const rec = inner.record ?? inner;
+  if (rec && typeof rec === "object" && !Array.isArray(rec)) {
+    const row = rec as Record<string, unknown>;
+    return String(row._id ?? row.id ?? "").trim();
+  }
+  return String(inner._id ?? inner.id ?? "").trim();
+}
+
 /**
  * Persists a partner subscription. Update vs create is determined only by `sub._id`
  * (Postman: `PUT /partner-subscription/update/:id` vs `POST /partner-subscription/create`).
@@ -578,6 +612,8 @@ export async function savePartnerSubscription(
     if (pid && /^[a-f\d]{24}$/i.test(pid)) {
       body.subscription_plan_id = pid;
     }
+    const bannerUrl = partnerSubscriptionBannerUrlForApi(sub);
+    if (bannerUrl) body.banner_image_url = bannerUrl;
     const res = await apiRequest(
       ApiPaths.PARTNER_SUBSCRIPTION_UPDATE(String(sub._id)),
       "PUT",
@@ -611,7 +647,20 @@ export async function savePartnerSubscription(
     "POST",
     createBody
   );
-  return Boolean(res.success);
+  if (!res.success) return false;
+
+  const bannerUrl = partnerSubscriptionBannerUrlForApi(sub);
+  if (!bannerUrl) return true;
+
+  const createdId = pickPartnerSubscriptionIdFromApiPayload(res.data);
+  if (!createdId) return true;
+
+  const bannerRes = await apiRequest(
+    ApiPaths.PARTNER_SUBSCRIPTION_UPDATE(createdId),
+    "PUT",
+    { banner_image_url: bannerUrl }
+  );
+  return Boolean(bannerRes.success);
 }
 
 function formatPortfolioCount(val: unknown): string {
@@ -819,6 +868,12 @@ function mapPartnersBrowseToPortfolioRow(
     ),
     saves_count: formatPortfolioCount(
       statsSource.saves_count ?? statsSource.savesCount ?? statsSource.saves
+    ),
+    shares_count: formatPortfolioCount(
+      statsSource.shares_count ??
+        statsSource.sharesCount ??
+        statsSource.share_count ??
+        statsSource.shares
     ),
     ratings: formatPortfolioCount(
       raw.average_rating ?? raw.ratings ?? raw.rating ?? raw.rating_count
@@ -1044,6 +1099,8 @@ export type PostManagementStats = {
   Published: number;
   Hidden: number;
   Removed: number;
+  Pending: number;
+  Rejected: number;
 };
 
 const EMPTY_POST_STATS: PostManagementStats = {
@@ -1051,13 +1108,17 @@ const EMPTY_POST_STATS: PostManagementStats = {
   Published: 0,
   Hidden: 0,
   Removed: 0,
+  Pending: 0,
+  Rejected: 0,
 };
 
-/** Human label for post `status` (`published` | `hidden` | `removed`). */
+/** Human label for post `status`. */
 export function postStatusDisplayLabel(status: PostModel["status"]): string {
   if (status === "published") return "Published";
   if (status === "hidden") return "Hidden";
   if (status === "removed") return "Removed";
+  if (status === "pending") return "Pending";
+  if (status === "rejected") return "Reject";
   return capitalizeString(status);
 }
 
@@ -1065,6 +1126,8 @@ export function postStatusDisplayLabel(status: PostModel["status"]): string {
 export function postStatusTextClass(status: PostModel["status"]): string {
   if (status === "published") return "text-success fw-bold";
   if (status === "hidden") return "text-warning fw-bold";
+  if (status === "pending") return "text-secondary fw-bold";
+  if (status === "rejected") return "text-danger fw-bold";
   return "text-danger fw-bold";
 }
 
@@ -1080,7 +1143,16 @@ function normalizePartnerPostStatus(
   status: string | undefined
 ): PostModel["status"] {
   const s = String(status ?? "").toLowerCase();
-  if (s === "published" || s === "hidden" || s === "removed") return s;
+  if (
+    s === "published" ||
+    s === "hidden" ||
+    s === "removed" ||
+    s === "pending" ||
+    s === "rejected" ||
+    s === "reject"
+  ) {
+    return s === "reject" ? "rejected" : (s as PostModel["status"]);
+  }
   return "published";
 }
 
@@ -1190,6 +1262,7 @@ function mapPartnerPostApiRecord(raw: Record<string, unknown>): PostModel {
     location: String(raw.location ?? "").trim(),
     uploaded_date: uploaded,
     status: normalizePartnerPostStatus(String(raw.status ?? "")),
+    rejection_reason: String(raw.rejection_reason ?? "").trim() || undefined,
   };
 }
 
@@ -1217,6 +1290,7 @@ async function fetchPartnerPostListPage(
   filters: {
     status?: string;
     franchiseId?: string;
+    partnerId?: string;
   }
 ): Promise<{ root: Record<string, unknown>; records: PostModel[] }> {
   const params = new URLSearchParams({
@@ -1232,6 +1306,10 @@ async function fetchPartnerPostListPage(
     /^[a-f\d]{24}$/i.test(franchiseId)
   ) {
     params.set("franchise_id", franchiseId);
+  }
+  const partnerId = (filters.partnerId ?? "").trim();
+  if (partnerId && /^[a-f\d]{24}$/i.test(partnerId)) {
+    params.set("partner_id", partnerId);
   }
 
   const res = await apiRequest(
@@ -1252,8 +1330,7 @@ async function fetchPartnerPostListPage(
 
 /**
  * Maps `GET /partner-post/getCounts` or `POST /getCount` `{ type: "partner-post-management" }`
- * into post summary cards (Published / Hidden / Removed). Report buckets (`pending`, `reviewed`,
- * `dismissed`) are ignored here — they belong to the reports queue, not the post list.
+ * into post summary cards (Published / Hidden / Removed / Pending / Rejected).
  */
 export function mapPostManagementStatsFromCountRecord(
   record: Record<string, unknown> | null | undefined
@@ -1275,11 +1352,15 @@ export function mapPostManagementStatsFromCountRecord(
   const published = pick("published");
   const hidden = pick("hidden");
   const removed = pick("removed");
+  const pending = pick("pending", "pending_posts");
+  const rejected = pick("rejected", "reject", "rejected_posts");
   const explicitTotal = pick("total", "total_posts", "total_partner_posts");
   if (
     published === null &&
     hidden === null &&
     removed === null &&
+    pending === null &&
+    rejected === null &&
     explicitTotal === null
   ) {
     return null;
@@ -1287,11 +1368,15 @@ export function mapPostManagementStatsFromCountRecord(
   const pub = published ?? 0;
   const hid = hidden ?? 0;
   const rem = removed ?? 0;
+  const pen = pending ?? 0;
+  const rej = rejected ?? 0;
   return {
-    Total: explicitTotal ?? pub + hid + rem,
+    Total: explicitTotal ?? pub + hid + rem + pen + rej,
     Published: pub,
     Hidden: hid,
     Removed: rem,
+    Pending: pen,
+    Rejected: rej,
   };
 }
 
@@ -1417,16 +1502,60 @@ export async function fetchPostList(
 /** @deprecated Use `fetchPostList` for the table and `fetchPostManagementSummary` for summary cards. */
 export const fetchPosts = fetchPostList;
 
+/**
+ * Resolve a single partner post for notification deep-links.
+ * Uses `GET /partner-post/getAll` (no dedicated get-by-id in admin API).
+ */
+export async function fetchPartnerPostById(
+  postId: string,
+  options?: { partnerId?: string; franchiseId?: string }
+): Promise<PostModel | null> {
+  const id = String(postId ?? "").trim();
+  if (!id) return null;
+
+  const partnerId = String(options?.partnerId ?? "").trim();
+  const franchiseId = String(options?.franchiseId ?? "").trim();
+  const baseFilters = {
+    ...(partnerId ? { partnerId } : {}),
+    ...(franchiseId ? { franchiseId } : {}),
+  };
+
+  const findInPages = async (status?: string): Promise<PostModel | null> => {
+    for (let page = 1; page <= 5; page += 1) {
+      const { root, records } = await fetchPartnerPostListPage(page, 100, {
+        ...baseFilters,
+        ...(status ? { status } : {}),
+      });
+      const hit = records.find(
+        (row) =>
+          String(row._id ?? "").trim() === id || String(row.id ?? "").trim() === id
+      );
+      if (hit) return hit;
+      const totalPages = resolvePartnerPostTotalPages(root, 100, records.length);
+      if (page >= totalPages || records.length === 0) break;
+    }
+    return null;
+  };
+
+  return (await findInPages("pending")) || (await findInPages()) || null;
+}
+
 export async function moderatePartnerPost(
   postId: string,
-  status: PostModel["status"]
+  status: PostModel["status"],
+  options?: { rejection_reason?: string }
 ): Promise<boolean> {
   const id = String(postId ?? "").trim();
   if (!id) return false;
+  const body: Record<string, unknown> = { status };
+  if (status === "rejected") {
+    const reason = String(options?.rejection_reason ?? "").trim();
+    if (reason) body.rejection_reason = reason;
+  }
   const res = await apiRequest(
     ApiPaths.PARTNER_POST_MODERATE(id),
     "PUT",
-    { status }
+    body
   );
   return Boolean(res.success);
 }

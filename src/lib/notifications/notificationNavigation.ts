@@ -65,6 +65,9 @@ export function parseNotificationEntityFields(raw: Record<string, unknown>): {
     metadata?.order_unique_id ??
     metadata?.order_id ??
     metadata?.quote_id ??
+    metadata?.post_id ??
+    metadata?.partner_post_id ??
+    metadata?.portfolio_post_id ??
     metadata?.partner_id ??
     metadata?.user_id ??
     metadata?.expense_id ??
@@ -180,6 +183,59 @@ function isServiceRequestIntent(notification: NotificationModel): boolean {
   );
 }
 
+function isPostApprovalIntent(notification: NotificationModel): boolean {
+  const blob = notificationIntentText(notification);
+  const event = String(notification.event ?? "").toUpperCase();
+  const entityType = String(notification.entity?.type ?? "")
+    .trim()
+    .toLowerCase();
+  if (
+    entityType === "post" ||
+    entityType === "partner_post" ||
+    entityType === "portfolio_post"
+  ) {
+    return true;
+  }
+  if (
+    event.includes("PARTNER_POST") ||
+    event.includes("PORTFOLIO_POST") ||
+    (event.includes("POST") &&
+      (event.includes("APPROV") ||
+        event.includes("PENDING") ||
+        event.includes("REVIEW") ||
+        event.includes("SUBMIT") ||
+        event.includes("MODERAT")))
+  ) {
+    return true;
+  }
+  return (
+    blob.includes("post awaiting approval") ||
+    blob.includes("new post awaiting") ||
+    blob.includes("new post approval") ||
+    blob.includes("portfolio post for review") ||
+    blob.includes("submitted a portfolio post") ||
+    blob.includes("post for review") ||
+    blob.includes("post approval")
+  );
+}
+
+function resolvePostId(notification: NotificationModel): string {
+  const meta = notification.metadata ?? {};
+  const entityType = String(notification.entity?.type ?? "")
+    .trim()
+    .toLowerCase();
+  const entityId = String(notification.entity?.id ?? "").trim();
+  return (
+    metaId(meta, "post_id", "partner_post_id", "portfolio_post_id") ||
+    (entityType === "post" ||
+    entityType === "partner_post" ||
+    entityType === "portfolio_post"
+      ? entityId
+      : "") ||
+    String(notification.referenceId ?? "").trim()
+  );
+}
+
 function getSessionRouteContext() {
   const role = getLocalStorage(AppConstant.userRole);
   const allowedMenuKeys = parseAllowedMenuKeys(
@@ -283,6 +339,13 @@ export function resolveNotificationEntityId(
     (event.includes("ORDER") && !event.includes("PAYOUT"));
   if (looksLikeOrder && orderId) {
     return { type: "order", id: orderId };
+  }
+
+  // Partner post / portfolio post awaiting approval — before partner/user intents
+  // (backend may set entity.type = "user" | "partner" with post_id in metadata).
+  if (isPostApprovalIntent(notification)) {
+    const postId = resolvePostId(notification);
+    return { type: "post", id: postId || "list" };
   }
 
   // Partner verification: entity is usually `{ type: "user", id }` — override to verification modal
@@ -495,6 +558,9 @@ export function buildNotificationTargetPath(
     ) {
       return resolveCatalogRequestPath("service");
     }
+    if (isPostApprovalIntent(notification)) {
+      return `${ROUTES.PartnerManagement.path}?section=post`;
+    }
     return null;
   }
 
@@ -555,8 +621,16 @@ export function buildNotificationTargetPath(
     return `${ROUTES.PartnerManagement.path}?section=portfolio`;
   }
 
-  if (type === "partner_post" || type === "post") {
-    return `${ROUTES.PartnerManagement.path}?section=post`;
+  if (type === "partner_post" || type === "post" || type === "portfolio_post") {
+    const params = new URLSearchParams({ section: "post" });
+    if (id && id !== "list") params.set("openId", id);
+    const partnerId = metaId(
+      notification.metadata ?? {},
+      "partner_id",
+      "partner_mongo_id"
+    );
+    if (partnerId) params.set("partnerId", partnerId);
+    return `${ROUTES.PartnerManagement.path}?${params.toString()}`;
   }
 
   if (type === "expense") {
@@ -630,6 +704,32 @@ export function openOrderFromNotification(
   void import("../../components/order/showOrderInfoDialog").then(
     ({ showOrderInfoDialog }) => {
       showOrderInfoDialog(orderMongoId, onRefresh ?? (() => undefined));
+    }
+  );
+}
+
+export function openPostFromNotification(
+  postId: string,
+  onRefresh?: () => void,
+  options?: { partnerId?: string }
+): void {
+  const id = String(postId ?? "").trim();
+  if (!id || id === "list") return;
+  void import("../../services/partnerManagementService").then(
+    async ({ fetchPartnerPostById }) => {
+      const post = await fetchPartnerPostById(id, {
+        partnerId: options?.partnerId,
+      });
+      if (!post) return;
+      void import(
+        "../../pages/partnerManagement/postManagement/AddEditPostManagementDialog"
+      ).then(({ default: AddEditPostManagementDialog }) => {
+        AddEditPostManagementDialog.show(
+          false,
+          post,
+          onRefresh ?? (() => undefined)
+        );
+      });
     }
   );
 }

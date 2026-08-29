@@ -28,15 +28,30 @@ import {
   useFranchiseHeaderForm,
   useFranchiseScopedGetCount,
 } from "../../lib/global/hooks/useFranchiseScopedGetCount";
-import { franchiseIdForUserGetAll } from "../../lib/franchise/headerFranchisePreference";
+import { franchiseIdForApiQuery } from "../../lib/franchise/headerFranchisePreference";
 import { UserModel } from "../../lib/models/UserModel";
-import { showUserDetailsDialog } from "../../components/user";
-import { PartnerDetailsDialog } from "../../components/partner";
+import { showUserDetailsDialog, ServiceDetailsDialog } from "../../components/user";
+import { PartnerDetailsDialog, PartnerRatingsDialog } from "../../components/partner";
+import PartnerProvidedServicesDialog from "../../components/partner/PartnerProvidedServicesDialog";
 import PartnerVerificationReviewModal from "./PartnerVerificationReviewModal";
 import CustomActionColumn from "../../components/CustomActionColumn";
 import { openConfirmDialog } from "../../components/CustomConfirmDialog";
 import type { ServerTableSortBy } from "../../lib/global/serverTableSort";
 import ChangePartnerPasswordDialog from "./ChangePartnerPasswordDialog";
+
+const REGISTRATION_TYPE_LABEL: Record<number, string> = {
+  1: "Phone number",
+  2: "Google",
+  3: "Apple",
+  4: "Admin",
+  5: "Email"
+};
+
+function registrationTypeLabel(value: unknown): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return REGISTRATION_TYPE_LABEL[n] ?? "—";
+}
 
 const UserManagement = () => {
   const location = useLocation();
@@ -101,20 +116,18 @@ const UserManagement = () => {
     setUtilitySearchKey((k) => k + 1);
   }, [location.state]);
 
-  /** Summary boxes: `POST /getCount` `{ type: "user-management", franchise_id? }` — refetches when header franchise changes. */
+  /** Summary boxes and lists: scope by header franchise for super admin/staff. */
 
   const fetchData = useCallback(
     async (listPage?: number) => {
       const page =
         typeof listPage === "number" && listPage >= 1 ? listPage : currentPage;
 
-    const franchiseScope =
-      franchiseIdForUserGetAll(headerFranchiseId) || undefined;
-
+    const franchiseId = franchiseIdForApiQuery(headerFranchiseId) || undefined;
     const filters = {
       keyword: searchKeyword || undefined,
       status: statusFilter,
-      ...(franchiseScope ? { franchise_id: franchiseScope } : {}),
+      ...(franchiseId ? { franchise_id: franchiseId } : {}),
     };
 
     if (selectedBox === "box-verification") {
@@ -178,9 +191,13 @@ const UserManagement = () => {
       }
     } else {
       const type = selectedBox === "box-user" ? 4 : 2;
+      const partnerStatus = String(statusFilter ?? "").trim().toLowerCase();
+      // Partner Inactive: is_active=false + is_blocked=true — do not force is_verified=approved.
       const partnerFilters =
         selectedBox === "box-partner"
-          ? { ...filters, is_verified: PARTNER_VERIFICATION.APPROVED }
+          ? partnerStatus === "false"
+            ? { ...filters, is_blocked: "true" as const }
+            : { ...filters, is_verified: PARTNER_VERIFICATION.APPROVED }
           : filters;
       const { response, users, totalPages } = await fetchUser(
         false,
@@ -222,6 +239,10 @@ const UserManagement = () => {
     void fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [headerFranchiseId]);
+
   const refreshData = useCallback(
     async (_selected: string) => {
       await fetchData();
@@ -256,6 +277,26 @@ const UserManagement = () => {
   const userShow = useCallback(
     (userId: string) => {
       showUserDetailsDialog(userId, () => {
+        void refreshData("box-user");
+      });
+    },
+    [refreshData]
+  );
+
+  const openPartnerProvidedServices = useCallback(
+    (partnerId: string, partnerName?: string) => {
+      const id = String(partnerId ?? "").trim();
+      if (!id) return;
+      PartnerProvidedServicesDialog.show(id, partnerName);
+    },
+    []
+  );
+
+  const openUserTotalServices = useCallback(
+    (userId: string) => {
+      const id = String(userId ?? "").trim();
+      if (!id) return;
+      ServiceDetailsDialog.show(id, false, null, () => {
         void refreshData("box-user");
       });
     },
@@ -394,7 +435,46 @@ const UserManagement = () => {
         Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
           String(row.original?.email ?? "").trim() || "—",
       },
-      { Header: "Service Taken", accessor: "total_service" },
+      {
+        Header: "Phone",
+        accessor: "phone_number",
+        Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
+          String(row.original?.phone_number ?? "").trim() || "—",
+      },
+      {
+        Header: "Registration",
+        accessor: "registration_type",
+        Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
+          registrationTypeLabel(row.original?.registration_type),
+      },
+      {
+        Header: "Service Taken",
+        id: "total_service",
+        accessor: "total_service",
+        sort: true,
+        Cell: ({ row }: { row: { original: UserModel } }) => {
+          const count =
+            Number(
+              row.original?.total_service ?? row.original?.no_of_services ?? 0
+            ) || 0;
+          const id = String(row.original?._id ?? "").trim();
+          return (
+            <button
+              type="button"
+              className="btn btn-link p-0 m-0 align-baseline text-decoration-underline"
+              style={{
+                fontSize: "inherit",
+                color: "#000",
+                lineHeight: "inherit",
+              }}
+              onClick={() => openUserTotalServices(id)}
+              disabled={!id}
+            >
+              {count}
+            </button>
+          );
+        },
+      },
       // { Header: "Service Paid", accessor: "service_paid" },
       // { Header: "Service Unpaid", accessor: "service_unpaid" },
       {
@@ -454,7 +534,7 @@ const UserManagement = () => {
         ),
       },
     ],
-    [currentPage, pageSize, handleUserDelete, userShow, userChangePassword]
+    [currentPage, pageSize, handleUserDelete, userShow, userChangePassword, openUserTotalServices]
   );
 
   const partnerColumns = React.useMemo(
@@ -477,7 +557,50 @@ const UserManagement = () => {
         Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
           String(row.original?.email ?? "").trim() || "—",
       },
-      { Header: "No. of services", accessor: "no_of_services" },
+      {
+        Header: "Phone",
+        accessor: "phone_number",
+        Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
+          String(row.original?.phone_number ?? "").trim() || "—",
+      },
+      {
+        Header: "Registration",
+        accessor: "registration_type",
+        Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
+          registrationTypeLabel(row.original?.registration_type),
+      },
+      {
+        Header: "Available Services",
+        id: "no_of_services",
+        accessor: "no_of_services",
+        sort: true,
+        Cell: ({ row }: { row: { original: UserModel } }) => {
+          const count = Number(row.original?.no_of_services ?? 0) || 0;
+          const id = String(row.original?._id ?? "").trim();
+          return (
+            <button
+              type="button"
+              className="btn btn-link p-0 m-0 align-baseline text-decoration-underline"
+              style={{
+                fontSize: "inherit",
+                color: "#000",
+                lineHeight: "inherit",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                openPartnerProvidedServices(
+                  id,
+                  String(row.original?.name ?? "").trim() || undefined
+                );
+              }}
+              disabled={!id}
+            >
+              {count}
+            </button>
+          );
+        },
+      },
       {
         Header: "Plan",
         id: "subscription_plan",
@@ -523,7 +646,40 @@ const UserManagement = () => {
         accessor: "paid_amount",
         Cell: priceCell("paid_amount"),
       },
-      { Header: "Rating", accessor: "rating" },
+      {
+        Header: "Rating",
+        id: "average_rating",
+        accessor: "average_rating",
+        Cell: ({ row }: { row: { original: UserModel } }) => {
+          const raw = row.original.average_rating;
+          let label = "—";
+          if (raw !== null && raw !== undefined) {
+            const n = Number(raw);
+            if (Number.isFinite(n)) {
+              label = Number.isInteger(n) ? String(n) : n.toFixed(1);
+            }
+          }
+          const partnerId = String(row.original._id ?? "").trim();
+          if (!partnerId) return label;
+          return (
+            <span
+              style={{
+                textDecoration: "underline",
+                textDecorationThickness: "1px",
+                cursor: "pointer",
+              }}
+              onClick={() =>
+                PartnerRatingsDialog.show(
+                  partnerId,
+                  String(row.original.name ?? "").trim() || undefined
+                )
+              }
+            >
+              {label}
+            </span>
+          );
+        },
+      },
       {
         Header: "Status",
         accessor: "is_active",
@@ -548,6 +704,7 @@ const UserManagement = () => {
       handleUserDelete,
       partnerShow,
       partnerChangePassword,
+      openPartnerProvidedServices,
     ]
   );
 
@@ -564,12 +721,20 @@ const UserManagement = () => {
       {
         Header: "Email",
         accessor: "email",
-        Cell: ({ row }) => row.original.email || "-----",
+        Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
+          String(row.original?.email ?? "").trim() || "—",
       },
       {
         Header: "Phone",
         accessor: "phone_number",
-        Cell: ({ row }) => row.original.phone_number || "-----",
+        Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
+          String(row.original?.phone_number ?? "").trim() || "—",
+      },
+      {
+        Header: "Registration",
+        accessor: "registration_type",
+        Cell: ({ row }: { row: { original: Record<string, unknown> } }) =>
+          registrationTypeLabel(row.original?.registration_type),
       },
       {
         Header: "Plan",

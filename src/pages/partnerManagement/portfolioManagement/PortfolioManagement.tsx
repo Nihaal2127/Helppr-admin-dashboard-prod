@@ -266,6 +266,7 @@ const PortfolioManagement = ({ onBack }: PortfolioManagementProps) => {
       { Header: "Likes Count", accessor: "likes_count" },
       // { Header: "Comments Count", accessor: "comments_count" },
       { Header: "Saves Count", accessor: "saves_count" },
+      { Header: "Share Count", accessor: "shares_count" },
       { Header: "Ratings", accessor: "ratings" },
       
       {

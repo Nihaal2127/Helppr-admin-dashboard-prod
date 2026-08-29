@@ -2,8 +2,11 @@ import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { Button, Col, Row } from "react-bootstrap";
 import { showErrorAlert } from "../lib/global/alertHelper";
 import {
+  getSupportedDocumentMaxSizeBytes,
   getSupportedImageExtensions,
   getSupportedImageMaxSizeBytes,
+  isLikelyImageFile,
+  isSupportedDocumentFile,
   isSupportedImageFile,
 } from "../helper/utility";
 import {
@@ -15,6 +18,11 @@ import {
 const RECOMMENDED_IMAGE_SIZE_PX = 375;
 const RECOMMENDED_ASPECT_RATIO = "1:1";
 
+export type ImageUploaderOutputSize = {
+  width: number;
+  height: number;
+};
+
 interface CustomImageUploaderProps {
   label: string;
   maxFiles?: number;
@@ -25,6 +33,15 @@ interface CustomImageUploaderProps {
   compact?: boolean;
   /** Omit the built-in label (use an external label in the parent row). */
   hideLabel?: boolean;
+  /** Center-crop uploads to this size (default 375×375). */
+  outputSize?: ImageUploaderOutputSize;
+  /** Optional size guidance shown in the uploader help text. */
+  sizeHint?: string;
+  /**
+   * Verification & Documents: accept any file type (PDF, etc.) up to 512 KB.
+   * Skips image crop/normalization. Profile photos keep the default image-only path.
+   */
+  allowAnyFile?: boolean;
 }
 
 export function resolveExistingImageSrc(url?: string): string {
@@ -33,31 +50,88 @@ export function resolveExistingImageSrc(url?: string): string {
   if (resolved.startsWith("data:") || resolved.startsWith("blob:")) {
     return resolved;
   }
+  // Google (and other) avatar hosts reject extra query params / our Referer.
+  // Cache-bust only our storage/CDN keys.
+  if (/^https?:\/\//i.test(resolved)) {
+    try {
+      const host = new URL(resolved).hostname.toLowerCase();
+      const isGoogleAvatar =
+        host.includes("googleusercontent.com") ||
+        host.includes("ggpht.com") ||
+        host.includes("google.com");
+      if (isGoogleAvatar) return resolved;
+    } catch {
+      return resolved;
+    }
+  }
   return `${resolved}${resolved.includes("?") ? "&" : "?"}t=${Date.now()}`;
 }
 
-function LocalFilePreview({ file }: { file: File }) {
+function LocalFilePreview({
+  file,
+  aspectRatio,
+}: {
+  file: File;
+  aspectRatio: string;
+}) {
   const [objectUrl, setObjectUrl] = useState("");
+  const showAsImage = isLikelyImageFile(file);
+
   useLayoutEffect(() => {
+    if (!showAsImage) {
+      setObjectUrl("");
+      return;
+    }
     const u = URL.createObjectURL(file);
     setObjectUrl(u);
     return () => {
       URL.revokeObjectURL(u);
     };
-  }, [file]);
+  }, [file, showAsImage]);
+
+  if (!showAsImage) {
+    return (
+      <div
+        className="d-flex flex-column align-items-center justify-content-center h-100 w-100 px-2"
+        style={{ aspectRatio, background: "rgba(0,0,0,0.03)" }}
+      >
+        <i
+          className="bi bi-file-earmark-text"
+          style={{
+            fontSize: "2rem",
+            color: "var(--primary-color)",
+            opacity: 0.9,
+            lineHeight: 1,
+          }}
+          aria-hidden
+        />
+        <span
+          className="text-center mt-2 px-1 text-truncate w-100"
+          style={{
+            color: "var(--content-txt-color)",
+            fontSize: 12,
+            lineHeight: 1.35,
+            maxWidth: "100%",
+          }}
+          title={file.name}
+        >
+          {file.name}
+        </span>
+      </div>
+    );
+  }
+
   if (!objectUrl) return null;
   return (
     <img
       alt=""
       src={objectUrl}
-      width={RECOMMENDED_IMAGE_SIZE_PX}
-      height={RECOMMENDED_IMAGE_SIZE_PX}
       style={{
         width: "100%",
         height: "100%",
         objectFit: "cover",
         display: "block",
-        aspectRatio: RECOMMENDED_ASPECT_RATIO,
+        aspectRatio,
       }}
     />
   );
@@ -67,22 +141,36 @@ function ImageUploadGuidelines({
   extLabel,
   maxKb,
   compact = false,
+  outputWidth = RECOMMENDED_IMAGE_SIZE_PX,
+  outputHeight = RECOMMENDED_IMAGE_SIZE_PX,
+  sizeHint,
+  allowAnyFile = false,
 }: {
   extLabel: string;
   maxKb: number;
   compact?: boolean;
+  outputWidth?: number;
+  outputHeight?: number;
+  sizeHint?: string;
+  allowAnyFile?: boolean;
 }) {
   const formats = extLabel
     .split(",")
     .map((part) => part.trim().replace(/^\./, "").toUpperCase())
     .join(", ");
 
-  const lines = [
-    formats,
-    `Max size: ${maxKb} KB`,
-    `Recommended: ${RECOMMENDED_IMAGE_SIZE_PX} × ${RECOMMENDED_IMAGE_SIZE_PX} px (${RECOMMENDED_ASPECT_RATIO})`,
-    "Other sizes will be center-cropped automatically",
-  ];
+  const lines = allowAnyFile
+    ? [
+        "Images, PDF, and other files",
+        `Max size: ${maxKb} KB`,
+        sizeHint ?? "Any file type under the size limit",
+      ]
+    : [
+        formats,
+        `Max size: ${maxKb} KB`,
+        sizeHint ?? `Recommended: ${outputWidth} × ${outputHeight} px`,
+        "Other sizes will be center-cropped automatically",
+      ];
 
   return (
     <div
@@ -120,30 +208,38 @@ function canvasToFile(
   });
 }
 
-async function normalizeImageToRecommendedSize(file: File): Promise<File> {
+async function normalizeImageToOutputSize(
+  file: File,
+  targetWidth: number,
+  targetHeight: number
+): Promise<File> {
   const bitmap = await createImageBitmap(file);
   try {
-    const cropSize = Math.min(bitmap.width, bitmap.height);
-    const sx = Math.floor((bitmap.width - cropSize) / 2);
-    const sy = Math.floor((bitmap.height - cropSize) / 2);
+    const targetAspect = targetWidth / targetHeight;
+    const sourceAspect = bitmap.width / bitmap.height;
+    let sw: number;
+    let sh: number;
+    let sx: number;
+    let sy: number;
+    if (sourceAspect > targetAspect) {
+      sh = bitmap.height;
+      sw = sh * targetAspect;
+      sx = (bitmap.width - sw) / 2;
+      sy = 0;
+    } else {
+      sw = bitmap.width;
+      sh = sw / targetAspect;
+      sx = 0;
+      sy = (bitmap.height - sh) / 2;
+    }
 
     const canvas = document.createElement("canvas");
-    canvas.width = RECOMMENDED_IMAGE_SIZE_PX;
-    canvas.height = RECOMMENDED_IMAGE_SIZE_PX;
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Canvas unavailable");
 
-    ctx.drawImage(
-      bitmap,
-      sx,
-      sy,
-      cropSize,
-      cropSize,
-      0,
-      0,
-      RECOMMENDED_IMAGE_SIZE_PX,
-      RECOMMENDED_IMAGE_SIZE_PX
-    );
+    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight);
 
     const baseName = file.name.replace(/\.[^.]+$/, "") || "image";
     const maxBytes = getSupportedImageMaxSizeBytes();
@@ -180,13 +276,33 @@ async function normalizeImageToRecommendedSize(file: File): Promise<File> {
   }
 }
 
-const squarePreviewImageStyle: React.CSSProperties = {
-  width: "100%",
-  height: "100%",
-  objectFit: "cover",
-  display: "block",
-  aspectRatio: RECOMMENDED_ASPECT_RATIO,
-};
+async function normalizeImageToRecommendedSize(file: File): Promise<File> {
+  return normalizeImageToOutputSize(
+    file,
+    RECOMMENDED_IMAGE_SIZE_PX,
+    RECOMMENDED_IMAGE_SIZE_PX
+  );
+}
+
+function previewBoxDimensions(
+  outputWidth: number,
+  outputHeight: number,
+  compact: boolean,
+  isSingle: boolean
+): { width: number; height: number } {
+  if (!isSingle) {
+    const width = 100;
+    return {
+      width,
+      height: Math.max(1, Math.round(width * (outputHeight / outputWidth))),
+    };
+  }
+  const width = compact ? 120 : 220;
+  return {
+    width,
+    height: Math.max(1, Math.round(width * (outputHeight / outputWidth))),
+  };
+}
 
 const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
   label,
@@ -196,6 +312,9 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
   onFileChange,
   compact = false,
   hideLabel = false,
+  outputSize,
+  sizeHint,
+  allowAnyFile = false,
 }) => {
   const [fileInputs, setFileInputs] = useState<(File | null)[]>([null]);
   const [replaceUrls, setReplaceUrls] = useState<string[]>([]);
@@ -206,8 +325,28 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
   const inputRefs = useRef<Array<HTMLInputElement | null>>([]);
   const initKeyRef = useRef<string>("");
   const existingImagesKey = existingImages.join("|");
-  const maxKb = Math.floor(getSupportedImageMaxSizeBytes() / 1024);
+  const maxKb = Math.floor(
+    (allowAnyFile
+      ? getSupportedDocumentMaxSizeBytes()
+      : getSupportedImageMaxSizeBytes()) / 1024
+  );
   const extLabel = getSupportedImageExtensions().join(", ");
+  const fileAccept = allowAnyFile
+    ? "*/*"
+    : ".jpg,.jpeg,.png,image/jpeg,image/png";
+  const chooseLabel = allowAnyFile ? "Choose file" : "Choose image";
+  const replaceLabel = allowAnyFile ? "Replace file" : "Replace image";
+  const emptyHint = allowAnyFile ? "No file yet" : "No image yet";
+  const outputWidth = outputSize?.width ?? RECOMMENDED_IMAGE_SIZE_PX;
+  const outputHeight = outputSize?.height ?? RECOMMENDED_IMAGE_SIZE_PX;
+  const outputAspectRatio = `${outputWidth} / ${outputHeight}`;
+  const previewImageStyle: React.CSSProperties = {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    display: "block",
+    aspectRatio: outputAspectRatio,
+  };
 
   useEffect(() => {
     const initKey = `${isEditable ? "1" : "0"}|${existingImagesKey}`;
@@ -279,8 +418,13 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
     inputRefs.current[index]?.click();
   };
 
-  const previewSize = maxFiles === 1 ? (compact ? 72 : 168) : 100;
   const isSingle = maxFiles === 1;
+  const previewBox = previewBoxDimensions(
+    outputWidth,
+    outputHeight,
+    compact,
+    isSingle
+  );
   const showLabel = !hideLabel && Boolean(label?.trim());
   const isDragOver = dragDepth > 0;
 
@@ -292,6 +436,20 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
       handleFileChange(index, null);
       return;
     }
+
+    if (allowAnyFile) {
+      if (!isSupportedDocumentFile(selectedFile)) {
+        showErrorAlert(
+          `File must be ${maxKb} KB or smaller. Images, PDF, and other file types are allowed.`
+        );
+        const input = inputRefs.current[index];
+        if (input) input.value = "";
+        return;
+      }
+      handleFileChange(index, selectedFile);
+      return;
+    }
+
     if (!isSupportedImageFile(selectedFile)) {
       showErrorAlert(
         `Only ${extLabel} formats up to ${maxKb} KB are supported.`
@@ -302,10 +460,16 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
     }
 
     try {
-      const processed = await normalizeImageToRecommendedSize(selectedFile);
+      const processed = outputSize
+        ? await normalizeImageToOutputSize(
+            selectedFile,
+            outputWidth,
+            outputHeight
+          )
+        : await normalizeImageToRecommendedSize(selectedFile);
       if (processed.size > getSupportedImageMaxSizeBytes()) {
         showErrorAlert(
-          `Image is too large after cropping to ${RECOMMENDED_IMAGE_SIZE_PX}×${RECOMMENDED_IMAGE_SIZE_PX} px. Use a smaller source file (max ${maxKb} KB).`
+          `Image is too large after cropping to ${outputWidth}×${outputHeight} px. Use a smaller source file (max ${maxKb} KB).`
         );
         const input = inputRefs.current[index];
         if (input) input.value = "";
@@ -354,7 +518,7 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                 return (
                   <div
                     key={index}
-                    className={`custom-image-uploader-single rounded-3 border overflow-hidden${
+                    className={`custom-image-uploader-single rounded-3 border${
                       compact ? " custom-image-uploader-single--compact" : ""
                     }`}
                     style={{
@@ -363,6 +527,9 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                         : "var(--txtfld-border)",
                       background: "var(--bg-color)",
                       boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                      width: "100%",
+                      maxWidth: "100%",
+                      overflow: "visible",
                     }}
                     onDragEnter={(e) => {
                       e.preventDefault();
@@ -387,21 +554,23 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                     }}
                   >
                     <div
-                      className={`d-flex align-items-center gap-2 ${
+                      className={
                         compact
-                          ? "flex-row p-2"
-                          : "flex-column flex-md-row align-items-stretch gap-3 p-3"
-                      }`}
-                      style={{
-                        minHeight: compact ? previewSize + 16 : previewSize + 24,
-                      }}
+                          ? "d-flex flex-row align-items-center gap-2 p-2"
+                          : "d-flex flex-column align-items-stretch gap-3 p-3"
+                      }
                     >
                       <div
-                        className="position-relative flex-shrink-0 align-self-center align-self-md-start"
+                        className={
+                          compact
+                            ? "position-relative flex-shrink-0"
+                            : "position-relative flex-shrink-0 align-self-center"
+                        }
                         style={{
-                          width: previewSize,
-                          height: previewSize,
-                          aspectRatio: RECOMMENDED_ASPECT_RATIO,
+                          width: previewBox.width,
+                          height: previewBox.height,
+                          maxWidth: "100%",
+                          aspectRatio: outputAspectRatio,
                         }}
                       >
                         <button
@@ -410,7 +579,11 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                           onClick={() => openPicker(index)}
                           aria-label={
                             hasPreview
-                              ? "Replace image — choose file"
+                              ? allowAnyFile
+                                ? "Replace file — choose file"
+                                : "Replace image — choose file"
+                              : allowAnyFile
+                              ? "Choose file"
                               : "Choose image file"
                           }
                           style={{
@@ -423,14 +596,15 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                           }}
                         >
                           {file ? (
-                            <LocalFilePreview file={file} />
+                            <LocalFilePreview
+                              file={file}
+                              aspectRatio={outputAspectRatio}
+                            />
                           ) : existing && !existingPreviewFailed[index] ? (
                             <img
                               alt=""
                               src={resolveExistingImageSrc(existing)}
-                              width={RECOMMENDED_IMAGE_SIZE_PX}
-                              height={RECOMMENDED_IMAGE_SIZE_PX}
-                              style={squarePreviewImageStyle}
+                              style={previewImageStyle}
                               onError={() =>
                                 setExistingPreviewFailed((prev) => ({
                                   ...prev,
@@ -438,13 +612,13 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                                 }))
                               }
                             />
-                          ) : (
+                          ) : existing && existingPreviewFailed[index] ? (
                             <div
                               className="d-flex flex-column align-items-center justify-content-center px-2 h-100"
-                              style={{ minHeight: previewSize }}
+                              style={{ minHeight: previewBox.height }}
                             >
                               <i
-                                className="bi bi-image"
+                                className="bi bi-file-earmark-text"
                                 style={{
                                   fontSize: compact ? "1.65rem" : "2rem",
                                   color: "var(--primary-color)",
@@ -462,7 +636,39 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                                     lineHeight: 1.35,
                                   }}
                                 >
-                                  No image yet
+                                  Document on file
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div
+                              className="d-flex flex-column align-items-center justify-content-center px-2 h-100"
+                              style={{ minHeight: previewBox.height }}
+                            >
+                              <i
+                                className={
+                                  allowAnyFile
+                                    ? "bi bi-file-earmark-arrow-up"
+                                    : "bi bi-image"
+                                }
+                                style={{
+                                  fontSize: compact ? "1.65rem" : "2rem",
+                                  color: "var(--primary-color)",
+                                  opacity: 0.85,
+                                  lineHeight: 1,
+                                }}
+                                aria-hidden
+                              />
+                              {!compact ? (
+                                <span
+                                  className="text-center mt-2 px-1"
+                                  style={{
+                                    color: "var(--placeholder-txt)",
+                                    fontSize: 12,
+                                    lineHeight: 1.35,
+                                  }}
+                                >
+                                  {emptyHint}
                                 </span>
                               ) : null}
                             </div>
@@ -498,7 +704,11 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                       </div>
 
                       <div
-                        className="d-flex flex-column justify-content-center flex-grow-1"
+                        className={
+                          compact
+                            ? "d-flex flex-column justify-content-center flex-grow-1"
+                            : "d-flex flex-column align-items-stretch w-100"
+                        }
                         style={{ minWidth: 0, gap: compact ? 6 : 10 }}
                       >
                         {!compact ? (
@@ -506,6 +716,10 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                             <ImageUploadGuidelines
                               extLabel={extLabel}
                               maxKb={maxKb}
+                              outputWidth={outputWidth}
+                              outputHeight={outputHeight}
+                              sizeHint={sizeHint}
+                              allowAnyFile={allowAnyFile}
                             />
                             <p
                               className="small mb-0 mt-2"
@@ -522,6 +736,10 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                             extLabel={extLabel}
                             maxKb={maxKb}
                             compact
+                            outputWidth={outputWidth}
+                            outputHeight={outputHeight}
+                            sizeHint={sizeHint}
+                            allowAnyFile={allowAnyFile}
                           />
                         ) : null}
                         <div className="d-flex flex-wrap align-items-center gap-2">
@@ -544,7 +762,7 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                             }}
                           >
                             <i className="bi bi-folder2-open me-2" aria-hidden />
-                            {hasPreview ? "Replace image" : "Choose image"}
+                            {hasPreview ? replaceLabel : chooseLabel}
                           </Button>
                         </div>
                       </div>
@@ -555,7 +773,7 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                       ref={(el) => {
                         inputRefs.current[index] = el;
                       }}
-                      accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                      accept={fileAccept}
                       style={{ display: "none" }}
                       onChange={(e) => {
                         const selectedFile = e.target.files?.[0] || null;
@@ -593,10 +811,10 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                   >
                     <div
                       style={{
-                        width: previewSize,
-                        height: previewSize,
+                        width: previewBox.width,
+                        height: previewBox.height,
                         margin: "0 auto",
-                        aspectRatio: RECOMMENDED_ASPECT_RATIO,
+                        aspectRatio: outputAspectRatio,
                         borderRadius: 8,
                         border: hasPreview
                           ? "1px solid var(--txtfld-border)"
@@ -610,14 +828,15 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                       }}
                     >
                       {file ? (
-                        <LocalFilePreview file={file} />
+                        <LocalFilePreview
+                          file={file}
+                          aspectRatio={outputAspectRatio}
+                        />
                       ) : existing && !existingPreviewFailed[index] ? (
                         <img
                           alt=""
                           src={resolveExistingImageSrc(existing)}
-                          width={RECOMMENDED_IMAGE_SIZE_PX}
-                          height={RECOMMENDED_IMAGE_SIZE_PX}
-                          style={squarePreviewImageStyle}
+                          style={previewImageStyle}
                           onError={() =>
                             setExistingPreviewFailed((prev) => ({
                               ...prev,
@@ -649,8 +868,7 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                               marginTop: 6,
                             }}
                           >
-                            {RECOMMENDED_IMAGE_SIZE_PX}×
-                            {RECOMMENDED_IMAGE_SIZE_PX} ({RECOMMENDED_ASPECT_RATIO})
+                            {outputWidth}×{outputHeight}
                           </span>
                         </div>
                       )}
@@ -691,7 +909,7 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
                   ref={(el) => {
                     inputRefs.current[index] = el;
                   }}
-                  accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                  accept={fileAccept}
                   style={{ display: "none" }}
                   onChange={(e) => {
                     const selectedFile = e.target.files?.[0] || null;

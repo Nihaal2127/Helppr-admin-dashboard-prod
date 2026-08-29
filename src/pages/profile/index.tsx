@@ -240,7 +240,7 @@ const Profile = () => {
                 Policies
               </span>
               <Link
-                to={ROUTES.TERMS_CONDITIONS.path}
+                to="https://helppr.in/terms-and-conditions"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="custom-profile-link"
@@ -248,54 +248,22 @@ const Profile = () => {
                 Terms & Conditions
               </Link>
               <Link
-                to={ROUTES.PRIVACY_POLICY.path}
+                to="https://helppr.in/privacy-policy"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="custom-profile-link"
               >
                 Privacy Policy
               </Link>
+              <Link
+                to="https://helppr.in/payments-policy"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="custom-profile-link"
+              >
+                Payment Policy
+              </Link>
             </div>
-            <Row>
-              <Col sm={6}>
-                <Button
-                  type="submit"
-                  style={{
-                    width: "100%",
-                    height: "36px",
-                    fontSize: "16px",
-                    fontWeight: 600,
-                    backgroundColor: "var(--bg-color)",
-                    color: "var(--secondary-btn)",
-                    border: "1px solid var(--sb-border)",
-                    borderRadius: "16px",
-                    margin: "0px",
-                    padding: "0px",
-                  }}
-                >
-                  Help
-                </Button>
-              </Col>
-              <Col sm={6}>
-                <Button
-                  type="submit"
-                  style={{
-                    width: "100%",
-                    height: "36px",
-                    fontSize: "16px",
-                    fontWeight: 600,
-                    backgroundColor: "var(--bg-color)",
-                    color: "var(--secondary-btn)",
-                    border: "1px solid var(--sb-border)",
-                    borderRadius: "16px",
-                    margin: "0px",
-                    padding: "0px",
-                  }}
-                >
-                  Report a problem
-                </Button>
-              </Col>
-            </Row>
           </Col>
         </Row>
       </div>

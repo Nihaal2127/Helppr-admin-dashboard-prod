@@ -450,6 +450,7 @@ const OrderPayments = () => {
       {
         Header: "Order ID",
         accessor: "order_unique_id",
+        sort: true,
         Cell: textUnderlineCell("order_unique_id", (row) => {
           const oid = resolveOrderMongoId(row);
           if (oid) showOrderInfoDialog(oid, () => {});
@@ -535,7 +536,6 @@ const OrderPayments = () => {
       {
         Header: "Commission",
         accessor: "commission_amount",
-        sort: true,
         Cell: ({ row }: { row: { original: FinancialModel } }) => {
           const o = row.original;
           return (
@@ -551,7 +551,6 @@ const OrderPayments = () => {
       {
         Header: "Tax",
         accessor: "tax_amount",
-        sort: true,
         Cell: ({ row }: { row: { original: FinancialModel } }) => {
           const o = row.original;
           return (

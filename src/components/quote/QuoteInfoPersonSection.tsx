@@ -1,6 +1,6 @@
-import React from "react";
-import { AppConstant } from "../../lib/global/AppConstant";
+import React, { useEffect, useState } from "react";
 import profileIcon from "../../assets/icons/profile.svg";
+import { resolveExistingImageSrc } from "../CustomImageUploader";
 import { QUOTE_SECTION_TITLE_CLASS } from "../../lib/quote/quoteHelpers";
 
 export type QuoteInfoPersonRole = "customer" | "partner" | "employee";
@@ -57,10 +57,37 @@ function PersonFieldCells({
   );
 }
 
+/** Browser-ready profile image URL (CDN key, absolute URL, or placeholder). */
 export function resolveQuoteProfileSrc(profileUrl?: string | null): string {
   const s = String(profileUrl ?? "").trim();
-  if (!s) return profileIcon;
-  return `${AppConstant.IMAGE_BASE_URL}${s}?t=${Date.now()}`;
+  if (!s || s.startsWith("uploads/")) return profileIcon;
+  const resolved = resolveExistingImageSrc(s);
+  return resolved || profileIcon;
+}
+
+function QuoteProfileAvatar({
+  profileUrl,
+  role,
+}: {
+  profileUrl?: string | null;
+  role: QuoteInfoPersonRole;
+}) {
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  useEffect(() => {
+    setLoadFailed(false);
+  }, [profileUrl]);
+
+  return (
+    <img
+      src={loadFailed ? profileIcon : resolveQuoteProfileSrc(profileUrl)}
+      alt=""
+      width={72}
+      height={72}
+      className={`rounded-circle object-fit-cover border border-2 ${PROFILE_BORDER_CLASS[role]}`}
+      onError={() => setLoadFailed(true)}
+    />
+  );
 }
 
 export default function QuoteInfoPersonSection({
@@ -82,13 +109,7 @@ export default function QuoteInfoPersonSection({
       <h6 className={QUOTE_SECTION_TITLE_CLASS}>{title}</h6>
       <div className="d-flex flex-column flex-md-row align-items-start gap-3 quote-info-person-layout">
         <div className="flex-shrink-0 text-center text-md-start quote-info-person-avatar">
-          <img
-            src={resolveQuoteProfileSrc(profileUrl)}
-            alt=""
-            width={72}
-            height={72}
-            className={`rounded-circle object-fit-cover border border-2 ${PROFILE_BORDER_CLASS[role]}`}
-          />
+          <QuoteProfileAvatar profileUrl={profileUrl} role={role} />
         </div>
         <div className="flex-grow-1 min-w-0 w-100 quote-info-person-fields">
           {leftFields.length > 0 || rightFields.length > 0 ? (

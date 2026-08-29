@@ -68,6 +68,24 @@ export const isSupportedImageFile = (file: File): boolean => {
   return hasSupportedExtension && hasSupportedMimeType && isWithinSupportedSize;
 };
 
+/** Verification & Documents — any file type, same 512 KB cap as images. */
+export const getSupportedDocumentMaxSizeBytes = (): number =>
+  SUPPORTED_IMAGE_MAX_SIZE_BYTES;
+
+export const isSupportedDocumentFile = (file: File): boolean => {
+  if (!file || file.size <= 0) return false;
+  return file.size <= getSupportedDocumentMaxSizeBytes();
+};
+
+export const isLikelyImageFile = (file: File): boolean => {
+  const mime = (file.type || "").toLowerCase();
+  if (mime.startsWith("image/")) return true;
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"].includes(
+    extension
+  );
+};
+
 export const textUnderlineCell =
   (field: string, onClick: (row: any) => void) =>
   ({ row }: { row: any }) =>
@@ -86,6 +104,11 @@ export const textUnderlineCell =
 
 export const statusCell = (field: string) => {
   return ({ row }: { row: { original: Record<string, any> } }): JSX.Element => {
+    const deletedAt = row.original?.deleted_at;
+    if (deletedAt != null && String(deletedAt).trim() !== "") {
+      return <span className="custom-inactive">Inactive(deleted)</span>;
+    }
+
     const value = row.original?.[field];
 
     return (
@@ -346,8 +369,35 @@ export function PersonalAccountDetailsGrid({
               value={formatDate(lastRaw)}
             />
           </Col>
+          <Col xs={12} md={6}>
+            <DetailsRow
+              title="Status"
+              value={
+                <span
+                  className={isActive ? "custom-active" : "custom-inactive"}
+                >
+                  {isActive ? "Active" : "Inactive"}
+                </span>
+              }
+            />
+          </Col>
         </Row>
-      ) : null}
+      ) : (
+        <Row className="g-0">
+          <Col xs={12} md={6}>
+            <DetailsRow
+              title="Status"
+              value={
+                <span
+                  className={isActive ? "custom-active" : "custom-inactive"}
+                >
+                  {isActive ? "Active" : "Inactive"}
+                </span>
+              }
+            />
+          </Col>
+        </Row>
+      )}
     </div>
   );
 }

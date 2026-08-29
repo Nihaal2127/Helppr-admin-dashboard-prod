@@ -37,6 +37,10 @@ import {
 } from "./orderScheduleMetrics";
 import { workTimeToTimeStorage } from "./orderTimeUtils";
 import {
+  deriveQuoteScheduleDurationFromStored,
+  getQuoteScheduleDurationUnit,
+} from "../../services/quoteService";
+import {
   normalizePaymentMethod,
   paymentMethodFromExpenseModeId,
   paymentRowEffectiveAmount,
@@ -118,6 +122,8 @@ export interface OrderItemModel {
   service_date: string;
   service_from_time: string;
   service_to_time: string;
+  /** Hours, days, or months for schedule UI (not sent to API). */
+  schedule_duration?: string;
   sub_total: number | 0;
   tax: number | 0;
   user_paltform_fee: number | 0;
@@ -127,6 +133,8 @@ export interface OrderItemModel {
   admin_earning: number | 0;
   service_info?: ServiceModel;
   rating?: number | 0;
+  review_text?: string | null;
+  reviewed_at?: string | null;
   cancellation_reasone?: string | null;
   service_status?: number | 0;
   is_paid?: boolean | false;
@@ -244,6 +252,10 @@ export interface OrderModel {
   } | null;
   franchise_name?: string | null;
   partner_info?: UserModel | null;
+  /** Partner-uploaded completion photos (`GET /order/get/:id`). */
+  work_proof_image_urls?: string[] | null;
+  work_completion_description?: string | null;
+  work_completed_at?: string | null;
 }
 
 export interface OrderStatusInfoModel {
@@ -697,6 +709,45 @@ export type OrderListFilters = {
   franchise_id?: string | null;
 };
 
+export type OrderListSort = ServerTableSortBy;
+
+/** Table accessors that support `GET /order/getAll` server sort. */
+const ORDER_SORTABLE_ACCESSORS = new Set([
+  "unique_id",
+  "user_name",
+  "partner_display",
+  "partner_name",
+  "order_date",
+]);
+
+/** Table column accessor → `GET /order/getAll` `sort_by`. */
+const ORDER_LIST_SORT_TO_API: Record<string, string> = {
+  unique_id: "unique_id",
+  user_name: "user_name",
+  partner_display: "partner_name",
+  partner_name: "partner_name",
+  order_date: "order_date",
+};
+
+export function normalizeOrderListSort(sort: OrderListSort): OrderListSort {
+  if (!sort.length) return [];
+  const first = sort[0];
+  if (!first?.id || !ORDER_SORTABLE_ACCESSORS.has(first.id)) return [];
+  return [{ id: first.id, desc: Boolean(first.desc) }];
+}
+
+export function orderListSortToApi(
+  sort: OrderListSort
+): { sort_by: string; sort_order: "asc" | "desc" } | null {
+  const safe = normalizeOrderListSort(sort);
+  if (!safe.length) return null;
+  const { id, desc } = safe[0];
+  return {
+    sort_by: ORDER_LIST_SORT_TO_API[id] ?? "created_at",
+    sort_order: desc ? "desc" : "asc",
+  };
+}
+
 function str(v: unknown): string {
   if (v == null) return "";
   const s = String(v).trim();
@@ -706,6 +757,12 @@ function str(v: unknown): string {
 function nestedObj(v: unknown): Record<string, unknown> | undefined {
   if (v == null || typeof v !== "object" || Array.isArray(v)) return undefined;
   return v as Record<string, unknown>;
+}
+
+function pickProfileUrl(rec?: Record<string, unknown>): string | undefined {
+  if (!rec) return undefined;
+  const s = str(rec.profile_url) || str(rec.image_url);
+  return s || undefined;
 }
 
 function refId(v: unknown): string {
@@ -773,21 +830,31 @@ export function mapServerOrderRecord(r: Record<string, unknown>): OrderModel {
   const createdByRef = nestedObj(r.created_by_id);
   const franchiseRef = nestedObj(r.franchise_info);
 
-  const userInfo =
-    nestedObj(r.user_info) ??
-    (userRef
-      ? {
-          ...userRef,
-          name: userRef.name ?? userRef.user_name,
-        }
-      : undefined);
+  const userInfo = (() => {
+    const fromInfo = nestedObj(r.user_info);
+    if (fromInfo) {
+      return {
+        ...fromInfo,
+        name: str(fromInfo.name) || str(fromInfo.user_name) || str(userRef?.name),
+        profile_url:
+          pickProfileUrl(fromInfo) ?? pickProfileUrl(userRef) ?? fromInfo.profile_url,
+      };
+    }
+    if (userRef) {
+      return {
+        ...userRef,
+        name: str(userRef.name) || str(userRef.user_name),
+        profile_url: pickProfileUrl(userRef) ?? userRef.profile_url,
+      };
+    }
+    return undefined;
+  })();
 
   const orderStatusRaw = r.order_status ?? r.status_code ?? r.status;
   const order_status = normalizeOrderStatusFromApi(orderStatusRaw);
   const user_name =
     str(r.user_name) ||
     str(userInfo?.name) ||
-    str(userInfo?.user_name) ||
     "";
 
   const paymentStatusSlug = str(r.payment_status).toLowerCase();
@@ -825,6 +892,7 @@ export function mapServerOrderRecord(r: Record<string, unknown>): OrderModel {
       ? ({ ...createdByRef } as unknown as OrderModel["created_by_info"])
       : undefined);
 
+  const employeeRef = nestedObj(r.employee_id);
   const employee_info = ((): OrderModel["employee_info"] => {
     if (r.employee_info === null) return null;
     const fromInfo = nestedObj(r.employee_info);
@@ -832,6 +900,17 @@ export function mapServerOrderRecord(r: Record<string, unknown>): OrderModel {
       return {
         ...fromInfo,
         name: str(fromInfo.name ?? fromInfo.user_name),
+        profile_url:
+          pickProfileUrl(fromInfo) ??
+          pickProfileUrl(employeeRef) ??
+          fromInfo.profile_url,
+      } as unknown as UserModel;
+    }
+    if (employeeRef) {
+      return {
+        ...employeeRef,
+        name: str(employeeRef.name ?? employeeRef.user_name),
+        profile_url: pickProfileUrl(employeeRef) ?? employeeRef.profile_url,
       } as unknown as UserModel;
     }
     return undefined;
@@ -922,9 +1001,33 @@ export function mapServerOrderRecord(r: Record<string, unknown>): OrderModel {
       ? (r.additional_charges as Record<string, unknown>[])
       : null,
     address_info: nestedObj(r.address_info) ?? null,
-    partner_info:
-      (nestedObj(r.partner_info) as OrderModel["partner_info"] | undefined) ??
-      (r.partner_info as OrderModel["partner_info"]),
+    work_proof_image_urls: Array.isArray(r.work_proof_image_urls)
+      ? (r.work_proof_image_urls as unknown[])
+          .map((u) => String(u ?? "").trim())
+          .filter(Boolean)
+      : null,
+    work_completion_description:
+      str(r.work_completion_description) || null,
+    work_completed_at: str(r.work_completed_at) || null,
+    partner_info: (() => {
+      const fromInfo = nestedObj(r.partner_info);
+      if (fromInfo) {
+        return {
+          ...fromInfo,
+          profile_url:
+            pickProfileUrl(fromInfo) ??
+            pickProfileUrl(partnerRef) ??
+            fromInfo.profile_url,
+        } as OrderModel["partner_info"];
+      }
+      if (partnerRef) {
+        return {
+          ...partnerRef,
+          profile_url: pickProfileUrl(partnerRef) ?? partnerRef.profile_url,
+        } as OrderModel["partner_info"];
+      }
+      return r.partner_info as OrderModel["partner_info"];
+    })(),
     ...((): Partial<OrderModel> => {
       const offerRec = nestedObj(r.order_offer);
       if (!offerRec) return {};
@@ -1056,7 +1159,7 @@ export const fetchOrder = async (
   totalPages: number;
   totalCount: number;
 }> => {
-  const primarySort = sortBy[0];
+  const apiSort = orderListSortToApi(sortBy);
   const kw = filters.keyword?.trim();
   const statusSlug =
     filters.status && filters.status !== "All"
@@ -1072,12 +1175,13 @@ export const fetchOrder = async (
     ...(filters.sort && { sort: filters.sort }),
     ...(filters.from_date && { from_date: filters.from_date }),
     ...(filters.to_date && { to_date: filters.to_date }),
-    ...(primarySort?.id && { sort_by: primarySort.id }),
-    ...(primarySort && { sort_order: primarySort.desc ? "desc" : "asc" }),
+    ...(apiSort
+      ? { sort_by: apiSort.sort_by, sort_order: apiSort.sort_order }
+      : {}),
     ...(fid ? { franchise_id: fid } : {}),
   });
 
-  if (!primarySort?.id) {
+  if (!apiSort) {
     params.set("sort_by", "created_at");
     params.set("sort_order", "desc");
   }
@@ -1723,6 +1827,8 @@ export function partnerPaymentsEditLocked(order?: OrderModel): boolean {
 }
 
 export type OrderServiceAddressDisplay = {
+  contact_name: string;
+  contact_number: string;
   state: string;
   city: string;
   area: string;
@@ -1730,12 +1836,41 @@ export type OrderServiceAddressDisplay = {
   addressLine: string;
 };
 
-/** Structured service address (State / City / Area / Pin / street) — matches quote view. */
+function orderServiceAddressContactFields(
+  order: OrderModel,
+  addrRef: Record<string, unknown> | undefined,
+  parsed: ReturnType<typeof parseCatalogAddressRecord> | null
+): Pick<OrderServiceAddressDisplay, "contact_name" | "contact_number"> {
+  const dash = "-";
+  const parsedContact =
+    parsed?.contactName && parsed.contactName !== "Address"
+      ? str(parsed.contactName)
+      : "";
+  const contact_name =
+    str(addrRef?.contact_name ?? addrRef?.contactName) ||
+    parsedContact ||
+    str(order.user_info?.name) ||
+    str(order.user_name) ||
+    dash;
+  const contact_number =
+    str(
+      addrRef?.contact_number ??
+        addrRef?.contactNumber ??
+        addrRef?.phone_number
+    ) ||
+    str(order.user_info?.phone_number) ||
+    dash;
+  return { contact_name, contact_number };
+}
+
+/** Structured service address (contact / State / City / Area / Pin / street) — matches quote view. */
 export function getOrderServiceAddressDisplay(
   order?: OrderModel
 ): OrderServiceAddressDisplay {
   const dash = "-";
   const empty: OrderServiceAddressDisplay = {
+    contact_name: dash,
+    contact_number: dash,
     state: dash,
     city: dash,
     area: dash,
@@ -1747,6 +1882,7 @@ export function getOrderServiceAddressDisplay(
   const rec = order as unknown as Record<string, unknown>;
   const addrRef = orderAddressRecord(rec);
   const parsed = addrRef ? parseCatalogAddressRecord(addrRef) : null;
+  const contact = orderServiceAddressContactFields(order, addrRef, parsed);
 
   const primary = getPrimaryServiceItem(order);
   const flat =
@@ -1791,6 +1927,7 @@ export function getOrderServiceAddressDisplay(
       state = displayStateName(str(franchiseRec?.state_name));
     }
     return {
+      ...contact,
       state: state || dash,
       city: city || dash,
       area: area || dash,
@@ -1816,6 +1953,7 @@ export function getOrderServiceAddressDisplay(
 
   if (composite) {
     return {
+      ...contact,
       state: state || composite.state || dash,
       city: city || composite.city || dash,
       area: composite.area || dash,
@@ -1825,6 +1963,7 @@ export function getOrderServiceAddressDisplay(
   }
 
   return {
+    ...contact,
     state: state || dash,
     city: city || dash,
     area: dash,
@@ -2824,6 +2963,44 @@ export function seedEditOrderFormFromRow(order: OrderModel): EditOrderFormValues
     order.sub_total;
   const priceNum = Number(priceRaw);
 
+  const requested_date =
+    normalizeOrderApiDateYmd(order.from_date) ||
+    (primary?.service_date ? ymdChunk(primary.service_date) : "") ||
+    normalizeOrderApiDateYmd(order.order_date);
+  const requested_date_to =
+    normalizeOrderApiDateYmd(order.to_date) ||
+    normalizeOrderApiDateYmd(order.from_date) ||
+    "";
+  const requested_time_from = workTimeToTimeStorage(
+    primary?.service_from_time ?? ""
+  );
+  const requested_time_to = workTimeToTimeStorage(
+    primary?.service_to_time ?? ""
+  );
+  const storedDuration = String(primary?.schedule_duration ?? "").trim();
+  let schedule_duration = storedDuration;
+  if (
+    !schedule_duration &&
+    requested_date &&
+    requested_time_from &&
+    requested_time_to
+  ) {
+    const paymentType = String(
+      primary?.service_info?.payment_type ??
+        primary?.service_info?.min_deposit_type ??
+        ""
+    ).trim();
+    schedule_duration = String(
+      deriveQuoteScheduleDurationFromStored({
+        unit: getQuoteScheduleDurationUnit(paymentType),
+        fromDate: requested_date,
+        toDate: requested_date_to || requested_date,
+        startTimeStorage: requested_time_from,
+        endTimeStorage: requested_time_to,
+      })
+    );
+  }
+
   return {
     franchise_id: franchiseRaw,
     user_id: order.user_id,
@@ -2832,17 +3009,12 @@ export function seedEditOrderFormFromRow(order: OrderModel): EditOrderFormValues
     requested_partner: partnerId,
     employee_id: String(order.created_by_id ?? "").trim(),
     category_id: categoryId,
-    requested_date:
-      normalizeOrderApiDateYmd(order.from_date) ||
-      (primary?.service_date ? ymdChunk(primary.service_date) : "") ||
-      normalizeOrderApiDateYmd(order.order_date),
-    requested_date_to:
-      normalizeOrderApiDateYmd(order.to_date) ||
-      normalizeOrderApiDateYmd(order.from_date) ||
-      "",
+    requested_date,
+    schedule_duration,
+    requested_date_to,
     requested_time: "",
-    requested_time_from: workTimeToTimeStorage(primary?.service_from_time ?? ""),
-    requested_time_to: workTimeToTimeStorage(primary?.service_to_time ?? ""),
+    requested_time_from,
+    requested_time_to,
     service_price:
       Number.isFinite(priceNum) && priceNum >= 0 ? String(priceNum) : "",
     user_description: String(order.customer_description ?? "").trim(),

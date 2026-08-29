@@ -47,8 +47,14 @@ import {
 } from "../../services/partnerManagementService";
 import type { SubscriptionPlanOption } from "../../services/partnerManagementService";
 import { partnerSubscriptionFormValuesFromUser } from "../../lib/partner/partnerSubscriptionView";
+import {
+  partnerFranchiseFieldsFromUser,
+  partnerFranchiseIdFromUser,
+} from "../../lib/partner/partnerFranchiseDisplay";
+import { resolveFranchiseForArea } from "../../lib/partner/resolveFranchiseForArea";
 import PartnerSubscriptionFormSection, {
   partnerSubscriptionFormBind,
+  computedSubscriptionEndDate,
 } from "../../components/partner/PartnerSubscriptionFormSection";
 import type {
   PartnerSubscriptionRegisterFn,
@@ -77,7 +83,6 @@ import {
 import {
   PARTNER_CREATE_DOCUMENT_FIELDS,
   PARTNER_CREATE_DOCUMENT_SLOTS,
-  partnerDocumentMatchesSlot,
 } from "../../lib/partner/partnerFormDocuments";
 import { openDialog } from "../../lib/global/DialogManager";
 import {
@@ -97,10 +102,7 @@ import {
   PartnerCatalogStatusToggle,
 } from "../../components/partnerCatalogBlockUi";
 import type { UserMultipartUploads } from "../../services/userService";
-import type {
-  PartnerCreateDocumentKey,
-  PartnerVerificationSlotId,
-} from "../../lib/partner/partnerFormDocuments";
+import type { PartnerCreateDocumentKey } from "../../lib/partner/partnerFormDocuments";
 import type {
   PartnerCategoryBlock,
   PartnerCatalogServiceLite,
@@ -108,47 +110,13 @@ import type {
   PartnerCatalogFlattenOk,
 } from "../../components/partnerCatalogBlockUi";
 
-const PARTNER_MANDATORY_VERIFICATION_SLOTS: {
-  id: PartnerVerificationSlotId;
-  title: string;
-}[] = [
-  { id: "pan_card", title: "PAN Card" },
-  { id: "aadhar_card", title: "Aadhar Card" },
-];
-
-function missingMandatoryPartnerVerificationDocs(
-  user: UserModel | null | undefined
-): string[] {
-  const documents = user?.documents;
-  const missing: string[] = [];
-  for (const slot of PARTNER_MANDATORY_VERIFICATION_SLOTS) {
-    const doc = documents?.find((d) =>
-      partnerDocumentMatchesSlot(d.name, slot.id)
-    );
-    if (!String(doc?.document_image ?? "").trim()) {
-      missing.push(slot.title);
-    }
-  }
-  return missing;
-}
-
 const PARTNER_ROLE = 2;
 const FRANCHISE_EMPLOYEE_ROLE = 3;
 const USER_ROLE = 4;
 
-const LETTERS_AND_SPACES_ONLY = /^[A-Za-z\s]+$/;
-
 function sanitizeLettersAndSpaces(value: string): string {
   return value.replace(/[^A-Za-z\s]/g, "");
 }
-
-const ADD_PARTNER_LETTERS_ONLY_FIELD_RULE = {
-  ...REQUIRED_FIELD_RULE,
-  pattern: {
-    value: LETTERS_AND_SPACES_ONLY,
-    message: "Only letters are allowed",
-  },
-};
 
 /** Local guard — keeps catalog UI safe without an extra module export (avoids dev HMR load issues). */
 function ensurePartnerCatalogBlocks(
@@ -173,6 +141,56 @@ function ensurePartnerCatalogBlocks(
 }
 
 type OptionType = { value: string; label: string };
+
+function ensureSelectOption(
+  options: OptionType[],
+  value: string,
+  label?: string
+): OptionType[] {
+  const v = String(value ?? "").trim();
+  if (!v) return options;
+  const existing = options.find((o) => String(o.value) === v);
+  if (existing) {
+    const nextLabel = String(label ?? "").trim();
+    if (nextLabel && nextLabel !== existing.label && existing.label === v) {
+      return options.map((o) =>
+        String(o.value) === v ? { ...o, label: nextLabel } : o
+      );
+    }
+    return options;
+  }
+  return [...options, { value: v, label: String(label ?? "").trim() || v }];
+}
+
+function firstLocationId(raw: unknown): string {
+  if (Array.isArray(raw)) return firstLocationId(raw[0]);
+  if (raw && typeof raw === "object") {
+    return String(
+      (raw as { _id?: unknown; id?: unknown })._id ??
+        (raw as { id?: unknown }).id ??
+        ""
+    ).trim();
+  }
+  const s = String(raw ?? "").trim();
+  if (!s || s === "[object Object]") return "";
+  return s.includes(",") ? s.split(",")[0].trim() : s;
+}
+
+function firstLocationName(raw: unknown): string {
+  if (Array.isArray(raw)) return firstLocationName(raw[0]);
+  if (raw && typeof raw === "object") {
+    return String(
+      (raw as { name?: unknown; state_name?: unknown; city_name?: unknown })
+        .name ??
+        (raw as { state_name?: unknown }).state_name ??
+        (raw as { city_name?: unknown }).city_name ??
+        ""
+    ).trim();
+  }
+  const s = String(raw ?? "").trim();
+  if (!s || s === "[object Object]") return "";
+  return s.includes(",") ? s.split(",")[0].trim() : s;
+}
 
 type ServiceLite = {
   _id: string;
@@ -392,10 +410,34 @@ function AddEditUserDialogView({
   const [partnerPlanSelectOptions, setPartnerPlanSelectOptions] = useState<
     SubscriptionPlanOption[]
   >([]);
+  const partnerPlansLoadingRef = useRef(false);
+  const addPartnerCitiesLoadedKeyRef = useRef("");
+  const addPartnerAreasLoadedKeyRef = useRef("");
+  const addPartnerCategoriesLoadedKeyRef = useRef("");
+  const addPartnerStatesLoadedRef = useRef(false);
+  const addPartnerCategoryLoadingRef = useRef(false);
+  const addPartnerServicesLoadingRef = useRef<Set<string>>(new Set());
+
+  const loadPartnerPlanOptions = useCallback(async () => {
+    if (partnerPlansLoadingRef.current) return;
+    partnerPlansLoadingRef.current = true;
+    try {
+      const opts = await fetchSubscriptionPlanOptions();
+      setPartnerPlanSelectOptions(Array.isArray(opts) ? opts : []);
+    } catch {
+      setPartnerPlanSelectOptions([]);
+    } finally {
+      partnerPlansLoadingRef.current = false;
+    }
+  }, []);
   const [franchiseDropdownOptions, setFranchiseDropdownOptions] = useState<
     FranchiseDropDownOption[]
   >([]);
   const prevAddPartnerFranchiseRef = useRef<string | null>(null);
+  const [partnerEditFranchiseId, setPartnerEditFranchiseId] = useState("");
+  const [partnerEditFranchiseName, setPartnerEditFranchiseName] = useState("");
+  const [partnerEditFranchiseResolving, setPartnerEditFranchiseResolving] =
+    useState(false);
 
   const currentUserRole = String(
     getLocalStorage(AppConstant.userRole) ?? ""
@@ -467,10 +509,11 @@ function AddEditUserDialogView({
         return;
       }
       try {
-        let cityOptions = await fetchCityDropDownForForm(
-          sid,
-          locationFranchiseId || undefined
-        );
+        // Update Partner: show every city from city/getDropDown for the state.
+        // Franchise-scoped filtering is for Add Partner / portal create flows.
+        const franchiseScope =
+          isPartnerEdit ? undefined : locationFranchiseId || undefined;
+        let cityOptions = await fetchCityDropDownForForm(sid, franchiseScope);
         if (isEditable) {
           const preserveCityId = String(user?.city_id ?? "").trim();
           if (
@@ -503,7 +546,7 @@ function AddEditUserDialogView({
         setCity([]);
       }
     },
-    [locationFranchiseId, getValues, setValue, isEditable, user]
+    [locationFranchiseId, getValues, setValue, isEditable, isPartnerEdit, user]
   );
 
   const onStateChangeClearLocationChain = useCallback(
@@ -519,14 +562,22 @@ function AddEditUserDialogView({
       setAreas([]);
       setAreaPincodes(new Map());
       setPincodeOptions([]);
-      void fetchCityFromApi(sid);
+      addPartnerCitiesLoadedKeyRef.current = "";
+      addPartnerAreasLoadedKeyRef.current = "";
+      if (!isAddPartner) {
+        void fetchCityFromApi(sid);
+      }
     },
-    [setValue, fetchCityFromApi]
+    [setValue, fetchCityFromApi, isAddPartner]
   );
 
   const onCityChangeClearAreaPin = useCallback(() => {
     setValue("area_id", "", { shouldValidate: false });
     setValue("pincode", "", { shouldValidate: false });
+    setAreas([]);
+    setAreaPincodes(new Map());
+    setPincodeOptions([]);
+    addPartnerAreasLoadedKeyRef.current = "";
   }, [setValue]);
 
   const applyAddPartnerFranchiseLocation = useCallback(
@@ -535,40 +586,43 @@ function AddEditUserDialogView({
       if (!fid || !isAddPartner) return;
 
       let stateId = "";
-      let cityId = "";
+      let stateName = "";
 
       const fromDropdown = franchiseDropdownOptions.find(
         (o) => String(o.value) === fid
       );
       if (fromDropdown?.state_id) {
-        stateId = String(fromDropdown.state_id).trim();
-        cityId = String(fromDropdown.city_id ?? "").trim();
-      } else {
+        stateId = firstLocationId(fromDropdown.state_id);
+        stateName = String(fromDropdown.state_name ?? "").trim();
+      }
+      if (!stateId || !stateName) {
         const franchise = await fetchFranchiseById(fid, {
           skipAdminContactEnrichment: true,
         });
-        stateId = String(franchise?.state_id ?? "").trim();
-        cityId = String(franchise?.city_id ?? "").trim();
+        if (!stateId) stateId = firstLocationId(franchise?.state_id);
+        if (!stateName) stateName = firstLocationName(franchise?.state_name);
       }
 
       if (!stateId) return;
 
       setValue("state_id", stateId, { shouldValidate: true, shouldDirty: true });
+      setValue("city_id", "", { shouldValidate: false });
       setValue("area_id", "", { shouldValidate: false });
       setValue("pincode", "", { shouldValidate: false });
+      setState((prev) =>
+        addPartnerStatesLoadedRef.current && prev.length > 0
+          ? ensureSelectOption(prev, stateId, stateName)
+          : ensureSelectOption([], stateId, stateName)
+      );
+      setCity([]);
       setAreas([]);
       setAreaPincodes(new Map());
       setPincodeOptions([]);
-
-      await fetchCityFromApi(stateId);
-
-      if (cityId) {
-        setValue("city_id", cityId, { shouldValidate: true, shouldDirty: true });
-      } else {
-        setValue("city_id", "", { shouldValidate: false });
-      }
+      addPartnerCitiesLoadedKeyRef.current = "";
+      addPartnerAreasLoadedKeyRef.current = "";
+      addPartnerCategoriesLoadedKeyRef.current = "";
     },
-    [isAddPartner, franchiseDropdownOptions, setValue, fetchCityFromApi]
+    [isAddPartner, franchiseDropdownOptions, setValue]
   );
 
   const fetchStateFromApi = useCallback(async () => {
@@ -583,6 +637,192 @@ function AddEditUserDialogView({
       setState([]);
     }
   }, [isEditable, user?.state_id, fetchCityFromApi]);
+
+  const loadAddPartnerStatesOnOpen = useCallback(async () => {
+    if (!isAddPartner) return;
+    if (addPartnerStatesLoadedRef.current && states.length > 0) return;
+    addPartnerStatesLoadedRef.current = true;
+    try {
+      const stateOptions = await fetchStateDropDown();
+      setState(stateOptions);
+    } catch {
+      addPartnerStatesLoadedRef.current = false;
+      setState([]);
+    }
+  }, [isAddPartner, states.length]);
+
+  const loadAddPartnerCitiesOnOpen = useCallback(async () => {
+    if (!isAddPartner) return;
+    const sid = String(getValues("state_id") ?? "").trim();
+    if (!sid) return;
+    const key = `${String(locationFranchiseId || "")}|${sid}`;
+    if (addPartnerCitiesLoadedKeyRef.current === key && cities.length > 0) {
+      return;
+    }
+    addPartnerCitiesLoadedKeyRef.current = key;
+    await fetchCityFromApi(sid);
+  }, [isAddPartner, getValues, locationFranchiseId, cities.length, fetchCityFromApi]);
+
+  const loadAddPartnerAreasOnOpen = useCallback(async () => {
+    if (!isAddPartner) return;
+    const cityId = String(getValues("city_id") ?? "").trim();
+    const stateId = String(getValues("state_id") ?? "").trim();
+    if (!cityId) return;
+    const franchiseScopeId = String(
+      catalogFranchiseApiId || locationFranchiseId || ""
+    ).trim();
+    const key = `${franchiseScopeId}|${cityId}|${stateId}`;
+    if (addPartnerAreasLoadedKeyRef.current === key && areas.length > 0) {
+      return;
+    }
+    addPartnerAreasLoadedKeyRef.current = key;
+    try {
+      const rows = await fetchAreasByCityForForm(
+        cityId,
+        stateId || undefined,
+        franchiseScopeId || undefined
+      );
+      const areaOptions: { value: string; label: string }[] = [];
+      const pinMap = new Map<string, string[]>();
+      for (const row of rows) {
+        areaOptions.push({ value: row.value, label: row.label });
+        pinMap.set(row.value, row.pincodes);
+      }
+      setAreas(areaOptions);
+      setAreaPincodes(pinMap);
+      const currentArea = String(getValues("area_id") ?? "").trim();
+      if (currentArea && !areaOptions.some((a) => a.value === currentArea)) {
+        setValue("area_id", "", { shouldValidate: false });
+        setValue("pincode", "", { shouldValidate: false });
+      }
+    } catch {
+      addPartnerAreasLoadedKeyRef.current = "";
+      setAreas([]);
+      setAreaPincodes(new Map());
+    }
+  }, [
+    isAddPartner,
+    getValues,
+    setValue,
+    catalogFranchiseApiId,
+    locationFranchiseId,
+    areas.length,
+  ]);
+
+  const loadAddPartnerCategoriesOnOpen = useCallback(async () => {
+    if (!isAddPartner || addPartnerCatalogLocked) return;
+    const apiFranchiseId = catalogFranchiseApiId;
+    if (isSuperAdminOrStaff && !apiFranchiseId) return;
+    const key = String(apiFranchiseId || "session");
+    if (
+      addPartnerCategoriesLoadedKeyRef.current === key &&
+      categoryOptions.some((c) => c.value && c.value !== "select-all")
+    ) {
+      return;
+    }
+    if (addPartnerCategoryLoadingRef.current) return;
+    addPartnerCategoryLoadingRef.current = true;
+    addPartnerCategoriesLoadedKeyRef.current = key;
+    try {
+      const res = await fetchCategory(
+        1,
+        5000,
+        { status: "true" },
+        [],
+        apiFranchiseId || undefined
+      );
+      if (!res.response) {
+        setCategoryOptions([]);
+        return;
+      }
+      const catList = (Array.isArray(res.categories) ? res.categories : [])
+        .map((c) => ({
+          value: String(c._id ?? c.category_id ?? "").trim(),
+          label: String(c.name ?? "").trim(),
+        }))
+        .filter((c) => c.value);
+      setCategoryOptions(catList);
+    } catch {
+      addPartnerCategoriesLoadedKeyRef.current = "";
+      setCategoryOptions([]);
+    } finally {
+      addPartnerCategoryLoadingRef.current = false;
+    }
+  }, [
+    isAddPartner,
+    addPartnerCatalogLocked,
+    catalogFranchiseApiId,
+    isSuperAdminOrStaff,
+    categoryOptions,
+  ]);
+
+  const loadAddPartnerServicesOnOpen = useCallback(
+    async (categoryId: string) => {
+      const cid = String(categoryId ?? "").trim();
+      if (!cid || !isAddPartner) return;
+      if ((servicesByCategoryId[cid] ?? []).length > 0) return;
+      const apiFranchiseId = catalogFranchiseApiId;
+      if (isSuperAdminOrStaff && !apiFranchiseId) {
+        setServicesByCategoryId((prev) => ({ ...prev, [cid]: [] }));
+        return;
+      }
+      if (addPartnerServicesLoadingRef.current.has(cid)) return;
+      addPartnerServicesLoadingRef.current.add(cid);
+      const cityId = String(watchedCityId ?? "").trim();
+      const stateId = String(watchedStateId ?? "").trim();
+      try {
+        const svcRes = await fetchService(
+          1,
+          5000,
+          {
+            status: "true",
+            ...(cityId ? { city_id: cityId } : {}),
+            ...(stateId ? { state_id: stateId } : {}),
+          },
+          [],
+          apiFranchiseId || undefined
+        );
+        const list =
+          svcRes.response && Array.isArray(svcRes.services)
+            ? svcRes.services
+            : [];
+        const filtered = list.filter(
+          (s) => normalizeServiceCategoryRef(s.category_id) === cid
+        );
+        const mapped: PartnerCatalogServiceLite[] = filtered.map((s) => ({
+          _id: String((s as { _id?: string })._id ?? ""),
+          name: String((s as { name?: string }).name ?? ""),
+          category_id: cid,
+          price:
+            (s as { price?: number | null }).price !== undefined &&
+            (s as { price?: number | null }).price !== null
+              ? Number((s as { price?: number }).price)
+              : undefined,
+          payment_type: String(
+            (s as { payment_type?: string }).payment_type ??
+              (s as { min_deposit_type?: string }).min_deposit_type ??
+              ""
+          ).trim(),
+        }));
+        setServicesByCategoryId((prev) => ({
+          ...prev,
+          [cid]: mapped,
+        }));
+      } catch {
+        setServicesByCategoryId((prev) => ({ ...prev, [cid]: [] }));
+      } finally {
+        addPartnerServicesLoadingRef.current.delete(cid);
+      }
+    },
+    [
+      isAddPartner,
+      isSuperAdminOrStaff,
+      catalogFranchiseApiId,
+      watchedCityId,
+      watchedStateId,
+      servicesByCategoryId,
+    ]
+  );
 
   useEffect(() => {
     if (!(isAddPartner || isPartnerEdit)) return;
@@ -711,6 +951,10 @@ function AddEditUserDialogView({
       setAreas([]);
       setAreaPincodes(new Map());
       setPincodeOptions([]);
+      setCategoryOptions([]);
+      addPartnerCitiesLoadedKeyRef.current = "";
+      addPartnerAreasLoadedKeyRef.current = "";
+      addPartnerCategoriesLoadedKeyRef.current = "";
     }
   }, [
     isAddPartner,
@@ -745,7 +989,9 @@ function AddEditUserDialogView({
             value: String(r.value ?? "").trim(),
             label: String(r.label ?? "").trim(),
             state_id: r.state_id ? String(r.state_id).trim() : undefined,
-            city_id: r.city_id ? String(r.city_id).trim() : undefined,
+            state_name: r.state_name ? String(r.state_name).trim() : undefined,
+            city_id: r.city_id ? firstLocationId(r.city_id) : undefined,
+            city_name: r.city_name ? String(r.city_name).trim() : undefined,
           }))
           .filter((o) => o.value);
         setFranchiseDropdownOptions(opts);
@@ -762,46 +1008,12 @@ function AddEditUserDialogView({
     if (!isAddPartner) return;
     const apiFranchiseId = catalogFranchiseApiId;
     if (isSuperAdminOrStaff && !apiFranchiseId) {
-      setCategoryOptions([{ value: "select-all", label: "Select All" }]);
-      return;
+      setCategoryOptions([]);
     }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetchCategory(
-          1,
-          5000,
-          { status: "true" },
-          [],
-          apiFranchiseId || undefined
-        );
-        if (cancelled) return;
-        if (!res.response) {
-          setCategoryOptions([{ value: "select-all", label: "Select All" }]);
-          return;
-        }
-        const catList = (Array.isArray(res.categories) ? res.categories : [])
-          .map((c) => ({
-            value: String(c._id ?? c.category_id ?? "").trim(),
-            label: String(c.name ?? "").trim(),
-          }))
-          .filter((c) => c.value);
-        setCategoryOptions([
-          { value: "select-all", label: "Select All" },
-          ...catList,
-        ]);
-      } catch {
-        if (!cancelled) {
-          setCategoryOptions([{ value: "select-all", label: "Select All" }]);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
   }, [isAddPartner, isSuperAdminOrStaff, catalogFranchiseApiId]);
 
   useEffect(() => {
+    if (isAddPartner) return;
     let cancelled = false;
     const loadAreasForCity = async () => {
       const cityId = String(watchedCityId ?? "").trim();
@@ -814,10 +1026,7 @@ function AddEditUserDialogView({
         return;
       }
 
-      const franchiseScopeId =
-        isAddPartner || isPartnerEdit
-          ? String(catalogFranchiseApiId || locationFranchiseId || "").trim()
-          : "";
+      const franchiseScopeId = "";
 
       const rows = await fetchAreasByCityForForm(
         cityId,
@@ -834,11 +1043,32 @@ function AddEditUserDialogView({
         pinMap.set(row.value, row.pincodes);
       }
 
+      if (isPartnerEdit) {
+        const preserveAreaId = normalizeIdLike((user as any)?.area_id);
+        if (
+          preserveAreaId &&
+          !areaOptions.some((a) => a.value === preserveAreaId)
+        ) {
+          const preserveLabel = String(
+            (user as { area_name?: string })?.area_name ?? preserveAreaId
+          ).trim();
+          areaOptions.push({
+            value: preserveAreaId,
+            label: preserveLabel || preserveAreaId,
+          });
+          if (!pinMap.has(preserveAreaId)) {
+            const pin = normalizePincodeValue(user?.pincode);
+            pinMap.set(preserveAreaId, pin ? [pin] : []);
+          }
+        }
+      }
+
       setAreas(areaOptions);
       setAreaPincodes(pinMap);
       const currentArea = String(watch("area_id") ?? "").trim();
       if (currentArea && !areaOptions.some((a) => a.value === currentArea)) {
         setValue("area_id", "", { shouldValidate: false });
+        setValue("pincode", "", { shouldValidate: false });
       }
     };
 
@@ -851,10 +1081,8 @@ function AddEditUserDialogView({
     watchedStateId,
     setValue,
     watch,
-    isAddPartner,
     isPartnerEdit,
-    catalogFranchiseApiId,
-    locationFranchiseId,
+    user,
   ]);
 
   useEffect(() => {
@@ -872,6 +1100,73 @@ function AddEditUserDialogView({
       setValue("pincode", "", { shouldValidate: false });
     }
   }, [watchedAreaId, areaPincodes, setValue, watch]);
+
+  // Update Partner: resolve franchise from selected area (areas belong to franchises).
+  useEffect(() => {
+    if (!isPartnerEdit) {
+      setPartnerEditFranchiseId("");
+      setPartnerEditFranchiseName("");
+      setPartnerEditFranchiseResolving(false);
+      return;
+    }
+
+    const areaId = String(watchedAreaId ?? "").trim();
+    const cityId = String(watchedCityId ?? "").trim();
+
+    if (!areaId) {
+      setPartnerEditFranchiseId("");
+      setPartnerEditFranchiseName("");
+      setPartnerEditFranchiseResolving(false);
+      return;
+    }
+
+    // Seed from current user while resolving (same area / initial open).
+    const existingId = partnerFranchiseIdFromUser(user);
+    const existingName = partnerFranchiseFieldsFromUser(user).franchiseName;
+    if (existingId) {
+      setPartnerEditFranchiseId(existingId);
+      if (existingName && existingName !== "—") {
+        setPartnerEditFranchiseName(existingName);
+      }
+    }
+
+    const areaName = String(
+      areas.find((a) => a.value === areaId)?.label ?? ""
+    ).trim();
+
+    let cancelled = false;
+    setPartnerEditFranchiseResolving(true);
+
+    void (async () => {
+      try {
+        const resolved = await resolveFranchiseForArea(areaId, {
+          cityId,
+          areaName,
+        });
+        if (cancelled) return;
+        if (resolved?.franchiseId) {
+          setPartnerEditFranchiseId(resolved.franchiseId);
+          setPartnerEditFranchiseName(
+            resolved.franchiseName || resolved.franchiseId
+          );
+        } else {
+          setPartnerEditFranchiseId("");
+          setPartnerEditFranchiseName("");
+        }
+      } catch {
+        if (!cancelled) {
+          setPartnerEditFranchiseId("");
+          setPartnerEditFranchiseName("");
+        }
+      } finally {
+        if (!cancelled) setPartnerEditFranchiseResolving(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPartnerEdit, watchedAreaId, watchedCityId, user, areas]);
 
   useEffect(() => {
     if (!isPartnerEdit || !user) return;
@@ -1051,66 +1346,8 @@ function AddEditUserDialogView({
             : b
         )
       );
-      const cid = String(categoryId ?? "").trim();
-      if (!cid || !isAddPartner) return;
-      const apiFranchiseId = catalogFranchiseApiId;
-      if (isSuperAdminOrStaff && !apiFranchiseId) {
-        setServicesByCategoryId((prev) => ({ ...prev, [cid]: [] }));
-        return;
-      }
-      const cityId = String(watchedCityId ?? "").trim();
-      const stateId = String(watchedStateId ?? "").trim();
-      void (async () => {
-        try {
-          const svcRes = await fetchService(
-            1,
-            5000,
-            {
-              status: "true",
-              ...(cityId ? { city_id: cityId } : {}),
-              ...(stateId ? { state_id: stateId } : {}),
-            },
-            [],
-            apiFranchiseId || undefined
-          );
-          const list =
-            svcRes.response && Array.isArray(svcRes.services)
-              ? svcRes.services
-              : [];
-          const filtered = list.filter(
-            (s) => normalizeServiceCategoryRef(s.category_id) === cid
-          );
-          const mapped: PartnerCatalogServiceLite[] = filtered.map((s) => ({
-            _id: String((s as { _id?: string })._id ?? ""),
-            name: String((s as { name?: string }).name ?? ""),
-            category_id: cid,
-            price:
-              (s as { price?: number | null }).price !== undefined &&
-              (s as { price?: number | null }).price !== null
-                ? Number((s as { price?: number }).price)
-                : undefined,
-            payment_type: String(
-              (s as { payment_type?: string }).payment_type ??
-                (s as { min_deposit_type?: string }).min_deposit_type ??
-                ""
-            ).trim(),
-          }));
-          setServicesByCategoryId((prev) => ({
-            ...prev,
-            [cid]: mapped,
-          }));
-        } catch {
-          setServicesByCategoryId((prev) => ({ ...prev, [cid]: [] }));
-        }
-      })();
     },
-    [
-      isAddPartner,
-      isSuperAdminOrStaff,
-      catalogFranchiseApiId,
-      watchedCityId,
-      watchedStateId,
-    ]
+    []
   );
 
   const addServiceRow = useCallback((blockId: string) => {
@@ -1253,7 +1490,22 @@ function AddEditUserDialogView({
           return;
         }
         partnerCatalogFlat = catalogFlat;
-      } 
+      }
+      if (isPartnerEdit) {
+        const areaId = String((data as any).area_id ?? "").trim();
+        if (areaId && partnerEditFranchiseResolving) {
+          showErrorAlert(
+            "Please wait while franchise is resolved for the selected area."
+          );
+          return;
+        }
+        if (areaId && !String(partnerEditFranchiseId ?? "").trim()) {
+          showErrorAlert(
+            "Selected area is not linked to any franchise."
+          );
+          return;
+        }
+      }
     }
 
     if (isAddPartner) {
@@ -1280,10 +1532,6 @@ function AddEditUserDialogView({
           showErrorAlert("Please select subscription start date.");
           return;
         }
-        if (!String(data.subscription_end_date ?? "").trim()) {
-          showErrorAlert("Please select subscription end date.");
-          return;
-        }
       }
     }
 
@@ -1297,17 +1545,6 @@ function AddEditUserDialogView({
       ) {
         showErrorAlert("Please enter a rejection reason.");
         return;
-      }
-      if (partnerVerificationDecision === "approve") {
-        const missingMandatoryDocs = missingMandatoryPartnerVerificationDocs(
-          user
-        );
-        if (missingMandatoryDocs.length > 0) {
-          showErrorAlert(
-            `${missingMandatoryDocs.join(" and ")} must be uploaded before approving the partner.`
-          );
-          return;
-        }
       }
     }
 
@@ -1328,22 +1565,50 @@ function AddEditUserDialogView({
     const isBlockedPayload = usePartnerVerificationStatus
       ? Boolean((user as any)?.is_blocked)
       : isUserUpdate
-      ? Boolean((user as any)?.is_blocked)
+      ? !isActivePayload
       : typeof (data as any).is_blocked === "string"
         ? String((data as any).is_blocked) === "true"
         : Boolean((data as any).is_blocked);
-    const resolvedIsActivePayload = isBlockedPayload ? false : isActivePayload;
+    const resolvedIsActivePayload = isUserUpdate
+      ? isActivePayload
+      : isBlockedPayload
+        ? false
+        : isActivePayload;
 
     const sessionFranchiseId = sessionFranchiseIdForScopedApis();
     const createFranchiseId =
       isAddPartner && effectiveAddPartnerFranchiseId
         ? effectiveAddPartnerFranchiseId
-        : isFranchisePortalUser &&
-            !isEditable &&
-            (role === USER_ROLE || role === PARTNER_ROLE) &&
-            sessionFranchiseId
-          ? sessionFranchiseId
-          : "";
+        : isPartnerEdit && String(partnerEditFranchiseId ?? "").trim()
+          ? String(partnerEditFranchiseId).trim()
+          : isFranchisePortalUser &&
+              !isEditable &&
+              (role === USER_ROLE || role === PARTNER_ROLE) &&
+              sessionFranchiseId
+            ? sessionFranchiseId
+            : "";
+
+    const subscriptionPlanId = String(data.subscription_plan_id ?? "").trim();
+    const subscriptionStartDate = String(
+      data.subscription_start_date ?? ""
+    ).trim();
+    let planOptionsForEnd = partnerPlanSelectOptions;
+    if (
+      (isAddPartner || isPartnerEdit) &&
+      subscriptionPlanId &&
+      planOptionsForEnd.length === 0
+    ) {
+      try {
+        planOptionsForEnd = await fetchSubscriptionPlanOptions();
+      } catch {
+        planOptionsForEnd = [];
+      }
+    }
+    const subscriptionEndDate =
+      computedSubscriptionEndDate(
+        planOptionsForEnd.find((p) => p.value === subscriptionPlanId),
+        subscriptionStartDate
+      ) || String(data.subscription_end_date ?? "").trim();
 
     const payload: Record<string, unknown> = {
       type: role,
@@ -1423,12 +1688,10 @@ function AddEditUserDialogView({
         is_verified: PARTNER_VERIFICATION.PENDING,
       }),
       ...((isAddPartner || isPartnerEdit) && {
-        subscription_plan_id: String(data.subscription_plan_id ?? "").trim(),
+        subscription_plan_id: subscriptionPlanId,
         subscription_plan: String(data.subscription_plan ?? "").trim(),
-        subscription_start_date: String(
-          data.subscription_start_date ?? ""
-        ).trim(),
-        subscription_end_date: String(data.subscription_end_date ?? "").trim(),
+        subscription_start_date: subscriptionStartDate,
+        subscription_end_date: subscriptionEndDate,
         ...(String(data.partner_subscription_id ?? "").trim()
           ? {
               partner_subscription_id: String(
@@ -1518,12 +1781,8 @@ function AddEditUserDialogView({
               data.subscription_plan_id ?? ""
             ).trim(),
             subscription_plan: String(data.subscription_plan ?? "").trim(),
-            subscription_start_date: String(
-              data.subscription_start_date ?? ""
-            ).trim(),
-            subscription_end_date: String(
-              data.subscription_end_date ?? ""
-            ).trim(),
+            subscription_start_date: subscriptionStartDate,
+            subscription_end_date: subscriptionEndDate,
             rating: "",
             is_active: true,
           });
@@ -1535,25 +1794,14 @@ function AddEditUserDialogView({
   };
 
   useEffect(() => {
-    if (!isAddPartner && !isPartnerEdit) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const opts = await fetchSubscriptionPlanOptions();
-        if (!cancelled)
-          setPartnerPlanSelectOptions(Array.isArray(opts) ? opts : []);
-      } catch {
-        if (!cancelled) setPartnerPlanSelectOptions([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isAddPartner, isPartnerEdit]);
+    if (!isPartnerEdit) return;
+    void loadPartnerPlanOptions();
+  }, [isPartnerEdit, loadPartnerPlanOptions]);
 
   useEffect(() => {
+    if (isAddPartner) return;
     void fetchStateFromApi();
-  }, [fetchStateFromApi]);
+  }, [fetchStateFromApi, isAddPartner]);
 
   useEffect(() => {
     if (isEditable && user?.is_active !== undefined) {
@@ -1897,7 +2145,10 @@ function AddEditUserDialogView({
                       <CustomTextFieldSelect
                         label="State"
                         controlId="State"
-                        options={states ?? []}
+                        options={ensureSelectOption(
+                          states ?? [],
+                          String(watch("state_id") ?? "")
+                        )}
                         register={register}
                         fieldName="state_id"
                         error={errors.state_id}
@@ -1907,6 +2158,9 @@ function AddEditUserDialogView({
                         menuPortal
                         placeholder="Select state"
                         labelSize={3}
+                        onMenuOpen={() => {
+                          void loadAddPartnerStatesOnOpen();
+                        }}
                         onChange={(e) =>
                           onStateChangeClearLocationChain(e.target.value)
                         }
@@ -1916,7 +2170,10 @@ function AddEditUserDialogView({
                       <CustomTextFieldSelect
                         label="City"
                         controlId="City"
-                        options={cities ?? []}
+                        options={ensureSelectOption(
+                          cities ?? [],
+                          String(watch("city_id") ?? "")
+                        )}
                         register={register}
                         fieldName="city_id"
                         error={errors.city_id}
@@ -1927,6 +2184,9 @@ function AddEditUserDialogView({
                         placeholder="Select city"
                         labelSize={3}
                         isDisabled={!String(watch("state_id") ?? "").trim()}
+                        onMenuOpen={() => {
+                          void loadAddPartnerCitiesOnOpen();
+                        }}
                         onChange={() => onCityChangeClearAreaPin()}
                       />
                     </Col>
@@ -1938,7 +2198,10 @@ function AddEditUserDialogView({
                         controlId="Area"
                         options={[
                           { value: "", label: "Select Area" },
-                          ...(areas ?? []),
+                          ...ensureSelectOption(
+                            areas ?? [],
+                            String(watch("area_id") ?? "")
+                          ),
                         ]}
                         register={register}
                         fieldName="area_id"
@@ -1950,6 +2213,9 @@ function AddEditUserDialogView({
                         placeholder="Select area"
                         labelSize={3}
                         isDisabled={!String(watch("city_id") ?? "").trim()}
+                        onMenuOpen={() => {
+                          void loadAddPartnerAreasOnOpen();
+                        }}
                       />
                     </Col>
                     <Col xs={12} md={6}>
@@ -2023,6 +2289,9 @@ function AddEditUserDialogView({
                   {...partnerSubscriptionForm}
                   planOptions={partnerPlanSelectOptions}
                   subscriptionDatesRequired
+                  onPlanMenuOpen={() => {
+                    void loadPartnerPlanOptions();
+                  }}
                   subscriptionStartStr={
                     toYmdString(subscriptionStartStr) ?? null
                   }
@@ -2159,6 +2428,9 @@ function AddEditUserDialogView({
                     {...partnerSubscriptionForm}
                     layout="stacked"
                     planOptions={partnerPlanSelectOptions}
+                    onPlanMenuOpen={() => {
+                      void loadPartnerPlanOptions();
+                    }}
                     subscriptionStartStr={
                       toYmdString(subscriptionStartStr) ?? null
                     }
@@ -2232,6 +2504,7 @@ function AddEditUserDialogView({
                       }
                     />
                     <CustomTextFieldSelect
+                      key={`partner-edit-city-${String(watch("state_id") ?? "")}-${cities.length}`}
                       label="City"
                       controlId="City"
                       options={cities ?? []}
@@ -2239,13 +2512,15 @@ function AddEditUserDialogView({
                       fieldName="city_id"
                       error={errors.city_id}
                       requiredMessage="Please select city"
-                      defaultValue={
-                        isEditable ? (user?.city_id ? user?.city_id : "") : ""
-                      }
+                      defaultValue={String(watch("city_id") ?? "")}
                       setValue={setValue as (name: string, value: any) => void}
+                      menuPortal
+                      placeholder="Select city"
+                      isDisabled={!String(watch("state_id") ?? "").trim()}
                       onChange={() => onCityChangeClearAreaPin()}
                     />
                     <CustomTextFieldSelect
+                      key={`partner-edit-area-${String(watch("city_id") ?? "")}-${areas.length}`}
                       label="Area"
                       controlId="Area"
                       options={[
@@ -2256,12 +2531,17 @@ function AddEditUserDialogView({
                       fieldName="area_id"
                       error={(errors as any).area_id}
                       requiredMessage="Please select area"
-                      defaultValue={
-                        isEditable ? normalizeIdLike((user as any)?.area_id) : ""
-                      }
+                      defaultValue={String(watch("area_id") ?? "")}
                       setValue={setValue as (name: string, value: any) => void}
+                      menuPortal
+                      placeholder="Select area"
+                      isDisabled={!String(watch("city_id") ?? "").trim()}
+                      onChange={() => {
+                        setValue("pincode", "", { shouldValidate: false });
+                      }}
                     />
                     <CustomTextFieldSelect
+                      key={`partner-edit-pin-${String(watch("area_id") ?? "")}-${pincodeOptions.length}`}
                       label="Pincode"
                       controlId="Pincode"
                       options={[
@@ -2272,10 +2552,30 @@ function AddEditUserDialogView({
                       fieldName="pincode"
                       error={errors.pincode}
                       requiredMessage="Please select pincode"
-                      defaultValue={
-                        isEditable ? normalizePincodeValue(user?.pincode) : ""
-                      }
+                      defaultValue={String(watch("pincode") ?? "")}
                       setValue={setValue as (name: string, value: any) => void}
+                      menuPortal
+                      placeholder="Select pincode"
+                      isDisabled={!String(watch("area_id") ?? "").trim()}
+                    />
+                    <CustomTextField
+                      label="Franchise Name"
+                      controlId="partner_edit_franchise_name"
+                      placeholder={
+                        partnerEditFranchiseResolving
+                          ? "Resolving franchise…"
+                          : "Resolved from selected area"
+                      }
+                      register={register}
+                      isEditable={false}
+                      value={
+                        partnerEditFranchiseResolving
+                          ? "Resolving franchise…"
+                          : partnerEditFranchiseName ||
+                            (String(watch("area_id") ?? "").trim()
+                              ? "No franchise linked to this area"
+                              : "")
+                      }
                     />
                     <CustomTextField
                       label="Address"
@@ -2298,123 +2598,132 @@ function AddEditUserDialogView({
                 ) : null}
                 {isEditable ? (
                   <>
-                    {role !== USER_ROLE ? (
-                      usePartnerVerificationStatus ? (
-                        partnerVerificationApproved ? (
-                          <Row className="align-items-start">
+                    {role === USER_ROLE ? (
+                      <CustomTextFieldRadio
+                        label="Status"
+                        name="is_active"
+                        options={getStatusOptions()}
+                        defaultValue={String(
+                          watch("is_active") ?? user?.is_active ?? true
+                        )}
+                        isEditable={true}
+                        setValue={setValue}
+                      />
+                    ) : usePartnerVerificationStatus ? (
+                      partnerVerificationApproved ? (
+                        <Row className="align-items-start">
+                          <Col sm={4} className="d-flex align-items-start">
+                            <label className="custom-profile-lable mb-0">
+                              Verification status
+                            </label>
+                          </Col>
+                          <Col>
+                            <span className="custom-active">
+                              {partnerVerificationLabel(user?.is_verified)}
+                            </span>
+                          </Col>
+                        </Row>
+                      ) : (
+                        <>
+                          <Row className="align-items-start g-2 mb-0">
                             <Col sm={4} className="d-flex align-items-start">
                               <label className="custom-profile-lable mb-0">
                                 Verification status
                               </label>
                             </Col>
                             <Col>
-                              <span className="custom-active">
-                                {partnerVerificationLabel(user?.is_verified)}
-                              </span>
-                            </Col>
-                          </Row>
-                        ) : (
-                          <>
-                            <Row className="align-items-start g-2 mb-0">
-                              <Col sm={4} className="d-flex align-items-start">
-                                <label className="custom-profile-lable mb-0">
-                                  Verification status
-                                </label>
-                              </Col>
-                              <Col>
-                                <div className="d-flex flex-wrap gap-3 align-items-center">
-                                  <Form.Check
-                                    type="radio"
-                                    id={`add-edit-partner-approve-${user?._id ?? "new"}`}
-                                    name="partner-verification-decision"
-                                    className="custom-radio-check"
-                                    label={
-                                      <span className="custom-radio-text">
-                                        Approve
-                                      </span>
-                                    }
-                                    checked={
-                                      partnerVerificationDecision === "approve"
-                                    }
-                                    onChange={() =>
-                                      setPartnerVerificationDecision("approve")
-                                    }
-                                  />
-                                  <Form.Check
-                                    type="radio"
-                                    id={`add-edit-partner-reject-${user?._id ?? "new"}`}
-                                    name="partner-verification-decision"
-                                    className="custom-radio-check"
-                                    label={
-                                      <span className="custom-radio-text">
-                                        Reject
-                                      </span>
-                                    }
-                                    checked={
-                                      partnerVerificationDecision === "reject"
-                                    }
-                                    onChange={() =>
-                                      setPartnerVerificationDecision("reject")
-                                    }
-                                  />
-                                  <Form.Check
-                                    type="radio"
-                                    id={`add-edit-partner-pending-${user?._id ?? "new"}`}
-                                    name="partner-verification-decision"
-                                    className="custom-radio-check"
-                                    label={
-                                      <span className="custom-radio-text">
-                                        Pending
-                                      </span>
-                                    }
-                                    checked={
-                                      partnerVerificationDecision === "pending"
-                                    }
-                                    onChange={() =>
-                                      setPartnerVerificationDecision("pending")
-                                    }
-                                  />
-                                </div>
-                              </Col>
-                            </Row>
-                            {partnerVerificationDecision === "reject" ? (
-                              <Form.Group className="mt-3 mb-0">
-                                <Form.Label className="custom-profile-lable mb-1">
-                                  Rejection reason
-                                </Form.Label>
-                                <Form.Control
-                                  as="textarea"
-                                  rows={4}
-                                  placeholder="Enter rejection reason"
-                                  value={partnerVerificationRejectReason}
-                                  onChange={(e) =>
-                                    setPartnerVerificationRejectReason(
-                                      e.target.value
-                                    )
+                              <div className="d-flex flex-wrap gap-3 align-items-center">
+                                <Form.Check
+                                  type="radio"
+                                  id={`add-edit-partner-approve-${user?._id ?? "new"}`}
+                                  name="partner-verification-decision"
+                                  className="custom-radio-check"
+                                  label={
+                                    <span className="custom-radio-text">
+                                      Approve
+                                    </span>
+                                  }
+                                  checked={
+                                    partnerVerificationDecision === "approve"
+                                  }
+                                  onChange={() =>
+                                    setPartnerVerificationDecision("approve")
                                   }
                                 />
-                              </Form.Group>
-                            ) : null}
-                          </>
-                        )
-                      ) : (
-                        <CustomTextFieldRadio
-                          label="Status"
-                          name="is_blocked"
-                          options={[
-                            { value: "false", label: "Active" },
-                            { value: "true", label: "Inactive" },
-                          ]}
-                          defaultValue={String(
-                            watch("is_blocked") ??
-                              (user as any)?.is_blocked ??
-                              false
-                          )}
-                          isEditable={true}
-                          setValue={setValue}
-                        />
+                                <Form.Check
+                                  type="radio"
+                                  id={`add-edit-partner-reject-${user?._id ?? "new"}`}
+                                  name="partner-verification-decision"
+                                  className="custom-radio-check"
+                                  label={
+                                    <span className="custom-radio-text">
+                                      Reject
+                                    </span>
+                                  }
+                                  checked={
+                                    partnerVerificationDecision === "reject"
+                                  }
+                                  onChange={() =>
+                                    setPartnerVerificationDecision("reject")
+                                  }
+                                />
+                                <Form.Check
+                                  type="radio"
+                                  id={`add-edit-partner-pending-${user?._id ?? "new"}`}
+                                  name="partner-verification-decision"
+                                  className="custom-radio-check"
+                                  label={
+                                    <span className="custom-radio-text">
+                                      Pending
+                                    </span>
+                                  }
+                                  checked={
+                                    partnerVerificationDecision === "pending"
+                                  }
+                                  onChange={() =>
+                                    setPartnerVerificationDecision("pending")
+                                  }
+                                />
+                              </div>
+                            </Col>
+                          </Row>
+                          {partnerVerificationDecision === "reject" ? (
+                            <Form.Group className="mt-3 mb-0">
+                              <Form.Label className="custom-profile-lable mb-1">
+                                Rejection reason
+                              </Form.Label>
+                              <Form.Control
+                                as="textarea"
+                                rows={4}
+                                placeholder="Enter rejection reason"
+                                value={partnerVerificationRejectReason}
+                                onChange={(e) =>
+                                  setPartnerVerificationRejectReason(
+                                    e.target.value
+                                  )
+                                }
+                              />
+                            </Form.Group>
+                          ) : null}
+                        </>
                       )
-                    ) : null}
+                    ) : (
+                      <CustomTextFieldRadio
+                        label="Status"
+                        name="is_blocked"
+                        options={[
+                          { value: "false", label: "Active" },
+                          { value: "true", label: "Inactive" },
+                        ]}
+                        defaultValue={String(
+                          watch("is_blocked") ??
+                            (user as any)?.is_blocked ??
+                            false
+                        )}
+                        isEditable={true}
+                        setValue={setValue}
+                      />
+                    )}
                   </>
                 ) : null}
                 <div className="mt-2">
@@ -2470,6 +2779,9 @@ function AddEditUserDialogView({
                             value={block.categoryId}
                             placeholder="Select category"
                             isDisabled={addPartnerCatalogLocked}
+                            onMenuOpen={() => {
+                              void loadAddPartnerCategoriesOnOpen();
+                            }}
                             onChange={(cid: string) =>
                               updateBlockCategory(block.id, cid)
                             }
@@ -2542,7 +2854,15 @@ function AddEditUserDialogView({
                               )}
                               value={row.serviceId}
                               placeholder="Select service"
-                              isDisabled={addPartnerCatalogLocked}
+                              isDisabled={
+                                addPartnerCatalogLocked ||
+                                !String(block.categoryId ?? "").trim()
+                              }
+                              onMenuOpen={() => {
+                                void loadAddPartnerServicesOnOpen(
+                                  block.categoryId
+                                );
+                              }}
                               onChange={(sid: string) => {
                                 const categoryId = String(
                                   block.categoryId ?? ""
@@ -2747,14 +3067,12 @@ function AddEditUserDialogView({
                           controlId="partner_bank_legal_name"
                           placeholder="Enter bank name"
                           register={register}
-                          error={errors.partner_bank_legal_name}
-                          validation={ADD_PARTNER_LETTERS_ONLY_FIELD_RULE}
                           value={watch("partner_bank_legal_name") ?? ""}
                           onChange={(value) =>
                             setValue(
                               "partner_bank_legal_name",
                               sanitizeLettersAndSpaces(value),
-                              { shouldValidate: true, shouldDirty: true }
+                              { shouldDirty: true }
                             )
                           }
                           hideValidationFeedback
@@ -2765,14 +3083,12 @@ function AddEditUserDialogView({
                           controlId="partner_bank_branch"
                           placeholder="Enter branch name"
                           register={register}
-                          error={errors.partner_bank_branch}
-                          validation={ADD_PARTNER_LETTERS_ONLY_FIELD_RULE}
                           value={watch("partner_bank_branch") ?? ""}
                           onChange={(value) =>
                             setValue(
                               "partner_bank_branch",
                               sanitizeLettersAndSpaces(value),
-                              { shouldValidate: true, shouldDirty: true }
+                              { shouldDirty: true }
                             )
                           }
                           hideValidationFeedback
@@ -2783,8 +3099,6 @@ function AddEditUserDialogView({
                           controlId="partner_bank_holder"
                           placeholder="Enter account holder name"
                           register={register}
-                          error={errors.partner_bank_holder}
-                          validation={REQUIRED_FIELD_RULE}
                           hideValidationFeedback
                           labelSize={3}
                         />
@@ -2793,8 +3107,6 @@ function AddEditUserDialogView({
                           controlId="partner_bank_account_number"
                           placeholder="Enter account number"
                           register={register}
-                          error={errors.partner_bank_account_number}
-                          validation={REQUIRED_FIELD_RULE}
                           hideValidationFeedback
                           labelSize={3}
                         />
@@ -2803,8 +3115,6 @@ function AddEditUserDialogView({
                           controlId="partner_bank_ifsc"
                           placeholder="Enter IFSC code"
                           register={register}
-                          error={errors.partner_bank_ifsc}
-                          validation={REQUIRED_FIELD_RULE}
                           hideValidationFeedback
                           labelSize={3}
                         />

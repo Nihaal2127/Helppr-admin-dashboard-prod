@@ -65,7 +65,7 @@ import {
 import type { EditOrderFormValues, OrderPaymentExtV1 } from "../../lib/order/orders";
 import OrderAmountSummaryPanel from "../../components/order/OrderAmountSummaryPanel";
 import { buildOrderAmountSummaryFromOrder } from "../../lib/order/orderAmountSummary";
-import { partnerCatalogControlStyle } from "../../components/partnerCatalogBlockUi";
+import { partnerCatalogControlStyle, partnerCatalogDisabledControlStyle } from "../../components/partnerCatalogBlockUi";
 import { FieldLabelText } from "../../components/RequiredFieldMark";
 import QuoteAddressOptionsLoader from "../../components/quote/QuoteAddressOptionsLoader";
 import { OrderPaymentEditModal } from "./orderInfoModals";
@@ -344,6 +344,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       employee_id: "",
       category_id: "",
       requested_date: "",
+      schedule_duration: "",
       requested_date_to: "",
       requested_time: "",
       requested_time_from: "",
@@ -1048,7 +1049,11 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       return;
     }
 
-    const price = Number.parseFloat(String(data.service_price).trim());
+    const price = Number.parseFloat(
+      String(
+        seedEditOrderFormFromRow(orderRow).service_price ?? data.service_price ?? ""
+      ).trim()
+    );
 
     if (
       offerIdWatch &&
@@ -1208,11 +1213,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
     lockedFields,
     form.requested_time_to
   );
-  const servicePriceReadOnly = completedOrderFieldReadOnly(
-    completedLimitedPaymentEdit,
-    lockedFields,
-    form.service_price
-  );
+  const servicePriceReadOnly = true;
   const userDescriptionReadOnly = lockedFields;
   const adminDescriptionReadOnly = lockedFields;
   const orderStatusReadOnly =
@@ -1768,7 +1769,9 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                           <InputGroup.Text
                             className="custom-form-input text-muted"
                             style={{
-                              ...partnerCatalogControlStyle,
+                              ...(servicePriceReadOnly
+                                ? partnerCatalogDisabledControlStyle
+                                : partnerCatalogControlStyle),
                               borderTopRightRadius: 0,
                               borderBottomRightRadius: 0,
                               fontWeight: 600,
@@ -1780,11 +1783,16 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                             type="text"
                             inputMode="decimal"
                             disabled={servicePriceReadOnly}
+                            readOnly={servicePriceReadOnly}
                             className={`custom-form-input border-start-0${
-                              errors.service_price ? " is-invalid" : ""
-                            }`}
+                              servicePriceReadOnly
+                                ? " custom-form-input--read-only"
+                                : ""
+                            }${errors.service_price ? " is-invalid" : ""}`}
                             style={{
-                              ...partnerCatalogControlStyle,
+                              ...(servicePriceReadOnly
+                                ? partnerCatalogDisabledControlStyle
+                                : partnerCatalogControlStyle),
                               borderLeft: 0,
                               borderTopLeftRadius: 0,
                               borderBottomLeftRadius: 0,
@@ -1793,7 +1801,9 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                             {...register("service_price", {
                               required: "Service price is required",
                               onBlur: () => {
-                                commitEditServicePriceIfPaymentsAllow();
+                                if (!servicePriceReadOnly) {
+                                  commitEditServicePriceIfPaymentsAllow();
+                                }
                               },
                             })}
                           />
@@ -1816,12 +1826,19 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                         <Form.Select
                           id="edit-order-status"
                           className="form-select custom-form-input"
-                          style={{
-                            borderRadius: "8px",
-                            borderColor: "var(--primary-color)",
-                            height: "35px",
-                            fontSize: "14px",
-                          }}
+                          style={
+                            orderStatusReadOnly
+                              ? {
+                                  ...partnerCatalogDisabledControlStyle,
+                                  height: "35px",
+                                }
+                              : {
+                                  borderRadius: "8px",
+                                  borderColor: "var(--primary-color)",
+                                  height: "35px",
+                                  fontSize: "14px",
+                                }
+                          }
                           disabled={orderStatusReadOnly}
                           {...register("order_status")}
                         >
@@ -1852,7 +1869,9 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                         errors.user_description ? " is-invalid" : ""
                       }`}
                       style={{
-                        ...partnerCatalogControlStyle,
+                        ...(userDescriptionReadOnly
+                          ? partnerCatalogDisabledControlStyle
+                          : partnerCatalogControlStyle),
                         minHeight: "96px",
                         resize: "vertical",
                       }}
@@ -1880,7 +1899,9 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                         errors.admin_description ? " is-invalid" : ""
                       }`}
                       style={{
-                        ...partnerCatalogControlStyle,
+                        ...(adminDescriptionReadOnly
+                          ? partnerCatalogDisabledControlStyle
+                          : partnerCatalogControlStyle),
                         minHeight: "96px",
                         resize: "vertical",
                       }}

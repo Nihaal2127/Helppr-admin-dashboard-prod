@@ -13,7 +13,6 @@ import { capitalizeString, DetailsRow, formatDate } from "../../../helper/utilit
 import { ExpenseCategoryModel } from "../../../lib/models/SettingsModel";
 import SettingsNav from "../../../components/SettingsNav";
 import {
-  ensureSettingsSeedData,
   fetchExpenseCategoriesPage,
   saveExpenseCategoryWithApi,
   voidExpenseCategoryWithApi,
@@ -384,10 +383,6 @@ const ExpenseCategoryManagement = () => {
     setTableTotalPages(Math.max(1, pageData.totalPages || 1));
     setTableTotalItems(pageData.totalItems ?? pageData.rows.length);
   }, [endDate, keyword, listFilters, sortBy, startDate, tablePage]);
-
-  useEffect(() => {
-    ensureSettingsSeedData();
-  }, []);
 
   useEffect(() => {
     let cancelled = false;

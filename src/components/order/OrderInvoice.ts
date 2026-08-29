@@ -3,7 +3,7 @@
  */
 import html2pdf from "html2pdf.js";
 import { formatDate, formatUtcToLocalTime } from "../../helper/utility";
-import logoDark from "../../assets/icons/login_logo.svg";
+import logoDark from "../../assets/images/helper-logo.png";
 import { AppConstant } from "../../lib/global/AppConstant";
 import {
   fetchOrderById,
@@ -170,7 +170,7 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
                 )
                 .join("")}
               <tr>
-                <td colSpan="3">
+                <td colSpan="3" style="text-align: left;">
                   <strong>${AppConstant.companyName}</strong><br />
                   <strong>Helpline Number:</strong> ${AppConstant.helplineNumber}<br />
                   <strong>Support Email:</strong> ${AppConstant.supportEmail}<br />

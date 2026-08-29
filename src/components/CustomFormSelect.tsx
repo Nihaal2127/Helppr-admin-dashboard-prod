@@ -44,6 +44,8 @@ interface CustomFormSelectProps {
    * Use `"all"` for the global franchise header so “clear” means all franchises.
    */
   clearResetsTo?: string;
+  /** Fired when the dropdown menu opens (e.g. load options from the API). */
+  onMenuOpen?: () => void;
   /** Show required asterisk without react-hook-form `requiredMessage`. */
   showRequiredMark?: boolean;
 }
@@ -73,6 +75,7 @@ const CustomFormSelect: React.FC<CustomFormSelectProps> = ({
   emptyOptionLabel,
   clearResetsTo,
   showRequiredMark: showRequiredMarkProp,
+  onMenuOpen,
 }) => {
   const [selectedOption, setSelectedOption] = useState<{
     value: string;
@@ -328,6 +331,7 @@ const CustomFormSelect: React.FC<CustomFormSelectProps> = ({
           )
         }
         placeholder={placeholder ?? DEFAULT_SELECT_LABEL}
+        onMenuOpen={onMenuOpen}
         onBlur={() => {
           if (!selectedOption && setValue) {
             const fallback =

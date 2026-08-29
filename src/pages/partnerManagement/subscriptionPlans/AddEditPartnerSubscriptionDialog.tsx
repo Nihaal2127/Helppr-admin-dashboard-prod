@@ -6,12 +6,18 @@ import CustomCloseButton from "../../../components/CustomCloseButton";
 import { CustomFormInput } from "../../../components/CustomFormInput";
 import CustomFormSelect from "../../../components/CustomFormSelect";
 import CustomDatePicker from "../../../components/CustomDatePicker";
-import CustomImageUploader from "../../../components/CustomImageUploader";
+import CustomImageUploader, {
+  resolveExistingImageSrc,
+} from "../../../components/CustomImageUploader";
 import { DetailsRow } from "../../../helper/utility";
 import { openDialog } from "../../../lib/global/DialogManager";
 import { savePartnerSubscription } from "../../../services/partnerManagementService";
 import { fetchSubscriptionPlanDropDown } from "../../../services/partnerManagementService";
 import { fetchUser } from "../../../services/userService";
+import {
+  documentUploadFailureMessage,
+  uploadDocumentImages,
+} from "../../../services/documentUploadService";
 import { showErrorAlert } from "../../../lib/global/alertHelper";
 import type { PartnerSubscriptionModel } from "../../../lib/types/partnerManagementTypes";
 import { dateToLocalYmd } from "../../../helper/dateFormat";
@@ -156,14 +162,11 @@ PartnerInfoDialog.show = (partner: PartnerInfoModel) => {
   ));
 };
 
-async function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(String(fr.result ?? ""));
-    fr.onerror = () => reject(new Error("Unable to read file"));
-    fr.readAsDataURL(file);
-  });
-}
+const PARTNER_SUBSCRIPTION_BANNER_UPLOAD_TYPE = "8";
+/** Saved banner dimensions (1×); crop target matches 404:160 display ratio. */
+const PARTNER_SUBSCRIPTION_BANNER_SIZE = { width: 404, height: 160 };
+const PARTNER_SUBSCRIPTION_BANNER_SIZE_HINT =
+  "Recommended upload size (for sharp display): ~1010 × 400 px (2×). Keep ratio around 404:160 so cropping is minimal.";
 
 const AddEditPartnerSubscriptionDialog: React.FC<AddEditPartnerSubscriptionDialogProps> & {
   show: (
@@ -307,17 +310,27 @@ const AddEditPartnerSubscriptionDialog: React.FC<AddEditPartnerSubscriptionDialo
   };
 
   const onSubmitEvent = async (data: PartnerSubscriptionModel) => {
-    let banner = (data.banner_image ?? "").trim();
+    let banner = String(
+      getValues("banner_image") ?? data.banner_image ?? viewData.banner_image ?? ""
+    ).trim();
+
     if (
       platinumBannerFiles.length > 0 &&
       isPlatinumPlan(data.subscription_plan)
     ) {
-      try {
-        banner = await readFileAsDataUrl(platinumBannerFiles[0]);
-      } catch {
-        /* keep typed URL if read fails */
+      const imageUpload = await uploadDocumentImages({
+        uploadType: PARTNER_SUBSCRIPTION_BANNER_UPLOAD_TYPE,
+        files: platinumBannerFiles,
+        isEditMode: Boolean(subscription?._id),
+        existingStoragePaths: banner ? [banner] : [],
+      });
+      if (!imageUpload.ok || !imageUpload.paths[0]) {
+        showErrorAlert(documentUploadFailureMessage(imageUpload.usedReplace));
+        return;
       }
+      banner = imageUpload.paths[0];
     }
+
     const resolvedIsActive =
       typeof data.is_active === "string"
         ? data.is_active === "true"
@@ -447,7 +460,7 @@ const AddEditPartnerSubscriptionDialog: React.FC<AddEditPartnerSubscriptionDialo
                       style={{ maxWidth: "100%" }}
                     >
                       <img
-                        src={viewData.banner_image}
+                        src={resolveExistingImageSrc(viewData.banner_image)}
                         alt="Banner"
                         style={{
                           width: "100%",
@@ -618,12 +631,20 @@ const AddEditPartnerSubscriptionDialog: React.FC<AddEditPartnerSubscriptionDialo
                       label="Upload banner image"
                       maxFiles={1}
                       isEditable={true}
-                      existingImages={[]}
+                      outputSize={PARTNER_SUBSCRIPTION_BANNER_SIZE}
+                      sizeHint={PARTNER_SUBSCRIPTION_BANNER_SIZE_HINT}
+                      existingImages={
+                        (watch("banner_image") || viewData.banner_image || "")
+                          .trim()
+                          ? [
+                              String(
+                                watch("banner_image") || viewData.banner_image
+                              ).trim(),
+                            ]
+                          : []
+                      }
                       onFileChange={(files) => setPlatinumBannerFiles(files)}
                     />
-                    <small className="text-muted d-block mt-1">
-                      Only jpg, jpeg & png files are allowed
-                    </small>
                   </Col>
                 )}
 

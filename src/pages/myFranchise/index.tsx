@@ -1222,10 +1222,10 @@ const MyFranchise = () => {
               }
               const { response, service } = await fetchServiceById(sid);
               if (response && service) {
-                const { default: ServiceDetailsDialog } = await import(
+                const { showAddEditServiceDialog } = await import(
                   "../serviceManagement/AddEditServiceDialog"
                 );
-                ServiceDetailsDialog.show(
+                showAddEditServiceDialog(
                   false,
                   service,
                   () => {

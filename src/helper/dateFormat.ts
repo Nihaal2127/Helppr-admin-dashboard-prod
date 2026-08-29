@@ -69,3 +69,32 @@ export const formatDateTime = (isoString: string): string => {
 
   return `${day}-${month}-${year}, ${hours}:${minutes}${period}`;
 };
+
+/**
+ * Add a subscription plan duration to a calendar start date (`YYYY-MM-DD`).
+ * Months are calendar months on the same day (e.g. 28 Aug + 2 months → 28 Oct).
+ */
+export function addPlanDurationToYmd(
+  startYmd: string,
+  duration: number,
+  durationType?: string | null
+): string {
+  const ymd = String(startYmd ?? "").trim().slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return "";
+  const amount = Number(duration);
+  if (!Number.isFinite(amount) || amount < 0) return "";
+  const date = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(date.getTime())) return "";
+  const type = String(durationType ?? "months").trim().toLowerCase();
+  if (type.startsWith("year")) {
+    date.setFullYear(date.getFullYear() + amount);
+  } else if (type.startsWith("week")) {
+    date.setDate(date.getDate() + amount * 7);
+  } else if (type.startsWith("day")) {
+    date.setDate(date.getDate() + amount);
+  } else {
+    date.setMonth(date.getMonth() + amount);
+  }
+  return dateToLocalYmd(date);
+};

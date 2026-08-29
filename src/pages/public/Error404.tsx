@@ -1,5 +1,5 @@
 import { Card, Button } from "react-bootstrap";
-import appLogo from "../../assets/icons/login_logo.svg";
+import appLogo from "../../assets/images/helper-logo.png";
 import { ROUTES } from "../../routes/Routes";
 import { getNavigate } from "../../helper/utility";
 
@@ -16,7 +16,7 @@ const Error404 = () => {
       <Card style={{ width: "40%" }}>
         <Card.Body className="p-4">
           <div className="text-center mt-4">
-            <img src={appLogo} alt="logo" />
+            <img src={appLogo} alt="logo" style={{ width: "150px" }} />
             <h1 className="mt-3 text-error">404</h1>
             <h3 className="mt-3 mb-2">Page Not Found</h3>
             <Button

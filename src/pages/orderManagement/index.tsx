@@ -9,7 +9,15 @@ import { Button, Form } from "react-bootstrap";
 import { useSearchParams } from "react-router-dom";
 import CustomHeader from "../../components/CustomHeader";
 import CustomUtilityBox from "../../components/CustomUtilityBox";
-import { OrderModel, OrderStatusEnum } from "../../lib/order/orders";
+import {
+  OrderModel,
+  OrderStatusEnum,
+  normalizeOrderListSort,
+  getCustomerPaymentStatusLabel,
+  getOrderPartnerDisplayName,
+  getPartnerPaymentStatusLabel,
+} from "../../lib/order/orders";
+import type { OrderListSort } from "../../lib/order/orders";
 import { textUnderlineCell, formatDate, priceCell } from "../../helper/utility";
 import CustomTable from "../../components/CustomTable";
 import {
@@ -26,11 +34,6 @@ import OrderRowActions from "./OrderRowActions";
 import { useForm, UseFormRegister } from "react-hook-form";
 import CustomSummaryBox from "../../components/CustomSummaryBox";
 import CustomDatePicker from "../../components/CustomDatePicker";
-import {
-  getCustomerPaymentStatusLabel,
-  getOrderPartnerDisplayName,
-  getPartnerPaymentStatusLabel,
-} from "../../lib/order/orders";
 import { getCount } from "../../services/getCountService";
 import type { GetCountExtra } from "../../services/getCountService";
 import { useFranchiseHeaderForm } from "../../lib/global/hooks/useFranchiseScopedGetCount";
@@ -74,6 +77,7 @@ const OrderManagement = () => {
   const [orderCountsByTab, setOrderCountsByTab] = useState<
     Partial<Record<OrderTabKey, number>>
   >({});
+  const [sortBy, setSortBy] = useState<OrderListSort>([]);
   const fetchRef = useRef(false);
 
   const listFilters = useMemo(() => {
@@ -95,17 +99,22 @@ const OrderManagement = () => {
         response,
         orders,
         totalPages: tp,
-      } = await fetchOrder(currentPage, pageSize, {
-        ...filters,
-        ...listFilters,
-      });
+      } = await fetchOrder(
+        currentPage,
+        pageSize,
+        {
+          ...filters,
+          ...listFilters,
+        },
+        sortBy
+      );
       if (response) {
         setOrderList(orders);
         setTotalPages(tp);
       }
       fetchRef.current = false;
     },
-    [currentPage, pageSize, listFilters]
+    [currentPage, pageSize, listFilters, sortBy]
   );
 
   const refreshData = useCallback(async () => {
@@ -212,6 +221,7 @@ const OrderManagement = () => {
     setDateFilterValue("to_date", "");
     setSearchClearVersion((v) => v + 1);
     setUtilitySearchKey((k) => k + 1);
+    setSortBy([]);
     setCurrentPage(1);
   }, [setDateFilterValue]);
 
@@ -221,8 +231,17 @@ const OrderManagement = () => {
 
   const handleStatusCardSelect = (statusKey: OrderTabKey) => {
     setSelectedStatus(statusKey);
+    setSortBy([]);
     setCurrentPage(1);
   };
+
+  const handleServerSortChange = useCallback(
+    (next: { id: string; desc: boolean }[]) => {
+      setSortBy(normalizeOrderListSort(next as OrderListSort));
+      setCurrentPage(1);
+    },
+    []
+  );
 
   const orderShow = useCallback(
     (id: string) => {
@@ -238,6 +257,21 @@ const OrderManagement = () => {
       showUserDetailsDialog(userId, () => {
         void bumpListsAndTabCounts();
       });
+    },
+    [bumpListsAndTabCounts]
+  );
+
+  const partnerShow = useCallback(
+    (partnerId: string) => {
+      const id = String(partnerId ?? "").trim();
+      if (!id) return;
+      void import("../../components/partner/PartnerDetailsDialog").then(
+        ({ default: PartnerDetailsDialog }) => {
+          PartnerDetailsDialog.show(id, () => {
+            void bumpListsAndTabCounts();
+          });
+        }
+      );
     },
     [bumpListsAndTabCounts]
   );
@@ -276,11 +310,13 @@ const OrderManagement = () => {
       {
         Header: "Order ID",
         accessor: "unique_id",
+        sort: true,
         Cell: textUnderlineCell("unique_id", (row) => orderShow(row._id)),
       },
       {
         Header: "User Name",
         accessor: "user_name",
+        sort: true,
         Cell: ({ row }: { row: any }) => {
           const o = row.original as OrderModel;
           const label = o.user_name || o.user_info?.name || "-";
@@ -301,12 +337,34 @@ const OrderManagement = () => {
       {
         Header: "Partner Name",
         accessor: "partner_display",
-        Cell: ({ row }: { row: any }) =>
-          getOrderPartnerDisplayName(row.original as OrderModel),
+        sort: true,
+        Cell: ({ row }: { row: any }) => {
+          const o = row.original as OrderModel;
+          const label = getOrderPartnerDisplayName(o);
+          const partnerId = String(
+            (typeof o.partner_id === "string" ? o.partner_id : "") ||
+              o.partner_info?._id ||
+              ""
+          ).trim();
+          if (!partnerId || label === "-") return label;
+          return (
+            <span
+              style={{
+                textDecoration: "underline",
+                textDecorationThickness: "1px",
+                cursor: "pointer",
+              }}
+              onClick={() => partnerShow(partnerId)}
+            >
+              {label}
+            </span>
+          );
+        },
       },
       {
         Header: "Order Date",
         accessor: "order_date",
+        sort: true,
         Cell: ({ row }: { row: any }) =>
           formatDate(row.original.order_date ? row.original.order_date : ""),
       },
@@ -356,6 +414,7 @@ const OrderManagement = () => {
       handleOrderInvoiceDownload,
       orderShow,
       userShow,
+      partnerShow,
     ]
   );
 
@@ -493,6 +552,9 @@ const OrderManagement = () => {
             setPageSize(ps);
             setCurrentPage(1);
           }}
+          manualSortBy
+          sortBy={sortBy}
+          onSortChange={handleServerSortChange}
           theadClass="table-light"
         />
       </div>

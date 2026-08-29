@@ -18,6 +18,7 @@ import {
 import type { QuoteViewData } from "../../lib/quote/quoteHelpers";
 import type { ServiceDropDownOption } from "../../services/servicesService";
 import {
+  applyQuoteHeaderPatch,
   convertQuoteToOrder,
   fetchQuoteDetailById,
 } from "../../services/quoteService";
@@ -100,11 +101,20 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
   const statusTextClass =
     STATUS_TEXT_CLASS[statusKey] ?? "text-body-secondary";
   const isSuccess = statusKey === "success";
+  const isFailed = statusKey === "failed";
   const isAccepted = statusKey === "accepted";
+  const isNew = statusKey === "new";
 
   const partnerNameForDisplay = isAccepted
     ? displayQuote.partner_name
     : displayQuote.requested_partner;
+
+  const hasPartnerSelected = Boolean(
+    String(displayQuote.partner_id ?? "").trim() ||
+      String(displayQuote.partner_user_id ?? "").trim() ||
+      (String(partnerNameForDisplay ?? "").trim() &&
+        String(partnerNameForDisplay ?? "").trim() !== "-")
+  );
 
   const scheduleDisplay = useMemo(
     () =>
@@ -157,7 +167,7 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
     serviceFees?.label,
   ]);
 
-  const canEditQuote = !isSuccess && Boolean(quoteMongoId);
+  const canEditQuote = !isSuccess && !isFailed && Boolean(quoteMongoId);
 
   const priceBreakdown = useMemo(() => {
     const fromApi = quotePriceBreakdownFromRow(displayQuote);
@@ -195,6 +205,26 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
       });
     });
   };
+
+  const handleSendQuote = useCallback(() => {
+    if (!quoteMongoId) return;
+    if (!hasPartnerSelected) {
+      showErrorAlert("Please select a partner.");
+      return;
+    }
+    void (async () => {
+      const ok = await applyQuoteHeaderPatch(quoteMongoId, {
+        status: "pending",
+      });
+      if (!ok) {
+        showErrorAlert("Could not send quote.");
+        return;
+      }
+      showSuccessAlert("Quote sent.");
+      onRefreshData?.();
+      onClose();
+    })();
+  }, [quoteMongoId, hasPartnerSelected, onRefreshData, onClose]);
 
   return (
     <Modal
@@ -301,6 +331,14 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
 
         <section className="border rounded p-3 mb-3">
           <h6 className={QUOTE_SECTION_TITLE_CLASS}>Service address</h6>
+          <Row className="g-2 mb-0">
+            <Col xs={12} md={6} className="info-detail-fields-col">
+              <InfoDetailInlineRow label="Contact Name" value={serviceAddress.contact_name} />
+            </Col>
+            <Col xs={12} md={6} className="info-detail-fields-col">
+              <InfoDetailInlineRow label="Contact Number" value={serviceAddress.contact_number} />
+            </Col>
+          </Row>
           <Row className="g-2 mb-0">
             <Col xs={12} md={6} className="info-detail-fields-col">
               <InfoDetailInlineRow label="State" value={serviceAddress.state} />

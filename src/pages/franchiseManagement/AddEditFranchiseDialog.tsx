@@ -149,6 +149,52 @@ function toStringArray(raw: unknown): string[] {
   return raw.map((v) => String(v ?? "").trim()).filter(Boolean);
 }
 
+/** Accepts a single city ObjectId or an array (API multi-city franchises). */
+function normalizeFranchiseCityIds(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    const out: string[] = [];
+    for (const x of raw) {
+      if (x && typeof x === "object") {
+        const id = String(
+          (x as Record<string, unknown>)._id ??
+            (x as Record<string, unknown>).id ??
+            ""
+        ).trim();
+        if (id) out.push(id);
+        continue;
+      }
+      const id = String(x ?? "").trim();
+      if (id) out.push(id);
+    }
+    return Array.from(new Set(out));
+  }
+  if (raw && typeof raw === "object") {
+    const id = String(
+      (raw as Record<string, unknown>)._id ??
+        (raw as Record<string, unknown>).id ??
+        ""
+    ).trim();
+    return id ? [id] : [];
+  }
+  const s = String(raw ?? "").trim();
+  return s ? [s] : [];
+}
+
+function formatFranchiseCityDisplay(
+  cityName: unknown,
+  cityId: unknown
+): string {
+  if (Array.isArray(cityName)) {
+    const names = cityName.map((n) => String(n ?? "").trim()).filter(Boolean);
+    if (names.length) return names.join(", ");
+  } else {
+    const name = String(cityName ?? "").trim();
+    if (name) return name;
+  }
+  const ids = normalizeFranchiseCityIds(cityId);
+  return ids.length ? ids.join(", ") : "-";
+}
+
 /** Area labels from API when ids are missing or `areas` holds name strings/objects. */
 function franchiseAreaNameList(raw: Record<string, unknown>): string[] {
   const fromNames = toStringArray(raw.area_name ?? raw.areaname);
@@ -243,7 +289,8 @@ function parseMultiSelectIds(
   return selectedOptions.map((o) => o.value).filter((v) => v !== "select-all");
 }
 
-type FranchiseFormValues = Omit<FranchiseModel, "area_id"> & {
+type FranchiseFormValues = Omit<FranchiseModel, "area_id" | "city_id"> & {
+  city_id: string[];
   area_id: string[];
   desc: string;
   desc2: string;
@@ -290,6 +337,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   const initialAreaIds = franchiseSource
     ? collectFranchiseAreaIds(franchiseSource).filter(isMongoObjectId)
     : [];
+  const initialCityIds = normalizeFranchiseCityIds(franchise?.city_id);
 
   const lastAdminSelectionRef = useRef<string>(
     String(franchise?.admin_id ?? "").trim()
@@ -309,13 +357,14 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       desc: (franchise as any)?.desc || "",
       desc2: (franchise as any)?.desc2 || "",
       state_id: franchise?.state_id || "",
-      city_id: franchise?.city_id || "",
+      city_id: initialCityIds,
       area_id: initialAreaIds,
       admin_id: franchise?.admin_id || "",
       is_active: franchise?.is_active ?? true,
     },
   });
 
+  const [cityIds, setCityIds] = useState<string[]>(initialCityIds);
   const [areaIds, setAreaIds] = useState<string[]>(initialAreaIds);
 
   const [adminOptions, setAdminOptions] = useState<OptionType[]>([]);
@@ -334,7 +383,6 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   >(null);
 
   const selectedState = watch("state_id");
-  const selectedCity = watch("city_id");
   const watchedAdminId = watch("admin_id");
 
   useEffect(() => {
@@ -402,18 +450,41 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!selectedCity?.trim()) {
+      if (!cityIds.length) {
         setFetchedAreaOptions(null);
         return;
       }
-      setFetchedAreaOptions([]);
-      const opts = await fetchAreaDropDown(selectedCity, selectedState);
-      if (!cancelled) setFetchedAreaOptions(opts);
+      const results = await Promise.all(
+        cityIds.map((cid) => fetchAreaDropDown(cid, selectedState))
+      );
+      if (cancelled) return;
+      const merged = new Map<string, OptionType>();
+      for (const opts of results) {
+        for (const o of opts) {
+          const value = String(o.value ?? "").trim();
+          if (!value || merged.has(value)) continue;
+          merged.set(value, {
+            value,
+            label: String(o.label ?? "").trim() || value,
+          });
+        }
+      }
+      const next = Array.from(merged.values()).sort((a, b) =>
+        a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+      );
+      setFetchedAreaOptions(next);
+      const allowed = new Set(next.map((o) => o.value));
+      setAreaIds((prev) => {
+        const filtered = prev.filter((id) => allowed.has(id));
+        if (filtered.length === prev.length) return prev;
+        setValue("area_id", filtered, { shouldValidate: false });
+        return filtered;
+      });
     })();
     return () => {
       cancelled = true;
     };
-  }, [selectedCity, selectedState]);
+  }, [cityIds, selectedState, setValue]);
 
   useEffect(() => {
     let cancelled = false;
@@ -757,7 +828,9 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       );
       setValue("desc2", (source as any)?.desc2 || "");
       setValue("state_id", source.state_id || "");
-      setValue("city_id", source.city_id || "");
+      const cities = normalizeFranchiseCityIds(source.city_id);
+      setCityIds(cities);
+      setValue("city_id", cities);
       setValue("admin_id", source.admin_id || "");
       setValue("is_active", source.is_active ?? true);
     }
@@ -850,6 +923,14 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     allServices,
   ]);
 
+  const handleCitySelection = (selectedOptions: OptionType[]) => {
+    const selectedIds = selectedOptions
+      .map((option) => String(option.value ?? "").trim())
+      .filter(Boolean);
+    setCityIds(selectedIds);
+    setValue("city_id", selectedIds, { shouldValidate: true });
+  };
+
   const handleAreaSelection = (selectedOptions: OptionType[]) => {
     const selectedIds = selectedOptions.map((option) => option.value);
     setAreaIds(selectedIds);
@@ -908,6 +989,10 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   }, [serviceIds, allServices]);
 
   const onSubmitEvent = async (data: FranchiseFormValues) => {
+    if (cityIds.length === 0) {
+      showErrorAlert("Please select city");
+      return;
+    }
     if (areaIds.length === 0) {
       showErrorAlert("Please select area");
       return;
@@ -927,9 +1012,6 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       STATIC_STATE_OPTIONS.find((item) => item.value === data.state_id)
         ?.label ||
       "";
-
-    const selectedCityLabel =
-      cityOptions.find((item) => item.value === data.city_id)?.label || "";
 
     const selectedAreaLabels = areaOptions
       .filter((item) => areaIds.includes(item.value))
@@ -956,8 +1038,8 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       desc: data.desc,
       state_id: data.state_id,
       state_name: selectedStateLabel,
-      city_id: data.city_id,
-      city_name: selectedCityLabel,
+      // Server fills city_name — send city_id as a non-empty ObjectId array only.
+      city_id: cityIds,
       area_id: areaIds,
       area_name: selectedAreaLabels,
       admin_id: data.admin_id,
@@ -994,7 +1076,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
         adminUserId: adminId,
         franchiseId: franchiseIdForUser,
         stateId: String(data.state_id ?? "").trim(),
-        cityId: String(data.city_id ?? "").trim(),
+        cityId: String(cityIds[0] ?? "").trim(),
       });
     } else if (adminId && !franchiseIdForUser) {
       showErrorAlert(
@@ -1040,7 +1122,10 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                 />
                 <DetailsRow
                   title="City"
-                  value={franchise.city_name ?? franchise.city_id}
+                  value={formatFranchiseCityDisplay(
+                    franchise.city_name,
+                    franchise.city_id
+                  )}
                 />
               </div>
 
@@ -1258,7 +1343,8 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                   defaultValue={isEditable ? franchise?.state_id : ""}
                   setValue={setValue as (name: string, value: any) => void}
                   onChange={() => {
-                    setValue("city_id", "", { shouldValidate: false });
+                    setCityIds([]);
+                    setValue("city_id", [], { shouldValidate: false });
                     setAreaIds([]);
                     setValue("area_id", [], { shouldValidate: false });
                   }}
@@ -1266,21 +1352,19 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
               </Col>
 
               <Col md={6}>
-                <CustomFormSelect
+                <CustomMultiSelect
                   label="City"
                   controlId="City"
                   options={cityOptions}
-                  register={register as unknown as UseFormRegister<any>}
-                  fieldName="city_id"
-                  error={errors.city_id}
-                  asCol={false}
                   requiredMessage="Please select city"
-                  defaultValue={String(selectedCity ?? "")}
-                  setValue={setValue as (name: string, value: any) => void}
-                  onChange={() => {
-                    setAreaIds([]);
-                    setValue("area_id", [], { shouldValidate: false });
+                  value={cityOptions.filter((city) =>
+                    cityIds.includes(city.value)
+                  )}
+                  onChange={(selectedOptions) => {
+                    handleCitySelection(selectedOptions as OptionType[]);
                   }}
+                  selectedChipsMaxHeight="100px"
+                  asCol={false}
                 />
               </Col>
 

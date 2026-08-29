@@ -10,7 +10,7 @@ import {
 import CustomFormSelect from "../CustomFormSelect";
 import CustomDatePicker from "../CustomDatePicker";
 import type { SubscriptionPlanOption } from "../../services/partnerManagementService";
-import { dateToLocalYmd } from "../../helper/dateFormat";
+import { addPlanDurationToYmd, dateToLocalYmd } from "../../helper/dateFormat";
 
 export type PartnerSubscriptionRegisterFn = (
   name: string,
@@ -36,6 +36,8 @@ export type PartnerSubscriptionFormSectionProps = {
   layout?: "default" | "stacked";
   /** Add Partner: subscription plan and dates are required (asterisk / validation). */
   subscriptionDatesRequired?: boolean;
+  /** Load catalog from `GET /subscription-plan/getAll` when the plan menu opens. */
+  onPlanMenuOpen?: () => void;
 };
 
 const rhfRegister = (fn: PartnerSubscriptionRegisterFn): UseFormRegister<any> =>
@@ -43,6 +45,16 @@ const rhfRegister = (fn: PartnerSubscriptionRegisterFn): UseFormRegister<any> =>
 
 const rhfSetValue = (fn: PartnerSubscriptionSetValueFn): UseFormSetValue<any> =>
   fn as UseFormSetValue<any>;
+
+export function computedSubscriptionEndDate(
+  plan: SubscriptionPlanOption | undefined,
+  startYmd: string
+): string {
+  const start = String(startYmd ?? "").trim().slice(0, 10);
+  const duration = Number(plan?.duration);
+  if (!start || !Number.isFinite(duration) || duration < 0) return "";
+  return addPlanDurationToYmd(start, duration, plan?.duration_type);
+}
 
 const PartnerSubscriptionFormSection: React.FC<
   PartnerSubscriptionFormSectionProps
@@ -57,18 +69,18 @@ const PartnerSubscriptionFormSection: React.FC<
   toYmdString,
   layout = "default",
   subscriptionDatesRequired = true,
+  onPlanMenuOpen,
 }) => {
   const watchedPlanId = String(watch("subscription_plan_id") ?? "").trim();
-  const dateValidation = subscriptionDatesRequired
-    ? {
-        start: {
-          required: "Subscription start date is required",
-        } as const,
-        end: {
-          required: "Subscription end date is required",
-        } as const,
-      }
-    : { start: undefined, end: undefined };
+
+  const applyEndFromPlanAndStart = (planId: string, startYmd: string) => {
+    const selectedPlan = planOptions.find((plan) => plan.value === planId);
+    const end = computedSubscriptionEndDate(selectedPlan, startYmd);
+    setValue("subscription_end_date", end, {
+      shouldValidate: false,
+      shouldDirty: true,
+    });
+  };
 
  const planSelect = (
   <CustomFormSelect
@@ -83,6 +95,7 @@ const PartnerSubscriptionFormSection: React.FC<
     setValue={rhfSetValue(setValue)}
     placeholder="Select subscription plan"
     menuPortal
+    onMenuOpen={onPlanMenuOpen}
     requiredMessage={
       subscriptionDatesRequired
         ? "Please select a subscription plan"
@@ -106,6 +119,10 @@ const PartnerSubscriptionFormSection: React.FC<
         shouldValidate: true,
         shouldDirty: true,
       });
+      applyEndFromPlanAndStart(
+        value,
+        toYmdString(subscriptionStartStr) ?? ""
+      );
     }}
   />
 );
@@ -120,6 +137,7 @@ const PartnerSubscriptionFormSection: React.FC<
           shouldValidate: true,
           shouldDirty: true,
         });
+        applyEndFromPlanAndStart(watchedPlanId, value);
       }}
       register={rhfRegister(register)}
       setValue={rhfSetValue(setValue)}
@@ -142,22 +160,14 @@ const PartnerSubscriptionFormSection: React.FC<
       label="Subscription End Date"
       controlId="subscription_end_date"
       selectedDate={toYmdString(subscriptionEndStr)}
-      onChange={(date) => {
-        const value = date ? dateToLocalYmd(date) : "";
-        setValue("subscription_end_date", value, {
-          shouldValidate: true,
-          shouldDirty: true,
-        });
-      }}
+      onChange={() => {}}
       register={rhfRegister(register)}
       setValue={rhfSetValue(setValue)}
       asCol={false}
       groupClassName="mb-0 w-100 fw-medium"
       placeholderText="End date"
       filterDate={() => true}
-      required={subscriptionDatesRequired}
-      validation={dateValidation.end}
-      error={errors.subscription_end_date as string | FieldError | undefined}
+      readOnly
     />
   );
 

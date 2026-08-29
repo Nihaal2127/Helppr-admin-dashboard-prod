@@ -27,13 +27,12 @@ import {
   StaffSettingsModel,
 } from "../../../lib/models/SettingsModel";
 import {
-  ensureSettingsSeedData,
   createRoleUserWithApi,
   createStaffUserWithApi,
   updateRoleUserWithApi,
   updateStaffUserWithApi,
   fetchSettingsSectionPageByType,
-  voidRole,
+  voidRoleUserWithApi,
 } from "../../../services/settingsService";
 import CustomCloseButton from "../../../components/CustomCloseButton";
 import ScreenPermissionChecklist from "../../../components/ScreenPermissionChecklist";
@@ -46,6 +45,7 @@ import { openConfirmDialog } from "../../../components/CustomConfirmDialog";
 import { showErrorAlert } from "../../../lib/global/alertHelper";
 import { mainMenuItems } from "../../../lib/layout/menuItems";
 import {
+  getFranchiseAdminEffectiveMenuKeys,
   getFranchiseEmployeeScreenMenuItems,
   labelForFranchiseEmployeeScreenKey,
 } from "../../../lib/layout/franchiseEmployeeScreenPermissions";
@@ -108,6 +108,12 @@ const employeeScreenPermissionMenuItems = getFranchiseEmployeeScreenMenuItems();
 const employeeScreenPermissionKeys = screenPermissionKeysFromItems(
   employeeScreenPermissionMenuItems
 );
+const franchiseAdminInheritedPermissionKeys =
+  getFranchiseAdminEffectiveMenuKeys();
+const franchiseEmployeeInheritedPermissionItems =
+  employeeScreenPermissionMenuItems.filter((item) =>
+    franchiseAdminInheritedPermissionKeys.includes(item.key)
+  );
 const staffScreenPermissionMenuItems = mainMenuItems.filter(
   ({ key }) => key !== "my-franchise"
 );
@@ -150,7 +156,7 @@ function staffRhfFromForm(form: typeof emptyStaffForm) {
   };
 }
 
-/** Profile image for franchise/staff role view: backend path or absolute URL; mock `uploads/…` uses placeholder. */
+/** Profile image for franchise/staff role view: backend path or absolute URL; `uploads/…` uses placeholder. */
 function franchiseRoleProfileImageSrc(profileUrl?: string): string {
   const u = (profileUrl ?? "").trim();
   if (!u) return profilePlaceholder;
@@ -314,7 +320,9 @@ const RoleManagement = () => {
       setIsViewMode(viewMode);
       const rawPerms = item.screenPermissions?.length
         ? [...item.screenPermissions]
-        : [];
+        : item.roleType === "employee"
+          ? [...franchiseAdminInheritedPermissionKeys]
+          : [];
       const fid = String(item.franchise_id ?? "").trim();
       const nameFromId = fid ? franchiseNameByIdRef.current.get(fid) : "";
       const nextForm = {
@@ -395,7 +403,9 @@ const RoleManagement = () => {
     if (!showForm || !editing) return;
     const rawPerms = editing.screenPermissions?.length
       ? [...editing.screenPermissions]
-      : [];
+      : editing.roleType === "employee"
+        ? [...franchiseAdminInheritedPermissionKeys]
+        : [];
     setForm({
       roleName: editing.roleName,
       email: editing.email ?? "",
@@ -549,10 +559,6 @@ const RoleManagement = () => {
     navigate(routerLocation.pathname, { replace: true, state: null });
     openAddFranchiseAdminModal();
   }, [routerLocation.state, routerLocation.pathname, navigate, openAddFranchiseAdminModal]);
-
-  useEffect(() => {
-    ensureSettingsSeedData();
-  }, []);
 
   /** Full franchise list (`GET_FRANCHISE_DROP_DOWN` / full_list) — header filter + Employee Assigned Franchise. */
   useEffect(() => {
@@ -935,9 +941,9 @@ const RoleManagement = () => {
                 "Are you sure you want to void this role?",
                 "Void",
                 "Cancel",
-                () => {
-                  voidRole(row.original.id);
-                  setReloadToken((v) => v + 1);
+                async () => {
+                  const ok = await voidRoleUserWithApi(row.original.id);
+                  if (ok) setReloadToken((v) => v + 1);
                 }
               );
             }}
@@ -1108,7 +1114,11 @@ const RoleManagement = () => {
           onAddClick={() => {
             setEditing(null);
             setIsViewMode(false);
-            setForm({ ...emptyRoleForm, roleType: "employee" });
+            setForm({
+              ...emptyRoleForm,
+              roleType: "employee",
+              screenPermissions: [...franchiseAdminInheritedPermissionKeys],
+            });
             reset({
               role_name: "",
               role_email: "",
@@ -1481,19 +1491,24 @@ const RoleManagement = () => {
                     <FullDetailsRow
                       title="Screen Permissions"
                       value={
-                        editing.screenPermissions?.length ? (
-                          <ul className="mb-0 ps-3">
-                            {editing.screenPermissions.map((permissionKey) => (
-                              <li key={permissionKey}>
-                                {labelForFranchiseEmployeeScreenKey(
-                                  permissionKey
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          "-"
-                        )
+                        (() => {
+                          const keys = editing.screenPermissions?.length
+                            ? editing.screenPermissions
+                            : getFranchiseAdminEffectiveMenuKeys();
+                          return keys.length ? (
+                            <ul className="mb-0 ps-3">
+                              {keys.map((permissionKey) => (
+                                <li key={permissionKey}>
+                                  {labelForFranchiseEmployeeScreenKey(
+                                    permissionKey
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            "-"
+                          );
+                        })()
                       }
                     />
                   ) : null}
@@ -1645,6 +1660,22 @@ const RoleManagement = () => {
                   menuPortal
                 />
               </div>
+              {form.roleType === "employee" && (
+                <div className="col-md-12">
+                  <ScreenPermissionChecklist
+                    idPrefix="role_screen_perm"
+                    title="Screen Permissions"
+                    items={franchiseEmployeeInheritedPermissionItems}
+                    selectedKeys={screenPermissionsForPayload(
+                      form.screenPermissions,
+                      employeeScreenPermissionKeys
+                    )}
+                    onChange={(screenPermissions) =>
+                      setForm((p) => ({ ...p, screenPermissions }))
+                    }
+                  />
+                </div>
+              )}
               <div className="col-md-12">
                 <Form.Group style={{ marginTop: "10px" }}>
                   <Form.Label className="fw-medium mb-1">Status</Form.Label>
@@ -1679,18 +1710,6 @@ const RoleManagement = () => {
                   </div>
                 </Form.Group>
               </div>
-              {form.roleType === "employee" && (
-                <div className="col-md-12">
-                  <ScreenPermissionChecklist
-                    idPrefix="role_screen_perm"
-                    items={employeeScreenPermissionMenuItems}
-                    selectedKeys={form.screenPermissions}
-                    onChange={(screenPermissions) =>
-                      setForm((prev) => ({ ...prev, screenPermissions }))
-                    }
-                  />
-                </div>
-              )}
             </div>
           )}
         </Modal.Body>
@@ -1731,6 +1750,22 @@ const RoleManagement = () => {
                     return;
                   }
                 }
+                const resolvedFranchiseId =
+                  (form.assignedFranchise &&
+                    franchiseMetaByName.get(form.assignedFranchise)?.value) ||
+                  editing?.franchise_id ||
+                  undefined;
+                let employeeScreenPermissions: string[] | undefined;
+                if (form.roleType === "employee") {
+                  employeeScreenPermissions = screenPermissionsForPayload(
+                    form.screenPermissions,
+                    employeeScreenPermissionKeys
+                  );
+                  if (employeeScreenPermissions.length === 0) {
+                    showErrorAlert("Please select at least one screen permission.");
+                    return;
+                  }
+                }
                 const rolePayload = {
                   roleId:
                     editing?.roleId ||
@@ -1743,11 +1778,7 @@ const RoleManagement = () => {
                   profile_url: form.profile_url.trim() || undefined,
                   roleType: form.roleType,
                   assignedFranchise: form.assignedFranchise || undefined,
-                  franchise_id:
-                    (form.assignedFranchise &&
-                      franchiseMetaByName.get(form.assignedFranchise)?.value) ||
-                    editing?.franchise_id ||
-                    undefined,
+                  franchise_id: resolvedFranchiseId,
                   state_id:
                     (form.assignedFranchise &&
                       franchiseMetaByName.get(form.assignedFranchise)
@@ -1763,10 +1794,7 @@ const RoleManagement = () => {
                   status: form.status,
                   screenPermissions:
                     form.roleType === "employee"
-                      ? screenPermissionsForPayload(
-                          form.screenPermissions,
-                          employeeScreenPermissionKeys
-                        )
+                      ? employeeScreenPermissions!
                       : form.screenPermissions,
                 };
                 if (editing?.id) {

@@ -25,6 +25,7 @@ import {
   toStorageRelativePath,
   uploadDocumentImages,
 } from "../../services/documentUploadService";
+import { openConfirmDialog } from "../../components/CustomConfirmDialog";
 import { openDialog } from "../../lib/global/DialogManager";
 import { AppConstant } from "../../lib/global/AppConstant";
 import {
@@ -71,6 +72,8 @@ function isTruthyFormBool(v: unknown): boolean {
     v === "1"
   );
 }
+
+const SERVICE_DETAIL_IMAGE_PX = 280;
 
 type AddEditServiceDialogProps = {
   isEditable: boolean;
@@ -157,6 +160,9 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
   >([]);
   const [fileInputs, setFileInputs] = useState<File[]>([]);
   const [replaceUrls, setReplaceUrl] = useState<string[]>([]);
+  const [brokenPartnerAvatarIds, setBrokenPartnerAvatarIds] = useState<
+    Set<string>
+  >(() => new Set());
   const fetchRef = useRef(false);
   /** Used so Payment Type's `CustomFormSelect` sync does not wipe loaded `minimum_deposit` for non-consultancy rows. */
   const prevPaymentTypeRef = useRef<string | null>(null);
@@ -168,6 +174,7 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
   useEffect(() => {
     setFileInputs([]);
     setReplaceUrl([]);
+    setBrokenPartnerAvatarIds(new Set());
   }, [service?._id, isEditable]);
 
   // const depositType = watch("min_deposit_type");
@@ -308,6 +315,45 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
     return String(s.image_url ?? s.image ?? s.imageUrl ?? "").trim();
   }, [service]);
 
+  const servicePartners = useMemo(() => {
+    const raw = (service as ServiceModel | null)?.partners;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((p) => {
+        const rec = p as Record<string, unknown>;
+        const id = String(rec.id ?? rec._id ?? "").trim();
+        const name = String(rec.name ?? "").trim();
+        const profile_url = String(
+          rec.profile_url ?? rec.profileUrl ?? rec.image_url ?? ""
+        ).trim();
+        const ratingRaw = rec.average_rating ?? rec.avg_rating ?? rec.rating;
+        const ratingNum = Number(ratingRaw);
+        const franchiseObj =
+          rec.franchise && typeof rec.franchise === "object"
+            ? (rec.franchise as Record<string, unknown>)
+            : rec.franchise_id && typeof rec.franchise_id === "object"
+              ? (rec.franchise_id as Record<string, unknown>)
+              : null;
+        const franchiseName =
+          String(
+            rec.franchise_name ??
+              rec.franchiseName ??
+              franchiseObj?.name ??
+              franchiseObj?.franchise_name ??
+              (typeof rec.franchise === "string" ? rec.franchise : "") ??
+              ""
+          ).trim() || "—";
+        return {
+          id,
+          name: name || id,
+          profile_url,
+          rating: Number.isFinite(ratingNum) ? ratingNum : null,
+          franchiseName,
+        };
+      })
+      .filter((p) => p.id || p.name);
+  }, [service]);
+
   const onSubmitEvent = async (
     data: ServiceModel & {
       approval_status?: "pending" | "approved" | "rejected";
@@ -322,6 +368,27 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
       return;
     }
 
+    const nextPaymentType = extractMinDepositTypeKey(
+      String(
+        (data as { min_deposit_type?: string }).min_deposit_type ??
+          getValues("min_deposit_type" as never) ??
+          ""
+      )
+    );
+    const originalPaymentType = extractMinDepositTypeKey(
+      mapPaymentTypeToMinDepositType(service)
+    );
+    const rawPartners = (service as ServiceModel | null)?.partners;
+    const partnerCountFromApi = Array.isArray(rawPartners)
+      ? rawPartners.length
+      : Number(
+          (service as { partner_count?: number } | null)?.partner_count ?? 0
+        ) || 0;
+    const partnerCount = Math.max(partnerCountFromApi, servicePartners.length);
+    const paymentTypeChanged =
+      isEditable && originalPaymentType !== nextPaymentType;
+
+    const persistService = async () => {
     let image_url = "";
 
     if (fileInputs.length > 0) {
@@ -462,6 +529,19 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
       onClose();
       onRefreshData();
     }
+    };
+
+    if (paymentTypeChanged && partnerCount > 0) {
+      openConfirmDialog(
+        "Payment type cannot be changed because partners are already using this service. Changing it would affect their prices.",
+        "",
+        "Cancel",
+        () => {}
+      );
+      return;
+    }
+
+    await persistService();
   };
 
   return (
@@ -615,28 +695,205 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
               </Col>
             </Row>
 
-            {serviceImagePath ? (
-              <Row className="g-3 mt-3">
-                <Col xs={12}>
+            {(serviceImagePath || servicePartners.length > 0) ? (
+              <div
+                className="d-flex flex-wrap mt-3 align-items-start"
+                style={{ gap: 16 }}
+              >
+                <div style={{ flex: "0 0 auto" }}>
                   <p
                     className="mb-2"
                     style={{ color: "var(--primary-color)", fontWeight: 600 }}
                   >
                     Service image
                   </p>
-                  <img
-                    src={resolveExistingImageSrc(serviceImagePath)}
-                    alt=""
+                  {serviceImagePath ? (
+                    <img
+                      src={resolveExistingImageSrc(serviceImagePath)}
+                      alt=""
+                      width={SERVICE_DETAIL_IMAGE_PX}
+                      height={SERVICE_DETAIL_IMAGE_PX}
+                      style={{
+                        width: SERVICE_DETAIL_IMAGE_PX,
+                        height: SERVICE_DETAIL_IMAGE_PX,
+                        borderRadius: 8,
+                        objectFit: "cover",
+                        border: "1px solid var(--txtfld-border)",
+                        display: "block",
+                      }}
+                    />
+                  ) : (
+                    <div
+                      className="d-flex align-items-center justify-content-center text-muted"
+                      style={{
+                        width: SERVICE_DETAIL_IMAGE_PX,
+                        height: SERVICE_DETAIL_IMAGE_PX,
+                        borderRadius: 8,
+                        border: "1px dashed var(--txtfld-border)",
+                        fontSize: 13,
+                      }}
+                    >
+                      No image
+                    </div>
+                  )}
+                </div>
+                <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+                  <p
+                    className="mb-2"
+                    style={{ color: "var(--primary-color)", fontWeight: 600 }}
+                  >
+                    Partners
+                  </p>
+                  <div
                     style={{
-                      maxWidth: "min(100%, 280px)",
-                      maxHeight: 200,
-                      borderRadius: 8,
-                      objectFit: "cover",
+                      height: SERVICE_DETAIL_IMAGE_PX,
+                      overflowY: "auto",
                       border: "1px solid var(--txtfld-border)",
+                      borderRadius: 8,
+                      backgroundColor: "var(--bg-color)",
                     }}
-                  />
-                </Col>
-              </Row>
+                  >
+                    {servicePartners.length === 0 ? (
+                      <div className="text-muted small px-3 py-3">—</div>
+                    ) : (
+                      servicePartners.map((p, index) => (
+                        <div
+                          key={p.id || `${p.name}-${index}`}
+                          className="d-flex align-items-start"
+                          style={{
+                            gap: 10,
+                            padding: "10px 12px",
+                            borderBottom:
+                              index < servicePartners.length - 1
+                                ? "1px solid var(--txtfld-border)"
+                                : undefined,
+                          }}
+                        >
+                          {p.profile_url &&
+                          !brokenPartnerAvatarIds.has(p.id || p.profile_url) ? (
+                            <img
+                              src={resolveExistingImageSrc(p.profile_url)}
+                              alt=""
+                              referrerPolicy="no-referrer"
+                              onError={() => {
+                                const key = p.id || p.profile_url;
+                                setBrokenPartnerAvatarIds((prev) => {
+                                  const next = new Set(prev);
+                                  next.add(key);
+                                  return next;
+                                });
+                              }}
+                              style={{
+                                width: 44,
+                                height: 44,
+                                borderRadius: "50%",
+                                objectFit: "cover",
+                                flexShrink: 0,
+                                border: "1px solid var(--txtfld-border)",
+                              }}
+                            />
+                          ) : (
+                            <div
+                              className="d-flex align-items-center justify-content-center flex-shrink-0"
+                              style={{
+                                width: 44,
+                                height: 44,
+                                borderRadius: "50%",
+                                backgroundColor: "var(--primary-color)",
+                                color: "#fff",
+                                fontSize: 14,
+                                fontWeight: 600,
+                              }}
+                            >
+                              {(p.name || "?").charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div
+                              className="d-flex align-items-start justify-content-between"
+                              style={{ gap: 8 }}
+                            >
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                {p.id ? (
+                                  <button
+                                    type="button"
+                                    className="p-0 m-0 border-0 bg-transparent text-start text-decoration-underline"
+                                    style={{
+                                      display: "block",
+                                      width: "100%",
+                                      fontSize: 14,
+                                      fontWeight: 600,
+                                      color: "var(--primary-color)",
+                                      lineHeight: 1.3,
+                                      whiteSpace: "nowrap",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      cursor: "pointer",
+                                    }}
+                                    onClick={() => {
+                                      void import(
+                                        "../../components/partner/PartnerDetailsDialog"
+                                      ).then((mod) => {
+                                        mod.default.show(p.id, () => {});
+                                      });
+                                    }}
+                                  >
+                                    {p.name}
+                                  </button>
+                                ) : (
+                                  <span
+                                    className="fw-semibold d-block"
+                                    style={{ fontSize: 14, lineHeight: 1.3 }}
+                                  >
+                                    {p.name}
+                                  </span>
+                                )}
+                                <div
+                                  className="text-muted"
+                                  style={{
+                                    fontSize: 12,
+                                    lineHeight: 1.35,
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  Franchise: {p.franchiseName}
+                                </div>
+                              </div>
+                              <span
+                                className="flex-shrink-0"
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 4,
+                                  backgroundColor: "#E8C547",
+                                  color: "#3d2e00",
+                                  borderRadius: 6,
+                                  padding: "5px 8px 3px",
+                                  fontSize: 12,
+                                  fontWeight: 700,
+                                  lineHeight: 1,
+                                  marginTop: 2,
+                                }}
+                              >
+                                <i
+                                  className="bi bi-star-fill"
+                                  style={{ fontSize: 11, color: "#7a5a00" }}
+                                  aria-hidden
+                                />
+                                {p.rating != null
+                                  ? p.rating.toFixed(
+                                      Number.isInteger(p.rating) ? 0 : 2
+                                    )
+                                  : "—"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
             ) : null}
           </section>
         ) : (
@@ -955,14 +1212,14 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
   );
 };
 
-AddEditServiceDialog.show = (
+function showAddEditServiceDialog(
   isEditable: boolean,
   service: ServiceModel | null,
   onRefreshData: () => void,
   isViewMode: boolean = false,
   lockCategory?: { id?: string; label?: string },
   hideStatusInView: boolean = false
-) => {
+) {
   openDialog("service-details-modal", (close) => (
     <AddEditServiceDialog
       isEditable={isEditable}
@@ -974,6 +1231,9 @@ AddEditServiceDialog.show = (
       onRefreshData={onRefreshData}
     />
   ));
-};
+}
+
+AddEditServiceDialog.show = showAddEditServiceDialog;
 
 export default AddEditServiceDialog;
+export { showAddEditServiceDialog };

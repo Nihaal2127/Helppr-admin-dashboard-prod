@@ -34,4 +34,14 @@ export interface ServiceModel {
   commission: number;
   min_deposit_type: string;
   min_deposit_value: number;
+  /** `GET /service/get/:id` (optional `franchise_id`) — partners offering this service. */
+  partners?: Array<{
+    id?: string;
+    name?: string;
+    profile_url?: string | null;
+    average_rating?: number | null;
+    franchise_id?: string | { _id?: string; name?: string };
+    franchise_name?: string | null;
+    franchise?: { _id?: string; name?: string } | string | null;
+  }>;
 }

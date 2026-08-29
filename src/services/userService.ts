@@ -15,7 +15,10 @@ import { buildFullUserUpdatePayload } from "../lib/user/buildFullUserUpdatePaylo
 import { mapAccessibleScreenSlugsToMenuKeys } from "../lib/layout/accessibleScreenSlugs";
 import { mainMenuItems } from "../lib/layout/menuItems";
 import { UserRole } from "../lib/global/AppConstant";
-import { franchiseIdForUserGetAll } from "../lib/franchise/headerFranchisePreference";
+import {
+  franchiseIdForApiQuery,
+  franchiseIdForUserGetAll,
+} from "../lib/franchise/headerFranchisePreference";
 
 /**
  * Canonical `UserModel.type` enum used end-to-end (DB / `POST /user/create` / login `record.type` /
@@ -442,8 +445,11 @@ export const fetchUserDropDown = async (
   );
 
   if (response.success) {
+    const records = extractUserDropDownRecords(response.data).filter((u) =>
+      Boolean(String(u?.name ?? "").trim())
+    );
     return {
-      users: extractUserDropDownRecords(response.data),
+      users: records,
     };
   } else {
     showLog(response.message || "Failed to fetch user");
@@ -508,7 +514,16 @@ export const fetchUser = async (
       if (type === APP_USER_TYPE.PARTNER) return "name";
       return id;
     }
-    if (type === APP_USER_TYPE.PARTNER && id === "no_of_services") {
+    // Users "Service Taken" count — API field on customer rows.
+    if (
+      id === "total_service" ||
+      id === "total_services" ||
+      id === "service_taken"
+    ) {
+      return "total_service";
+    }
+    // Partners "Available Services"
+    if (id === "no_of_services" || id === "available_services") {
       return "no_of_services";
     }
     return id;
@@ -522,9 +537,12 @@ export const fetchUser = async (
       ? filters.is_blocked
       : undefined;
 
-  const franchiseIdQuery = franchiseIdForUserGetAll(filters.franchise_id);
+  const franchiseIdQuery = franchiseIdForApiQuery(filters.franchise_id);
 
   const searchText = (filters.search ?? filters.keyword)?.trim();
+  const sortOrder =
+    primarySort != null ? (primarySort.desc ? "desc" : "asc") : undefined;
+
   const params = new URLSearchParams({
     type: String(type),
     page: String(page),
@@ -546,8 +564,6 @@ export const fetchUser = async (
       filters.status !== "All" &&
       statusRaw !== "blocked" && { is_active: filters.status.toLowerCase() }),
     ...(blockedFilter && { is_blocked: blockedFilter }),
-    ...(filters.sort && { sort: filters.sort }),
-    ...(franchiseIdQuery ? { franchise_id: franchiseIdQuery } : {}),
     ...(filters.wallet_status &&
       filters.wallet_status !== "all" && {
         wallet_status: filters.wallet_status,
@@ -555,9 +571,12 @@ export const fetchUser = async (
     ...(filters.from_date && { from_date: filters.from_date }),
     ...(filters.to_date && { to_date: filters.to_date }),
     ...(mappedSortField && { sort_by: mappedSortField }),
-    ...(primarySort && { sort_order: primarySort.desc ? "desc" : "asc" }),
-    ...(mappedSortField && { sort_field: mappedSortField }),
+    ...(sortOrder && { sort_order: sortOrder }),
   });
+  // Super admin/staff only when caller passes franchise_id; franchise portal relies on token.
+  if (franchiseIdQuery) {
+    params.set("franchise_id", franchiseIdQuery);
+  }
 
   const response = await apiRequest(
     `${
@@ -577,9 +596,16 @@ export const fetchUser = async (
   }
 
   if (response.success) {
+    const rawRecords = Array.isArray(response.data?.records)
+      ? response.data.records
+      : [];
+    const users = rawRecords.map((row: UserModel) =>
+      normalizeUserListRow(row)
+    ) as UserModel[];
+
     return {
       response: true,
-      users: response.data.records,
+      users,
       totalPages: response.data.totalPages,
     };
   } else {
@@ -591,6 +617,30 @@ export const fetchUser = async (
     };
   }
 };
+
+/** Display/sort count for Users "Service Taken" / Partners "No. of services". */
+function userServiceCount(user: UserModel | Record<string, unknown>): number {
+  const row = user as Record<string, unknown>;
+  const n = Number(
+    row.total_service ??
+      row.total_services ??
+      row.no_of_services ??
+      row.service_taken ??
+      0
+  );
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeUserListRow(row: UserModel): UserModel {
+  const count = userServiceCount(row);
+  return {
+    ...row,
+    total_service: count,
+    ...(row.no_of_services != null || count
+      ? { no_of_services: Number(row.no_of_services ?? count) || count }
+      : {}),
+  };
+}
 
 function userSelectLabel(user: UserModel): string {
   const name = String(user.name ?? "").trim();

@@ -19,6 +19,7 @@ type PortfolioModel = {
   likes_count: string;
   comments_count: string;
   saves_count: string;
+  shares_count?: string;
   ratings: string;
   location: string;
 };
@@ -125,6 +126,12 @@ const ViewPortfolioManagementDialog: React.FC<ViewPortfolioManagementDialogProps
                 <DetailsRow
                   title="Saves Count"
                   value={portfolio?.saves_count}
+                />
+              </Col>
+              <Col md={4} className="custom-helper-column">
+                <DetailsRow
+                  title="Share Count"
+                  value={portfolio?.shares_count}
                 />
               </Col>
               <Col md={4} className="custom-helper-column">

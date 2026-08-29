@@ -34,6 +34,8 @@ interface CustomDatePickerProps {
   pickerMode?: "date" | "month" | "year";
   /** Month/year dropdowns on the calendar header (easier range navigation). */
   showMonthYearDropdowns?: boolean;
+  /** Display only — no calendar (computed subscription end date). */
+  readOnly?: boolean;
 }
 
 const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
@@ -56,6 +58,7 @@ const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
   required = false,
   pickerMode = "date",
   showMonthYearDropdowns = false,
+  readOnly = false,
 }) => {
   const showRequiredMark = required || isValidationRequired(validation);
   const Wrapper = asCol ? Col : "div";
@@ -162,12 +165,15 @@ const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
         <div className="position-relative w-100">
           <DatePicker
             ref={datePickerRef}
-            open={isOpen}
+            open={readOnly ? false : isOpen}
+            disabled={readOnly}
             selected={isoCalendarDateToPickerDate(selectedDate)}
             onChange={handleDateChange}
             onSelect={() => setIsOpen(false)}
             onClickOutside={() => setIsOpen(false)}
-            onInputClick={() => setIsOpen(true)}
+            onInputClick={() => {
+              if (!readOnly) setIsOpen(true);
+            }}
             onBlur={registration?.onBlur}
             dateFormat={
               pickerMode === "month"
@@ -214,8 +220,8 @@ const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
           />
           <span
             className="position-absolute top-50 end-0 translate-middle-y me-3"
-            style={{ cursor: "pointer" }}
-            onClick={handleIconClick}
+            style={{ cursor: readOnly ? "default" : "pointer" }}
+            onClick={readOnly ? undefined : handleIconClick}
           >
             <i className="bi bi-calendar"></i>
           </span>

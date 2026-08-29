@@ -46,13 +46,9 @@ const CUSTOMER_PAYMENT_FILTER_OPTIONS: OptionType[] = [
 
 function userToOption(u: UserModel): OptionType | null {
   const id = String(u._id ?? "").trim();
-  if (!id) return null;
-  const label =
-    (u.name && String(u.name).trim()) ||
-    u.user_id ||
-    u.phone_number ||
-    id;
-  return { value: id, label: String(label) };
+  const name = String(u.name ?? "").trim();
+  if (!id || !name) return null;
+  return { value: id, label: name };
 }
 
 function partnerCategoryIds(partner: UserModel): string[] {
@@ -325,7 +321,11 @@ const OrderReportsPage = ({ franchiseId = "all" }: OrderReportsPageProps) => {
       const userDrop = await fetchUserDropDown(CUSTOMER_USER_TYPE, undefined, {
         franchise_id: franchiseId,
       });
-      setAllUserRows(userDrop.users.filter((u) => u?._id));
+      setAllUserRows(
+        userDrop.users.filter(
+          (u) => u?._id && String(u.name ?? "").trim()
+        )
+      );
     } catch {
       optionsLoadedRef.current.users = false;
       usersFranchiseKeyRef.current = "";

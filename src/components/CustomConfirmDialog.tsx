@@ -34,16 +34,18 @@ export const openConfirmDialog = (
             xs={12}
             className="text-center d-flex justify-content-end gap-3 "
           >
-            <Button
-              type="submit"
-              className="custom-btn-primary"
-              onClick={() => {
-                close();
-                onConfirm();
-              }}
-            >
-              {confirmButtonText}
-            </Button>
+            {confirmButtonText ? (
+              <Button
+                type="button"
+                className="custom-btn-primary"
+                onClick={() => {
+                  close();
+                  onConfirm();
+                }}
+              >
+                {confirmButtonText}
+              </Button>
+            ) : null}
 
             <Button className="custom-btn-secondary" onClick={close}>
               {cancleButtonText}

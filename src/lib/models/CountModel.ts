@@ -88,12 +88,14 @@ export interface CountModel {
 
   /**
    * `POST /getCount` `{ "type": "partner-post-management" }` (type 16).
-   * Post buckets: `published`, `hidden`, `removed`.
-   * Report buckets: `pending`, `reviewed`, `dismissed` (separate from post status).
+   * Post buckets: `published`, `hidden`, `removed`, `pending`, `rejected`.
+   * Report buckets: `reviewed`, `dismissed` (customer reports queue).
    */
   published?: number;
   hidden?: number;
   removed?: number;
+  pending?: number;
+  rejected?: number;
   reviewed?: number;
   dismissed?: number;
 }

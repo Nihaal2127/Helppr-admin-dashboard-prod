@@ -78,6 +78,18 @@ function getPartnerFieldsFromUser(
     area_id: String(user.area_id ?? "").trim(),
   };
 
+  const franchiseRaw = user.franchise_id ?? record.franchise_id;
+  if (typeof franchiseRaw === "string" && franchiseRaw.trim()) {
+    out.franchise_id = franchiseRaw.trim();
+  } else if (franchiseRaw && typeof franchiseRaw === "object") {
+    const fid = String(
+      (franchiseRaw as Record<string, unknown>)._id ??
+        (franchiseRaw as Record<string, unknown>).id ??
+        ""
+    ).trim();
+    if (fid) out.franchise_id = fid;
+  }
+
   if (user.category_ids?.length) out.category_ids = user.category_ids;
   if (user.service_ids?.length) out.service_ids = user.service_ids;
   if (user.service_names?.length) out.service_names = user.service_names;

@@ -224,6 +224,8 @@ export const ApiPaths = {
   /** Postman folder 42 — Partners browse (Portfolio Management list) */
   PARTNERS_BROWSE_LIST: () => `/partners`,
   PARTNERS_BROWSE_PROFILE: (partnerId: string) => `/partners/${partnerId}`,
+  /** Admin — partner order ratings / reviews list */
+  GET_PARTNER_RATINGS: (partnerId: string) => `/partners/${partnerId}/ratings`,
   GET_PARTNER_POSTS: () => `/partner/posts`,
   /** Admin moderation — Postman folder 43 — Partner post management */
   PARTNER_POST_GET_COUNTS: () => `/partner-post/getCounts`,

@@ -5,8 +5,10 @@ export interface FranchiseModel {
   phone_number?: string;
   state_id: string;
   state_name?: string;
-  city_id: string;
-  city_name?: string;
+  /** One or more city ObjectIds (`POST`/`PUT` send a non-empty array). */
+  city_id: string | string[];
+  /** Server-filled; may be a string or string[] for multi-city franchises. */
+  city_name?: string | string[];
   area_id: string;
   area_name?: string;
   admin_id: string;

@@ -5,6 +5,9 @@ import { showLog } from "../helper/utility";
 import type { ServerTableSortBy } from "../lib/global/serverTableSort";
 import { showErrorAlert } from "../lib/global/alertHelper";
 import {
+  franchiseIdForApiQuery,
+} from "../lib/franchise/headerFranchisePreference";
+import {
   buildCatalogGetAllQueryParams,
   buildServiceGetAllPath,
   catalogGetAllDebugLog,
@@ -474,9 +477,15 @@ export const deleteService = async (id: string): Promise<boolean> => {
 };
 
 export const fetchServiceById = async (
-  id: string
+  id: string,
+  franchiseId?: string
 ): Promise<{ response: boolean; service: ServiceModel | null }> => {
-  const response = await apiRequest(ApiPaths.GET_SERVICE_BY_ID(id), "GET");
+  const fid = franchiseIdForApiQuery(franchiseId);
+  const path = ApiPaths.GET_SERVICE_BY_ID(id);
+  const url = fid
+    ? `${path}?${new URLSearchParams({ franchise_id: fid }).toString()}`
+    : path;
+  const response = await apiRequest(url, "GET");
   if (response.success) {
     const payload = (response as any).data ?? {};
     const record =

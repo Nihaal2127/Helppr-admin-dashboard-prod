@@ -11,6 +11,8 @@ export type AddQuoteFormValues = {
   employee_id: string;
   category_id: string;
   requested_date: string;
+  /** Hours, days, or months (label depends on service billing type). */
+  schedule_duration: string;
   /** End date when service schedule mode is `range`. */
   requested_date_to: string;
   requested_time: string;
@@ -63,6 +65,8 @@ export type QuoteRow = {
   service_from_time?: string;
   service_to_time?: string;
   order_id?: string;
+  /** Order Mongo `_id` for opening Order Information (Success quotes). */
+  order_mongo_id?: string;
   services?: string;
   order_status?: string;
   payment_method?: string;
@@ -80,6 +84,8 @@ export type QuoteRow = {
   phone_number?: string;
   user_email?: string;
   user_city?: string;
+  contact_name?: string;
+  contact_number?: string;
   profile_url?: string | null;
   partner_profile_url?: string | null;
   employee_profile_url?: string | null;

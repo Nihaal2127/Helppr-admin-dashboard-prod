@@ -10,19 +10,26 @@ type CustomUploadDialogProps = {
   onClose: () => void;
   existingImages?: string[];
   title?: string;
+  /**
+   * Verification & Documents: images + PDF/other files under 512 KB.
+   * Defaults to true — this dialog is the document upload entry point.
+   */
+  allowAnyFile?: boolean;
 };
 
 const CustomUploadDialog: React.FC<CustomUploadDialogProps> & {
   show: (
     onUploadSave: (files: File[], replaceUrls: string[]) => void,
     existingImages?: string[],
-    title?: string
+    title?: string,
+    options?: { allowAnyFile?: boolean }
   ) => void;
 } = ({
   onUploadSave,
   onClose,
   existingImages = [],
-  title = "Upload image",
+  title = "Upload document",
+  allowAnyFile = true,
 }) => {
   const [fileInputs, setFileInputs] = useState<File[]>([]);
   const [replaceUrls, setReplaceUrls] = useState<string[]>([]);
@@ -57,12 +64,13 @@ const CustomUploadDialog: React.FC<CustomUploadDialogProps> & {
       </Modal.Header>
       <Modal.Body className="px-4 pb-4 pt-0">
         <CustomImageUploader
-          key={`upload-${existingImages.join("|")}`}
+          key={`upload-${existingImages.join("|")}-${allowAnyFile ? "any" : "img"}`}
           label={title}
           hideLabel
           maxFiles={1}
           isEditable={existingImages.length > 0}
           existingImages={existingImages}
+          allowAnyFile={allowAnyFile}
           onFileChange={(files, replaceUrlsFromUploader) => {
             setFileInputs(files);
             setReplaceUrls(replaceUrlsFromUploader);
@@ -92,7 +100,8 @@ const CustomUploadDialog: React.FC<CustomUploadDialogProps> & {
 CustomUploadDialog.show = (
   onUploadSave: (files: File[], replaceUrls: string[]) => void,
   existingImages?: string[],
-  title?: string
+  title?: string,
+  options?: { allowAnyFile?: boolean }
 ) => {
   const existingModal = document.getElementById("upload-document-modal");
   if (existingModal) {
@@ -112,6 +121,7 @@ CustomUploadDialog.show = (
       onUploadSave={onUploadSave}
       existingImages={existingImages}
       title={title}
+      allowAnyFile={options?.allowAnyFile !== false}
       onClose={closeModal}
     />,
     modalContainer

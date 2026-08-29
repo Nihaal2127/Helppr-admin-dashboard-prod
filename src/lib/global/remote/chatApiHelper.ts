@@ -3,7 +3,6 @@ import { showLoader, hideLoader } from "../../../components/CustomLoader";
 import { ROUTES } from "../../../routes/Routes";
 import { AppConstant } from "../AppConstant";
 import { clearLocalStorage } from "../localStorageHelper";
-import { isMockAuthSession } from "../authSessionHelper";
 import { getNavigate } from "../../../helper/navigation";
 import { closeAllModals } from "../DialogManager";
 
@@ -77,13 +76,11 @@ export const chatApiRequest = async (
     if (response.status === 500) {
       closeAllModals();
     } else if (response.status === 401) {
-      if (!isMockAuthSession()) {
-        clearLocalStorage();
-        navigate?.(ROUTES.LOGIN.path);
-      }
+      clearLocalStorage();
+      navigate?.(ROUTES.LOGIN.path);
     }
 
-    if (!(response.status === 401 && isMockAuthSession()) && !suppressErrorAlert) {
+    if (!suppressErrorAlert) {
       showErrorAlert(String(data.message || "Request failed"));
     }
 

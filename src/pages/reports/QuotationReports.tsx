@@ -233,14 +233,10 @@ const QuotationReportsPage = ({ franchiseId = "all" }: QuotationReportsPageProps
         setUserOptions([
           allOption,
           ...userDrop.users
-            .filter((u) => u?._id)
+            .filter((u) => u?._id && String(u.name ?? "").trim())
             .map((u) => ({
               value: u._id,
-              label:
-                (u.name && String(u.name).trim()) ||
-                u.user_id ||
-                u.phone_number ||
-                u._id,
+              label: String(u.name).trim(),
             })),
         ]);
         setPartnerOptions([allOption, ...partnerOpts]);

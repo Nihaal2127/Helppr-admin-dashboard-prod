@@ -5,7 +5,7 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import { Modal, Col, Row, Carousel } from "react-bootstrap";
+import { Modal, Col, Row, Carousel, Spinner, Button } from "react-bootstrap";
 import CustomCloseButton from "../CustomCloseButton";
 import { UserModel } from "../../lib/models/UserModel";
 import { fetchUserById } from "../../services/userService";
@@ -42,8 +42,14 @@ import {
   partnerDocumentDisplayTitle,
 } from "../../lib/partner/partnerFormDocuments";
 import { resolvePartnerFranchiseFieldsFromUser } from "../../lib/partner/partnerFranchiseDisplay";
+import { resolveMediaAssetSrc } from "../../services/documentUploadService";
 import PartnerSubscriptionDetailsRows from "./PartnerSubscriptionDetailsRows";
 import PartnerVerificationStatusModal from "./PartnerVerificationStatusModal";
+import PartnerRatingsDialog from "./PartnerRatingsDialog";
+import { PartnerReviewCard } from "./PartnerReviewCard";
+import { fetchPartnerRatings } from "../../services/partnerRatingsService";
+import type { PartnerRatingRow } from "../../services/partnerRatingsService";
+import { showOrderInfoDialog } from "../order";
 
 type PartnerDetailsDialogProps = {
   userId: string;
@@ -80,7 +86,22 @@ function PartnerDetailsDialogView({
     franchiseName: "—",
     franchiseEmail: "—",
   });
+  const [reviewsLoading, setReviewsLoading] = useState(true);
+  const [reviewRows, setReviewRows] = useState<PartnerRatingRow[]>([]);
+  const [reviewTotalCount, setReviewTotalCount] = useState(0);
+  const [profileImgFailed, setProfileImgFailed] = useState(false);
   const fetchRef = useRef(false);
+  const reviewsFetchSeqRef = useRef(0);
+
+  useEffect(() => {
+    setProfileImgFailed(false);
+  }, [userDetails?._id, userDetails?.profile_url]);
+
+  const partnerProfileSrc = useMemo(() => {
+    const raw = String(userDetails?.profile_url ?? "").trim();
+    if (!raw || profileImgFailed) return profileIcon;
+    return resolveMediaAssetSrc(raw) || profileIcon;
+  }, [userDetails?.profile_url, profileImgFailed]);
 
   const partnerBankAccounts = useMemo(
     () => partnerBankAccountsFromUser(userDetails),
@@ -119,6 +140,44 @@ function PartnerDetailsDialogView({
   useEffect(() => {
     void fetchDataFromApi();
   }, [fetchDataFromApi]);
+
+  const loadPartnerReviews = useCallback(async () => {
+    const id = String(userId ?? "").trim();
+    if (!id) {
+      setReviewsLoading(false);
+      setReviewRows([]);
+      setReviewTotalCount(0);
+      return;
+    }
+    const seq = (reviewsFetchSeqRef.current += 1);
+    setReviewsLoading(true);
+    const res = await fetchPartnerRatings(id, 1, 3);
+    if (seq !== reviewsFetchSeqRef.current) return;
+    setReviewsLoading(false);
+    if (!res.ok) {
+      setReviewRows([]);
+      setReviewTotalCount(0);
+      return;
+    }
+    setReviewRows(res.records.slice(0, 3));
+    setReviewTotalCount(
+      Number(res.summary?.rating_count) || res.totalItems || res.records.length
+    );
+  }, [userId]);
+
+  useEffect(() => {
+    void loadPartnerReviews();
+  }, [loadPartnerReviews]);
+
+  const handleReviewOrderClick = useCallback(
+    (orderMongoId: string) => {
+      showOrderInfoDialog(orderMongoId, () => {
+        void loadPartnerReviews();
+        void onRefreshuser();
+      });
+    },
+    [loadPartnerReviews, onRefreshuser]
+  );
 
   useEffect(() => {
     if (!userDetails?.city_id) {
@@ -250,20 +309,13 @@ function PartnerDetailsDialogView({
             <div>
               <p>Personal</p>
               <img
-                src={
-                  userDetails?.profile_url
-                    ? `${AppConstant.IMAGE_BASE_URL}${
-                        userDetails?.profile_url
-                      }?t=${Date.now()}`
-                    : profileIcon
-                }
+                src={partnerProfileSrc}
                 alt="User profile"
                 width={160}
                 height={160}
                 className="partner-details-profile-img"
-                onError={(e) => {
-                  const img = e.currentTarget;
-                  if (img.src !== profileIcon) img.src = profileIcon;
+                onError={() => {
+                  if (!profileImgFailed) setProfileImgFailed(true);
                 }}
               />
             </div>
@@ -686,8 +738,47 @@ function PartnerDetailsDialogView({
               </section>
             </Col>
           </Row>
+
+          <section className="custom-other-details partner-details-reviews-section">
+            <div className="partner-details-section-header">
+              <h3>Reviews</h3>
+              {reviewTotalCount > 3 ? (
+                <button
+                  type="button"
+                  className="btn btn-link p-0 partner-details-reviews-view-all"
+                  onClick={() => {
+                    PartnerRatingsDialog.show(
+                      userId,
+                      userDetails?.name ?? undefined
+                    );
+                  }}
+                >
+                  View all ({reviewTotalCount})
+                </button>
+              ) : null}
+            </div>
+            {reviewsLoading ? (
+              <div className="d-flex justify-content-center py-4">
+                <Spinner animation="border" size="sm" role="status" />
+              </div>
+            ) : reviewRows.length === 0 ? (
+              <div className="text-muted small py-2">No reviews yet</div>
+            ) : (
+              <div className="partner-details-reviews-grid">
+                {reviewRows.map((row, index) => (
+                  <PartnerReviewCard
+                    key={`${row.order_id || row.order_unique_id}-${index}`}
+                    row={row}
+                    variant="grid"
+                    onOrderClick={handleReviewOrderClick}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
           </div>
         </Modal.Body>
+        
       </Modal>
       <PartnerVerificationStatusModal
         show={verificationStatusModalOpen}

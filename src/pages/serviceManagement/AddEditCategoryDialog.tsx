@@ -37,7 +37,7 @@ import {
 import CustomMultiSelect from "../../components/CustomMultiSelect";
 import { fetchServicesForCategoryDialog } from "../../services/servicesService";
 import { openDialog } from "../../lib/global/DialogManager";
-import AddEditServiceDialog from "./AddEditServiceDialog";
+import { showAddEditServiceDialog } from "./AddEditServiceDialog";
 
 type AddEditCategoryDialogProps = {
   isEditable: boolean;
@@ -271,7 +271,7 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
         .map((s) => s.value)
     );
 
-    AddEditServiceDialog.show(
+    showAddEditServiceDialog(
       false,
       null,
       async () => {
@@ -895,7 +895,7 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
                 </Col>
               ) : null}
 
-              <Col md={isRequestCategory ? 12 : 6}>
+              <Col xs={12} md={6} className="min-w-0">
                 <label className="form-label fw-medium mb-2 d-block">
                   <FieldLabelText label="Category image" required />
                 </label>
@@ -916,10 +916,10 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
                 />
               </Col>
               {!isRequestCategory ? (
-                <Col md={6}>
-                   <label className="form-label fw-medium mb-2 d-block">
-                  <FieldLabelText label="Services" required />
-                </label>
+                <Col xs={12} md={6} className="min-w-0">
+                  <label className="form-label fw-medium mb-2 d-block">
+                    <FieldLabelText label="Services" required />
+                  </label>
                   <CustomMultiSelect
                     label=""
                     controlId="Service"

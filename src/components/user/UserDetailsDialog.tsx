@@ -5,7 +5,7 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import { Modal, Row } from "react-bootstrap";
+import { Modal, Row, Button } from "react-bootstrap";
 import CustomCloseButton from "../../components/CustomCloseButton";
 import { UserModel } from "../../lib/models/UserModel";
 import {
@@ -364,12 +364,12 @@ const UserDetailsDialog: React.FC<UserDetailsDialogProps> & {
               <p>Personal</p>
               <img
                 src={
-                  userDetails?.profile_url
-                    ? `${AppConstant.IMAGE_BASE_URL}${
-                        userDetails?.profile_url
-                      }?t=${Date.now()}`
+                userDetails?.profile_url
+                  ? userDetails.profile_url.startsWith("http")
+                    ? `${userDetails.profile_url}?t=${Date.now()}`
+                    : `${AppConstant.IMAGE_BASE_URL}${userDetails.profile_url}?t=${Date.now()}`
                     : profileIcon
-                }
+              }
                 alt="User profile"
                 width="160px"
                 height="160px"
@@ -386,6 +386,7 @@ const UserDetailsDialog: React.FC<UserDetailsDialogProps> & {
                 phone={userDetails?.phone_number}
                 registeredDate={userDetails?.created_at}
                 lastServiceDate={userDetails?.last_service_date}
+                isActive={userDetails?.is_active}
               />
             </div>
             <img
@@ -528,6 +529,7 @@ const UserDetailsDialog: React.FC<UserDetailsDialogProps> & {
             </section>
           </Row>
         </Modal.Body>
+      
       </Modal>
       {userDetails ? (
         <UserViewAddressModal

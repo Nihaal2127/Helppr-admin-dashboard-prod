@@ -16,6 +16,8 @@ import {
   computeAutoQuotePriceFromPartner,
   convertQuoteToOrder,
   deriveQuoteScheduleMetrics,
+  deriveQuoteScheduleEndFromDuration,
+  deriveQuoteScheduleDurationFromStored,
   fetchFranchiseRelatedCatalog,
   fetchQuoteDetailById,
   buildQuoteCatalogServicesForPartner,
@@ -26,6 +28,9 @@ import {
   filterPartnerServicesForCategory,
   getPartnerActiveServiceProvidingRow,
   getQuoteScheduleModeForPartnerService,
+  getQuoteScheduleDurationUnit,
+  quoteScheduleBillingHintText,
+  quoteScheduleDurationFieldLabel,
   mapRelatedCatalogToQuoteOptions,
   mergeQuoteServiceFeesForBreakdown,
   normalizeQuoteApiStatus,
@@ -38,11 +43,11 @@ import {
   buildFranchisePincodeSetFromRelatedCatalog,
   collectFranchiseAreaIds,
   computeQuotePriceBreakdown,
+  quoteHasApiPriceBreakdown,
+  quotePriceBreakdownFromRow,
   QUOTE_MODAL_LAYOUT,
   QUOTE_SECTION_TITLE_CLASS,
   SCHEDULE_TIME_PICKER_INTERVAL_MINUTES,
-  scheduleEndTimeMaxForDay,
-  scheduleEndTimeMinAfterStart,
   seedEditQuoteFormFromRow,
   setQuoteFranchiseCatalogSnapshot,
   useQuoteCustomerAddressPanel,
@@ -50,7 +55,7 @@ import {
 import type { EditQuoteFormValues, QuoteAddressRowUi } from "../../lib/quote/quoteHelpers";
 import QuotePriceBreakdownPanel from "../../components/quote/QuotePriceBreakdownPanel";
 import QuoteAddressOptionsLoader from "../../components/quote/QuoteAddressOptionsLoader";
-import { partnerCatalogControlStyle } from "../../components/partnerCatalogBlockUi";
+import { partnerCatalogControlStyle, partnerCatalogDisabledControlStyle } from "../../components/partnerCatalogBlockUi";
 import { FieldLabelText } from "../../components/RequiredFieldMark";
 import {
   applyMissingRequiredFieldErrors,
@@ -100,24 +105,6 @@ function compareIsoDateOnlyAsc(aIso: string, bIso: string): number | null {
   return startOfLocalDay(a).getTime() - startOfLocalDay(b).getTime();
 }
 
-function minutesFromScheduleTimeStorage(st: string): number | null {
-  const t = String(st ?? "").trim();
-  if (!t) return null;
-  const m = t.match(/T(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
-  return hh * 60 + mm;
-}
-
-function isScheduleEndAfterStartSameDay(start: string, end: string): boolean {
-  const a = minutesFromScheduleTimeStorage(start);
-  const b = minutesFromScheduleTimeStorage(end);
-  if (a == null || b == null) return false;
-  return b > a;
-}
-
 const scheduleTimeAllowAll = (): boolean => true;
 
 function collectMissingQuoteEditRequiredFields(
@@ -127,11 +114,18 @@ function collectMissingQuoteEditRequiredFields(
     addressUiReady: boolean;
     addressRowsCount: number;
     selectedAddressId: string;
+    /** When false, partner is optional (New-tab Update). */
+    requirePartner?: boolean;
+    /** When false, service price is optional (New-tab Update; required on Send Quote). */
+    requireServicePrice?: boolean;
   }
 ): MissingRequiredField[] {
   const missing: MissingRequiredField[] = [];
 
-  if (!String(data.requested_partner ?? "").trim()) {
+  if (
+    opts.requirePartner !== false &&
+    !String(data.requested_partner ?? "").trim()
+  ) {
     missing.push({ field: "requested_partner", label: "Partner" });
   }
   if (!String(data.category_id ?? "").trim()) {
@@ -152,27 +146,27 @@ function collectMissingQuoteEditRequiredFields(
   );
   if (hasServiceSelected) {
     if (!String(data.requested_date ?? "").trim()) {
-      missing.push({
-        field: "requested_date",
-        label: scheduleMode === "range" ? "From date" : "Date",
-      });
+      missing.push({ field: "requested_date", label: "Start date" });
     }
-    if (
-      scheduleMode === "range" &&
-      !String(data.requested_date_to ?? "").trim()
-    ) {
-      missing.push({ field: "requested_date_to", label: "To date" });
+    const dur = Number.parseInt(String(data.schedule_duration ?? "").trim(), 10);
+    if (!Number.isFinite(dur) || dur < 1) {
+      missing.push({ field: "schedule_duration", label: "Duration" });
     }
     if (!String(data.requested_time_from ?? "").trim()) {
       missing.push({ field: "requested_time_from", label: "Start time" });
     }
-    if (!String(data.requested_time_to ?? "").trim()) {
-      missing.push({ field: "requested_time_to", label: "End time" });
+    if (
+      !String(data.requested_date_to ?? "").trim() ||
+      !String(data.requested_time_to ?? "").trim()
+    ) {
+      missing.push({ label: "Schedule end (auto)" });
     }
-    const priceRaw = String(data.service_price ?? "").trim();
-    const price = Number.parseFloat(priceRaw);
-    if (!priceRaw || Number.isNaN(price) || price < 0) {
-      missing.push({ field: "service_price", label: "Service price" });
+    if (opts.requireServicePrice !== false) {
+      const priceRaw = String(data.service_price ?? "").trim();
+      const price = Number.parseFloat(priceRaw);
+      if (!priceRaw || Number.isNaN(price) || price < 0) {
+        missing.push({ field: "service_price", label: "Service price" });
+      }
     }
   }
 
@@ -242,6 +236,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   const catalogSeqRef = useRef(0);
   const initialStatusKeyRef = useRef("");
   const skipAutoPriceRef = useRef(true);
+  /** When true, do not overwrite a manually edited service price. */
+  const userEditedServicePriceRef = useRef(false);
   const skipScheduleRevalidateRef = useRef(true);
   const [apiServiceFees, setApiServiceFees] = useState<
     ServiceDropDownOption | undefined
@@ -266,6 +262,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       employee_id: "",
       category_id: "",
       requested_date: "",
+      schedule_duration: "",
       requested_date_to: "",
       requested_time: "",
       requested_time_from: "",
@@ -393,6 +390,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   useEffect(() => {
     if (!quoteRow || catalogBusy || !franchisePinsLoadDone) return;
     skipAutoPriceRef.current = true;
+    userEditedServicePriceRef.current = false;
     skipScheduleRevalidateRef.current = true;
     reset(seedEditQuoteFormFromRow(quoteRow));
     const t = window.setTimeout(() => {
@@ -403,7 +401,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   }, [quoteRow, catalogBusy, franchisePinsLoadDone, reset]);
 
   const clearScheduleAndPriceFields = useCallback(() => {
+    userEditedServicePriceRef.current = false;
     setValue("requested_date", "", { shouldValidate: false });
+    setValue("schedule_duration", "", { shouldValidate: false });
     setValue("requested_date_to", "", { shouldValidate: false });
     setValue("requested_time_from", "", { shouldValidate: false });
     setValue("requested_time_to", "", { shouldValidate: false });
@@ -582,25 +582,6 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
   const activeScheduleMode = isNewTabQuoteEdit ? editScheduleMode : scheduleMode;
 
-  const isScheduleComplete = useMemo(() => {
-    if (!hasServiceSelected) return false;
-    const d = String(form.requested_date ?? "").trim();
-    const dTo = String(form.requested_date_to ?? "").trim();
-    const tFrom = String(form.requested_time_from ?? "").trim();
-    const tTo = String(form.requested_time_to ?? "").trim();
-    if (activeScheduleMode === "range") {
-      return Boolean(d && dTo && tFrom && tTo);
-    }
-    return Boolean(d && tFrom && tTo);
-  }, [
-    hasServiceSelected,
-    activeScheduleMode,
-    form.requested_date,
-    form.requested_date_to,
-    form.requested_time_from,
-    form.requested_time_to,
-  ]);
-
   const selectedServiceOption = useMemo(() => {
     if (!serviceId) return undefined;
     const pool = isNewTabQuoteEdit
@@ -623,19 +604,73 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     return merged ?? apiServiceFees;
   }, [selectedServiceOption, selectedPartnerCatalogRecord, serviceId, apiServiceFees]);
 
-  const editEndMinTime = useMemo(() => {
-    const from = String(form.requested_time_from ?? "").trim();
-    const to = String(form.requested_time_to ?? "").trim();
-    if (from && to && !isScheduleEndAfterStartSameDay(from, to)) {
-      return undefined;
-    }
-    return scheduleEndTimeMinAfterStart(from);
-  }, [form.requested_time_from, form.requested_time_to]);
-
-  const editPriceBreakdown = useMemo(
-    () => computeQuotePriceBreakdown(form.service_price, feeOptionForPreview),
-    [form.service_price, feeOptionForPreview]
+  const editScheduleDurationUnit = useMemo(
+    () =>
+      getQuoteScheduleDurationUnit(
+        String(feeOptionForPreview?.payment_type ?? "").trim()
+      ),
+    [feeOptionForPreview?.payment_type]
   );
+
+  const editBillingHint = useMemo(() => {
+    if (!hasServiceSelected) return "";
+    const raw = String(feeOptionForPreview?.payment_type ?? "").trim();
+    if (!raw) return "";
+    return quoteScheduleBillingHintText(raw);
+  }, [hasServiceSelected, feeOptionForPreview?.payment_type]);
+
+  const editScheduleDurationLabel = quoteScheduleDurationFieldLabel(
+    editScheduleDurationUnit
+  );
+
+  const isScheduleComplete = useMemo(() => {
+    if (!hasServiceSelected) return false;
+    const dur = Number.parseInt(String(form.schedule_duration ?? "").trim(), 10);
+    const d = String(form.requested_date ?? "").trim();
+    const tFrom = String(form.requested_time_from ?? "").trim();
+    const dTo = String(form.requested_date_to ?? "").trim();
+    const tTo = String(form.requested_time_to ?? "").trim();
+    return Boolean(
+      Number.isFinite(dur) && dur >= 1 && d && tFrom && dTo && tTo
+    );
+  }, [
+    hasServiceSelected,
+    form.schedule_duration,
+    form.requested_date,
+    form.requested_date_to,
+    form.requested_time_from,
+    form.requested_time_to,
+  ]);
+
+  const editPriceBreakdown = useMemo(() => {
+    if (quoteRow && quoteHasApiPriceBreakdown(quoteRow)) {
+      const apiBase = Number(
+        quoteRow.total_service_charge ?? quoteRow.service_price
+      );
+      const formPrice = Number.parseFloat(
+        String(form.service_price ?? "").trim()
+      );
+      if (
+        Number.isFinite(apiBase) &&
+        Number.isFinite(formPrice) &&
+        Math.abs(apiBase - formPrice) < 0.001
+      ) {
+        return quotePriceBreakdownFromRow(quoteRow);
+      }
+      // Service price edited: keep commission/tax % from the quote record.
+      return computeQuotePriceBreakdown(form.service_price, {
+        value: String(quoteRow.service_id ?? ""),
+        label: String(quoteRow.service_name ?? ""),
+        tax: quoteRow.tax_percent,
+        commission: quoteRow.commission_percent,
+        minimum_deposit: quoteRow.minimum_deposit_percent,
+      });
+    }
+    return computeQuotePriceBreakdown(
+      form.service_price,
+      feeOptionForPreview
+    );
+  }, [form.service_price, feeOptionForPreview, quoteRow]);
 
   const schedulePricePreview = useMemo(() => {
     if (!isScheduleComplete || !partnerSelected) return null;
@@ -676,21 +711,94 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   ]);
 
   useEffect(() => {
-    if (skipScheduleRevalidateRef.current) return;
-    const from = String(form.requested_time_from ?? "").trim();
-    const to = String(form.requested_time_to ?? "").trim();
-    if (!from || !to) return;
-    if (!isScheduleEndAfterStartSameDay(from, to)) {
-      setValue("requested_time_to", "", { shouldValidate: false });
+    if (!hasServiceSelected) return;
+    const existing = String(form.schedule_duration ?? "").trim();
+    const d = String(form.requested_date ?? "").trim();
+    const dTo = String(form.requested_date_to ?? "").trim();
+    const tFrom = String(form.requested_time_from ?? "").trim();
+    const tTo = String(form.requested_time_to ?? "").trim();
+    if (existing || !d || !tFrom || !tTo) return;
+    const dur = deriveQuoteScheduleDurationFromStored({
+      unit: editScheduleDurationUnit,
+      fromDate: d,
+      toDate: dTo || d,
+      startTimeStorage: tFrom,
+      endTimeStorage: tTo,
+    });
+    setValue("schedule_duration", String(dur), { shouldValidate: false });
+  }, [
+    hasServiceSelected,
+    form.schedule_duration,
+    form.requested_date,
+    form.requested_date_to,
+    form.requested_time_from,
+    form.requested_time_to,
+    editScheduleDurationUnit,
+    setValue,
+  ]);
+
+  useEffect(() => {
+    if (!hasServiceSelected) return;
+    const dur = Number.parseInt(String(form.schedule_duration ?? "").trim(), 10);
+    const d = String(form.requested_date ?? "").trim();
+    const tFrom = String(form.requested_time_from ?? "").trim();
+    const dTo = String(form.requested_date_to ?? "").trim();
+    const tTo = String(form.requested_time_to ?? "").trim();
+    if (!Number.isFinite(dur) || dur < 1 || !d || !tFrom) {
+      if (dTo) {
+        setValue("requested_date_to", "", { shouldValidate: false });
+      }
+      if (tTo) {
+        setValue("requested_time_to", "", { shouldValidate: false });
+      }
+      return;
     }
-  }, [form.requested_time_from, form.requested_time_to, setValue]);
+    const end = deriveQuoteScheduleEndFromDuration({
+      unit: editScheduleDurationUnit,
+      duration: dur,
+      startDate: d,
+      startTimeStorage: tFrom,
+    });
+    if (!end) {
+      if (dTo) {
+        setValue("requested_date_to", "", { shouldValidate: false });
+      }
+      if (tTo) {
+        setValue("requested_time_to", "", { shouldValidate: false });
+      }
+      return;
+    }
+    if (dTo !== end.to_date) {
+      setValue("requested_date_to", end.to_date, { shouldValidate: false });
+    }
+    if (tTo !== end.end_time_storage) {
+      setValue("requested_time_to", end.end_time_storage, {
+        shouldValidate: false,
+      });
+    }
+  }, [
+    hasServiceSelected,
+    editScheduleDurationUnit,
+    form.schedule_duration,
+    form.requested_date,
+    form.requested_date_to,
+    form.requested_time_from,
+    form.requested_time_to,
+    setValue,
+  ]);
 
   /** Edit: allow any calendar date (existing quotes may be in the past). Create keeps today+. */
   const scheduleDateAllowAll = useCallback(() => true, []);
 
   useEffect(() => {
     if (skipAutoPriceRef.current) return;
+    if (userEditedServicePriceRef.current) return;
     if (!isScheduleComplete || !partnerSelected) return;
+    // Prefer GET /quote amounts (including New) whenever the API returned a
+    // total — do not overwrite with partner catalog auto-calc (e.g. 1000 vs 1001).
+    if (quoteRow && quoteHasApiPriceBreakdown(quoteRow)) {
+      return;
+    }
     const sid = serviceId;
     if (!sid) return;
     const row = getPartnerActiveServiceProvidingRow(
@@ -712,10 +820,14 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     const n = row
       ? computeAutoQuotePriceFromPartner(row, metrics, catalogPaymentType)
       : 0;
-    setValue("service_price", String(n), { shouldValidate: false });
+    setValue("service_price", String(n), {
+      shouldValidate: true,
+      shouldDirty: true,
+    });
   }, [
     isScheduleComplete,
     partnerSelected,
+    isNewTabQuoteEdit,
     serviceId,
     activeScheduleMode,
     form.requested_date,
@@ -725,19 +837,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     form.requested_time_to,
     selectedPartnerCatalogRecord,
     feeOptionForPreview?.payment_type,
+    quoteRow,
     setValue,
   ]);
-
-  const scheduleToDateFilter = useCallback(
-    (date: Date) => {
-      const fromIso = String(form.requested_date ?? "").trim();
-      if (!fromIso) return true;
-      const from = parseIsoDateOnly(fromIso);
-      if (!from) return true;
-      return startOfLocalDay(date) >= startOfLocalDay(from);
-    },
-    [form.requested_date]
-  );
 
   const userSelectOptions = useMemo<OptionType[]>(() => {
     const base = quoteUserOptions.map((u) => ({ value: u.value, label: u.label }));
@@ -799,7 +901,10 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
     const nextStatus = normalizeQuoteApiStatus(data.quote_status);
     const prev = initialStatusKeyRef.current;
-    const isConvertToOrder = nextStatus === "success" && prev !== "success";
+    const isConvertToOrder =
+      !isNewTabQuoteEdit &&
+      nextStatus === "success" &&
+      prev !== "success";
 
     if (isConvertToOrder) {
       if (prev !== "accepted") {
@@ -824,7 +929,16 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       return;
     }
 
-    const price = Number.parseFloat(String(data.service_price).trim());
+    const priceSource =
+      prev === "accepted"
+        ? String(
+            quoteRow?.total_service_charge ??
+              quoteRow?.service_price ??
+              data.service_price ??
+              ""
+          ).trim()
+        : String(data.service_price).trim();
+    const price = Number.parseFloat(priceSource);
 
     if (String(data.user_id ?? "").trim() && !addressUi.ready) {
       showErrorAlert(
@@ -844,6 +958,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
         addressUiReady: addressUi.ready,
         addressRowsCount: addressUi.rows.length,
         selectedAddressId,
+        requirePartner: !isNewTabQuoteEdit,
+        requireServicePrice: !isNewTabQuoteEdit,
       }
     );
     if (missingRequired.length > 0) {
@@ -864,17 +980,6 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
         return;
       }
     }
-    if (
-      !isScheduleEndAfterStartSameDay(
-        String(data.requested_time_from ?? "").trim(),
-        String(data.requested_time_to ?? "").trim()
-      )
-    ) {
-      showErrorAlert(
-        "End time must be after start time on the same day (use a later time, not earlier in the morning than the start)."
-      );
-      return;
-    }
 
     const metrics = deriveQuoteScheduleMetrics({
       scheduleMode: activeScheduleMode,
@@ -889,24 +994,52 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       return;
     }
 
-    const patch: Record<string, unknown> = {
-      category_id: String(data.category_id ?? "").trim(),
-      service_id: String(data.requested_services ?? "").trim(),
-      partner_id: String(data.requested_partner ?? "").trim() || undefined,
-      employee_id: String(data.employee_id ?? "").trim() || undefined,
-      address_id: selectedAddressId.trim(),
-      service_price: price,
-      from_date: metrics.from_date,
-      to_date: metrics.to_date,
-      work_start_time: metrics.work_start_time,
-      work_end_time: metrics.work_end_time,
-      work_hours_per_day: metrics.work_hours_per_day,
-      total_work_hours: metrics.total_work_hours,
-      quote_description:
-        String(data.user_description ?? "").trim() || undefined,
-      admin_description:
-        String(data.admin_description ?? "").trim() || undefined,
-    };
+    const priceRaw = String(data.service_price ?? "").trim();
+    if (priceRaw && (Number.isNaN(price) || price < 0)) {
+      showErrorAlert("Please enter a valid service price.");
+      return;
+    }
+
+    // New-tab Update: schedule / address / notes / service_price.
+    // Partner and status still go through Update & Send.
+    const patch: Record<string, unknown> = isNewTabQuoteEdit
+      ? {
+          category_id: String(data.category_id ?? "").trim(),
+          service_id: String(data.requested_services ?? "").trim(),
+          employee_id: String(data.employee_id ?? "").trim() || undefined,
+          address_id: selectedAddressId.trim(),
+          ...(priceRaw && Number.isFinite(price) && price >= 0
+            ? { service_price: price }
+            : {}),
+          from_date: metrics.from_date,
+          to_date: metrics.to_date,
+          work_start_time: metrics.work_start_time,
+          work_end_time: metrics.work_end_time,
+          work_hours_per_day: metrics.work_hours_per_day,
+          total_work_hours: metrics.total_work_hours,
+          quote_description:
+            String(data.user_description ?? "").trim() || undefined,
+          admin_description:
+            String(data.admin_description ?? "").trim() || undefined,
+        }
+      : {
+          category_id: String(data.category_id ?? "").trim(),
+          service_id: String(data.requested_services ?? "").trim(),
+          partner_id: String(data.requested_partner ?? "").trim() || undefined,
+          employee_id: String(data.employee_id ?? "").trim() || undefined,
+          address_id: selectedAddressId.trim(),
+          service_price: price,
+          from_date: metrics.from_date,
+          to_date: metrics.to_date,
+          work_start_time: metrics.work_start_time,
+          work_end_time: metrics.work_end_time,
+          work_hours_per_day: metrics.work_hours_per_day,
+          total_work_hours: metrics.total_work_hours,
+          quote_description:
+            String(data.user_description ?? "").trim() || undefined,
+          admin_description:
+            String(data.admin_description ?? "").trim() || undefined,
+        };
 
     let ok = await updateQuote(id, patch);
     if (!ok) {
@@ -914,7 +1047,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       return;
     }
 
-    if (nextStatus && nextStatus !== prev) {
+    // New-tab Update: fields only — status changes go through Send Quote.
+    if (!isNewTabQuoteEdit && nextStatus && nextStatus !== prev) {
       ok = await applyQuoteHeaderPatch(id, { status: nextStatus });
       if (!ok) {
         const statusMsg =
@@ -931,10 +1065,47 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     }
 
     const statusChangedToAccepted =
-      nextStatus === "accepted" && nextStatus !== prev;
+      !isNewTabQuoteEdit &&
+      nextStatus === "accepted" &&
+      nextStatus !== prev;
     showSuccessAlert(
       statusChangedToAccepted ? "Quote accepted." : "Quote updated."
     );
+    onSaved?.();
+    onClose();
+  };
+
+  const handleSendQuote = async () => {
+    const id = String(quoteMongoId ?? "").trim();
+    if (!id) {
+      showErrorAlert("Missing quote id.");
+      return;
+    }
+    const partnerId = String(getValues("requested_partner") ?? "").trim();
+    if (!partnerId) {
+      showErrorAlert("Please select a partner.");
+      return;
+    }
+
+    const priceRaw = String(getValues("service_price") ?? "").trim();
+    const price = Number.parseFloat(priceRaw);
+    if (!priceRaw || Number.isNaN(price) || price < 0) {
+      showErrorAlert("Please enter a valid service price.");
+      return;
+    }
+
+    // Send Quote: partner + service price + move to pending (single PUT).
+    const ok = await updateQuote(id, {
+      partner_id: partnerId,
+      service_price: price,
+      status: "pending",
+    });
+    if (!ok) {
+      showErrorAlert("Could not send quote.");
+      return;
+    }
+
+    showSuccessAlert("Quote sent.");
     onSaved?.();
     onClose();
   };
@@ -1047,6 +1218,15 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   const isCatalogFieldsReadOnly = isPendingQuoteEdit || isAcceptedQuoteEdit;
   const isTerminalQuoteStatus =
     quoteStatusKey === "success" || quoteStatusKey === "failed";
+  // Accepted quotes keep the locked price; New / Pending remain editable.
+  const servicePriceLocked = lockedFields || isAcceptedQuoteEdit;
+  const servicePriceRegister = register(
+    "service_price",
+    isNewTabQuoteEdit
+      ? undefined
+      : { required: "Service price is required" }
+  );
+  const quoteStatusLocked = lockedFields || isTerminalQuoteStatus;
   const categoryFieldDisabled =
     lockedFields || (!isNewTabQuoteEdit && !partnerSelected);
   const serviceFieldDisabled =
@@ -1075,6 +1255,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
         ) : (
           <form
             id="quote-edit-all-form"
+            className="quote-edit-all-form"
             noValidate
             onSubmit={handleSubmit(onSubmit)}
           >
@@ -1201,7 +1382,12 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         register={register as unknown as UseFormRegister<AddQuoteFormValues>}
                         fieldName="requested_partner"
                         error={errors.requested_partner}
-                        requiredMessage="Please select a partner"
+                        requiredMessage={
+                          isNewTabQuoteEdit
+                            ? undefined
+                            : "Please select a partner"
+                        }
+                        showRequiredMark={isNewTabQuoteEdit}
                         defaultValue={form.requested_partner}
                         setValue={(name, value) => {
                           if (name === "requested_partner") {
@@ -1336,7 +1522,12 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                       register={register as unknown as UseFormRegister<AddQuoteFormValues>}
                       fieldName="requested_partner"
                       error={errors.requested_partner}
-                      requiredMessage="Please select a partner"
+                      requiredMessage={
+                        isNewTabQuoteEdit
+                          ? undefined
+                          : "Please select a partner"
+                      }
+                      showRequiredMark={isNewTabQuoteEdit}
                       defaultValue={form.requested_partner}
                       setValue={(name, value) => {
                         if (name === "requested_partner") {
@@ -1461,6 +1652,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
               {hasServiceSelected ? (
                 <>
+                  {editBillingHint ? (
+                    <p className="small text-muted mb-0 mt-2">{editBillingHint}</p>
+                  ) : null}
                   <Row className="mt-4 mb-2">
                     <Col xs={12}>
                       <label
@@ -1477,167 +1671,90 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                   </Row>
                   <div className="add-quote-schedule-panel">
                     <Row className="gy-4 gx-md-5">
-                      {activeScheduleMode === "range" ? (
-                        <>
-                          <Col xs={12} md={3}>
-                            <CustomTextFieldDatePicket
-                              label="From date"
-                              controlId="edit_requested_date"
-                              selectedDate={form.requested_date || null}
-                              onChange={(date) => {
-                                const next = toIsoCalendarDate(date) ?? "";
-                                setValue("requested_date", next, {
-                                  shouldValidate: true,
-                                });
-                              }}
-                              register={register as unknown as UseFormRegister<AddQuoteFormValues>}
-                              setValue={setValue as (n: string, v: unknown) => void}
-                              asCol={false}
-                              labelSize={12}
-                              placeholderText="From date"
-                              filterDate={scheduleDateAllowAll}
+                      <Col xs={12} md={4}>
+                        <Form.Group controlId="schedule_duration">
+                          <Form.Label className="fw-medium mb-1">
+                            <FieldLabelText
+                              label={editScheduleDurationLabel}
                               required
                             />
-                          </Col>
-                          <Col xs={12} md={3}>
-                            <CustomTextFieldDatePicket
-                              label="To date"
-                              controlId="edit_requested_date_to"
-                              selectedDate={form.requested_date_to || null}
-                              onChange={(date) => {
-                                const next = toIsoCalendarDate(date) ?? "";
-                                setValue("requested_date_to", next, {
-                                  shouldValidate: true,
-                                });
-                              }}
-                              register={register as unknown as UseFormRegister<AddQuoteFormValues>}
-                              setValue={setValue as (n: string, v: unknown) => void}
-                              asCol={false}
-                              labelSize={12}
-                              placeholderText="To date"
-                              filterDate={scheduleToDateFilter}
-                              required
-                            />
-                          </Col>
-                          <Col xs={12} md={3}>
-                            <CustomTextFieldTimePicket
-                              label="Start time"
-                              controlId="edit_requested_time_from"
-                              selectedTime={timeStorageOrNull(form.requested_time_from)}
-                              onChange={(date) =>
-                                setValue(
-                                  "requested_time_from",
-                                  toTimeStorageFromDate(date),
-                                  { shouldValidate: true }
-                                )
-                              }
-                              placeholderText="Select start time"
-                              error={errors.requested_time_from}
-                              register={register}
-                              validation={{ required: "Start time is required" }}
-                              setValue={setValue}
-                              asCol={false}
-                              labelSize={12}
-                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                              filterTime={scheduleTimeAllowAll}
-                            />
-                          </Col>
-                          <Col xs={12} md={3}>
-                            <CustomTextFieldTimePicket
-                              label="End time"
-                              controlId="edit_requested_time_to"
-                              selectedTime={timeStorageOrNull(form.requested_time_to)}
-                              onChange={(date) =>
-                                setValue(
-                                  "requested_time_to",
-                                  toTimeStorageFromDate(date),
-                                  { shouldValidate: true }
-                                )
-                              }
-                              placeholderText="After start time"
-                              error={errors.requested_time_to}
-                              register={register}
-                              validation={{ required: "End time is required" }}
-                              setValue={setValue}
-                              asCol={false}
-                              labelSize={12}
-                              minTime={editEndMinTime}
-                              maxTime={scheduleEndTimeMaxForDay()}
-                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                            />
-                          </Col>
-                        </>
-                      ) : (
-                        <>
-                          <Col xs={12} md={4}>
-                            <CustomTextFieldDatePicket
-                              label="Date"
-                              controlId="edit_requested_date"
-                              selectedDate={form.requested_date || null}
-                              onChange={(date) => {
-                                const next = toIsoCalendarDate(date) ?? "";
-                                setValue("requested_date", next, {
-                                  shouldValidate: true,
-                                });
-                              }}
-                              register={register as unknown as UseFormRegister<AddQuoteFormValues>}
-                              setValue={setValue as (n: string, v: unknown) => void}
-                              asCol={false}
-                              labelSize={12}
-                              placeholderText="Select date"
-                              filterDate={scheduleDateAllowAll}
-                              required
-                            />
-                          </Col>
-                          <Col xs={12} md={4}>
-                            <CustomTextFieldTimePicket
-                              label="Start time"
-                              controlId="edit_requested_time_from"
-                              selectedTime={timeStorageOrNull(form.requested_time_from)}
-                              onChange={(date) =>
-                                setValue(
-                                  "requested_time_from",
-                                  toTimeStorageFromDate(date),
-                                  { shouldValidate: true }
-                                )
-                              }
-                              placeholderText="Select start time"
-                              error={errors.requested_time_from}
-                              register={register}
-                              validation={{ required: "Start time is required" }}
-                              setValue={setValue}
-                              asCol={false}
-                              labelSize={12}
-                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                              filterTime={scheduleTimeAllowAll}
-                            />
-                          </Col>
-                          <Col xs={12} md={4}>
-                            <CustomTextFieldTimePicket
-                              label="End time"
-                              controlId="edit_requested_time_to"
-                              selectedTime={timeStorageOrNull(form.requested_time_to)}
-                              onChange={(date) =>
-                                setValue(
-                                  "requested_time_to",
-                                  toTimeStorageFromDate(date),
-                                  { shouldValidate: true }
-                                )
-                              }
-                              placeholderText="After start time"
-                              error={errors.requested_time_to}
-                              register={register}
-                              validation={{ required: "End time is required" }}
-                              setValue={setValue}
-                              asCol={false}
-                              labelSize={12}
-                              minTime={editEndMinTime}
-                              maxTime={scheduleEndTimeMaxForDay()}
-                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                            />
-                          </Col>
-                        </>
-                      )}
+                          </Form.Label>
+                          <Form.Control
+                            type="number"
+                            min={1}
+                            step={1}
+                            inputMode="numeric"
+                            disabled={lockedFields}
+                            className={`custom-form-input${
+                              errors.schedule_duration ? " is-invalid" : ""
+                            }`}
+                            style={
+                              lockedFields
+                                ? partnerCatalogDisabledControlStyle
+                                : partnerCatalogControlStyle
+                            }
+                            placeholder={`Enter ${editScheduleDurationLabel.toLowerCase()}`}
+                            {...register("schedule_duration", {
+                              required: `${editScheduleDurationLabel} is required`,
+                              min: {
+                                value: 1,
+                                message: "Must be at least 1",
+                              },
+                            })}
+                          />
+                          {errors.schedule_duration ? (
+                            <div className="text-danger small mt-1">
+                              {String(
+                                (errors.schedule_duration as { message?: string })
+                                  ?.message ?? ""
+                              )}
+                            </div>
+                          ) : null}
+                        </Form.Group>
+                      </Col>
+                      <Col xs={12} md={4}>
+                        <CustomTextFieldDatePicket
+                          label="Start date"
+                          controlId="edit_requested_date"
+                          selectedDate={form.requested_date || null}
+                          onChange={(date) => {
+                            const next = toIsoCalendarDate(date) ?? "";
+                            setValue("requested_date", next, {
+                              shouldValidate: true,
+                            });
+                          }}
+                          register={register as unknown as UseFormRegister<AddQuoteFormValues>}
+                          setValue={setValue as (n: string, v: unknown) => void}
+                          asCol={false}
+                          labelSize={12}
+                          placeholderText="Start date"
+                          filterDate={scheduleDateAllowAll}
+                          required
+                        />
+                      </Col>
+                      <Col xs={12} md={4}>
+                        <CustomTextFieldTimePicket
+                          label="Start time"
+                          controlId="edit_requested_time_from"
+                          selectedTime={timeStorageOrNull(form.requested_time_from)}
+                          onChange={(date) =>
+                            setValue(
+                              "requested_time_from",
+                              toTimeStorageFromDate(date),
+                              { shouldValidate: true }
+                            )
+                          }
+                          placeholderText="Select start time"
+                          error={errors.requested_time_from}
+                          register={register}
+                          validation={{ required: "Start time is required" }}
+                          setValue={setValue}
+                          asCol={false}
+                          labelSize={12}
+                          timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
+                          filterTime={scheduleTimeAllowAll}
+                        />
+                      </Col>
                     </Row>
                     {schedulePricePreview ? (
                       <div className="add-quote-schedule-preview">
@@ -1667,13 +1784,18 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                     <Col xs={12} md={6}>
                       <Form.Group controlId="service_price" className="mb-0">
                         <Form.Label className="fw-medium mb-1">
-                          <FieldLabelText label="Service Price" required />
+                          <FieldLabelText
+                            label="Service Price"
+                            required={!isNewTabQuoteEdit}
+                          />
                         </Form.Label>
                         <InputGroup>
                           <InputGroup.Text
                             className="custom-form-input text-muted"
                             style={{
-                              ...partnerCatalogControlStyle,
+                              ...(servicePriceLocked
+                                ? partnerCatalogDisabledControlStyle
+                                : partnerCatalogControlStyle),
                               borderTopRightRadius: 0,
                               borderBottomRightRadius: 0,
                               fontWeight: 600,
@@ -1684,20 +1806,29 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                           <Form.Control
                             type="text"
                             inputMode="decimal"
-                            disabled={lockedFields}
+                            disabled={servicePriceLocked}
+                            readOnly={servicePriceLocked}
                             className={`custom-form-input border-start-0${
-                              errors.service_price ? " is-invalid" : ""
-                            }`}
+                              servicePriceLocked
+                                ? " custom-form-input--read-only"
+                                : ""
+                            }${errors.service_price ? " is-invalid" : ""}`}
                             style={{
-                              ...partnerCatalogControlStyle,
+                              ...(servicePriceLocked
+                                ? partnerCatalogDisabledControlStyle
+                                : partnerCatalogControlStyle),
                               borderLeft: 0,
                               borderTopLeftRadius: 0,
                               borderBottomLeftRadius: 0,
                             }}
                             placeholder="e.g. 1200"
-                            {...register("service_price", {
-                              required: "Service price is required",
-                            })}
+                            {...servicePriceRegister}
+                            onChange={(e) => {
+                              if (!servicePriceLocked) {
+                                userEditedServicePriceRef.current = true;
+                              }
+                              return servicePriceRegister.onChange(e);
+                            }}
                           />
                         </InputGroup>
                         {errors.service_price?.message ? (
@@ -1718,13 +1849,20 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         <Form.Select
                           id="edit-quote-status"
                           className="form-select custom-form-input"
-                          style={{
-                            borderRadius: "8px",
-                            borderColor: "var(--primary-color)",
-                            height: "35px",
-                            fontSize: "14px",
-                          }}
-                          disabled={lockedFields || isTerminalQuoteStatus}
+                          style={
+                            quoteStatusLocked
+                              ? {
+                                  ...partnerCatalogDisabledControlStyle,
+                                  height: "35px",
+                                }
+                              : {
+                                  borderRadius: "8px",
+                                  borderColor: "var(--primary-color)",
+                                  height: "35px",
+                                  fontSize: "14px",
+                                }
+                          }
+                          disabled={quoteStatusLocked}
                           {...register("quote_status")}
                         >
                           {STATUS_OPTIONS.map((o) => (
@@ -1754,7 +1892,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         errors.user_description ? " is-invalid" : ""
                       }`}
                       style={{
-                        ...partnerCatalogControlStyle,
+                        ...(lockedFields
+                          ? partnerCatalogDisabledControlStyle
+                          : partnerCatalogControlStyle),
                         minHeight: "96px",
                         resize: "vertical",
                       }}
@@ -1785,7 +1925,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         errors.admin_description ? " is-invalid" : ""
                       }`}
                       style={{
-                        ...partnerCatalogControlStyle,
+                        ...(lockedFields
+                          ? partnerCatalogDisabledControlStyle
+                          : partnerCatalogControlStyle),
                         minHeight: "96px",
                         resize: "vertical",
                       }}
@@ -1827,6 +1969,18 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
           >
             Update
           </Button>
+          {isNewTabQuoteEdit ? (
+            <Button
+              type="button"
+              className="custom-btn-primary"
+              disabled={lockedFields}
+              onClick={() => {
+                void handleSendQuote();
+              }}
+            >
+              Update & Send
+            </Button>
+          ) : null}
         </Modal.Footer>
       ) : null}
     </Modal>

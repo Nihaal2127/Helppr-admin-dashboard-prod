@@ -12,6 +12,19 @@ export type CityDropDownOption = {
   state_name?: string;
 };
 
+function cityDropDownRecords(data: unknown): unknown[] {
+  if (!data || typeof data !== "object") return [];
+  const root = data as Record<string, unknown>;
+  if (Array.isArray(root.records)) return root.records;
+  const nested = root.data;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    const inner = nested as Record<string, unknown>;
+    if (Array.isArray(inner.records)) return inner.records;
+  }
+  if (Array.isArray(nested)) return nested;
+  return [];
+}
+
 export const fetchCityDropDown = async (
   stateIdList?: string[]
 ): Promise<CityDropDownOption[]> => {
@@ -28,12 +41,29 @@ export const fetchCityDropDown = async (
   );
 
   if (response.success) {
-    return response.data.records.map((city: any) => ({
-      value: city._id,
-      label: city.name,
-      state_id: city.state_id,
-      state_name: city.state_name,
-    }));
+    const options: CityDropDownOption[] = [];
+    for (const row of cityDropDownRecords(response.data)) {
+      const city = row as {
+        _id?: string;
+        name?: string;
+        state_id?: string;
+        state_name?: string;
+      };
+      const value = String(city._id ?? "").trim();
+      const label = String(city.name ?? "").trim();
+      if (!value || !label) continue;
+      options.push({
+        value,
+        label,
+        ...(city.state_id
+          ? { state_id: String(city.state_id).trim() }
+          : {}),
+        ...(city.state_name
+          ? { state_name: String(city.state_name).trim() }
+          : {}),
+      });
+    }
+    return options.sort((a, b) => a.label.localeCompare(b.label));
   } else {
     showLog(response.message || "Failed to fetch city");
     return [];
