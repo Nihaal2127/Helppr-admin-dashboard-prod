@@ -4201,23 +4201,23 @@ $franchise-status-switch-knob: url("data:image/svg+xml,%3csvg xmlns='http://www.
   }
 }
 
-/* Page header — franchise filter must stack above utility/date controls below */
+/* Page header — above utility/date controls on the page, below Bootstrap modal (1050/1055) */
 .custom-page-header {
   position: relative;
-  z-index: 1100;
+  z-index: 20;
 }
 
 .custom-page-header__actions,
 .custom-page-header__toolbar {
   position: relative;
-  z-index: 1101;
+  z-index: 21;
 }
 
 .custom-page-header__franchise {
   min-width: 220px;
   max-width: 260px;
   position: relative;
-  z-index: 1102;
+  z-index: 22;
 }
 
 .custom-page-header__franchise .react-select__menu {

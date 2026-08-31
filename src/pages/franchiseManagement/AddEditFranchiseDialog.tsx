@@ -1038,7 +1038,14 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
         const [catListRaw, services, dropCats] = await Promise.all([
           loadCategories(),
           loadServices(),
-          fetchCategoryDropDown().catch(() => [] as { value: string; label: string }[]),
+          // Edit: only franchise-scoped categories. Add: merge global dropdown.
+          catalogFranchiseId
+            ? Promise.resolve(
+                [] as { value: string; label: string }[]
+              )
+            : fetchCategoryDropDown().catch(
+                () => [] as { value: string; label: string }[]
+              ),
         ]);
         if (cancelled) return;
 
