@@ -4824,7 +4824,11 @@ $franchise-status-switch-knob: url("data:image/svg+xml,%3csvg xmlns='http://www.
   min-width: 130px;
   max-width: min(360px, calc(100vw - 16px));
   max-height: min(400px, 70vh);
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  pointer-events: auto;
   text-align: left;
 }
 

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, UseFormRegister } from "react-hook-form";
-import { Modal, Button, Row, Col } from "react-bootstrap";
+import { Modal, Button, Row, Col, Spinner } from "react-bootstrap";
 import CustomCloseButton from "../../components/CustomCloseButton";
 import { FranchiseModel } from "../../lib/models/FranchiseModels";
 import { CustomFormInput } from "../../components/CustomFormInput";
@@ -11,7 +11,6 @@ import { DetailsRow, getStatusOptions } from "../../helper/utility";
 import { showErrorAlert } from "../../lib/global/alertHelper";
 import {
   createOrUpdateFranchise,
-  fetchFranchise,
   fetchFranchiseById,
 } from "../../services/franchiseService";
 import { collectFranchiseAreaIds } from "../../lib/quote/quoteHelpers";
@@ -25,11 +24,15 @@ import { fetchService } from "../../services/servicesService";
 import { fetchStateDropDown } from "../../services/stateService";
 import { fetchCityDropDown } from "../../services/cityService";
 import {
+  APP_USER_TYPE,
   fetchUser,
+  fetchUserDropDown,
   WEB_MANAGEMENT_USER_TYPE,
 } from "../../services/userService";
 import { openDialog } from "../../lib/global/DialogManager";
 import { openAddFranchiseAdminModal } from "../../components/AddFranchiseAdminModal";
+import { apiRequest } from "../../lib/global/remote/apiHelper";
+import { ApiPaths } from "../../lib/global/remote/apiPaths";
 
 type AddEditFranchiseDialogProps = {
   isEditable: boolean;
@@ -65,24 +68,105 @@ const FLAT_SERVICES_KEY = "__services_flat__";
 const isMongoObjectId = (value: string) =>
   /^[a-f\d]{24}$/i.test(String(value ?? "").trim());
 
-/** Each franchise has at most one `admin_id`; map admin user id -> franchise _id they manage. */
-async function loadFranchiseAdminOccupancy(): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
-  let page = 1;
-  const pageSize = 200;
-  for (;;) {
-    const res = await fetchFranchise(page, pageSize, {}, []);
-    if (!res.response) break;
-    for (const f of res.franchises) {
-      const aid = String(f.admin_id ?? "").trim();
-      const fid = String(f._id ?? "").trim();
-      if (aid && fid) map.set(aid, fid);
-    }
-    if (!res.totalPages || page >= res.totalPages) break;
-    page += 1;
-    if (page > 100) break;
+function sameIdList(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (String(a[i]) !== String(b[i])) return false;
   }
-  return map;
+  return true;
+}
+
+const FORM_CACHE_TTL_MS = 5 * 60 * 1000;
+const AREA_FETCH_CONCURRENCY = 4;
+
+type TimedCache<T> = { value: T; at: number };
+
+let adminOptionsCache: TimedCache<OptionType[]> | null = null;
+let adminOptionsInflight: Promise<OptionType[]> | null = null;
+let occupancyCache: TimedCache<Map<string, string>> | null = null;
+let occupancyInflight: Promise<Map<string, string>> | null = null;
+const areaDropDownCache = new Map<string, TimedCache<OptionType[]>>();
+
+function cacheFresh<T>(entry: TimedCache<T> | null | undefined): T | null {
+  if (!entry) return null;
+  if (Date.now() - entry.at > FORM_CACHE_TTL_MS) return null;
+  return entry.value;
+}
+
+function invalidateFranchiseFormCaches() {
+  adminOptionsCache = null;
+  occupancyCache = null;
+  areaDropDownCache.clear();
+}
+
+function franchiseRecordsFromGetAllPayload(data: unknown): any[] {
+  if (!data || typeof data !== "object") return [];
+  const root = data as Record<string, unknown>;
+  if (Array.isArray(root.records)) return root.records;
+  const nested = root.data;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    const inner = nested as Record<string, unknown>;
+    if (Array.isArray(inner.records)) return inner.records;
+  }
+  if (Array.isArray(nested)) return nested;
+  return [];
+}
+
+/**
+ * admin_id → franchise _id map. Uses raw getAll (no admin-contact enrichment)
+ * and a short TTL cache so Edit doesn't re-page the whole franchise list every time.
+ */
+async function loadFranchiseAdminOccupancy(
+  forceRefresh = false
+): Promise<Map<string, string>> {
+  if (!forceRefresh) {
+    const hit = cacheFresh(occupancyCache);
+    if (hit) return new Map(hit);
+    if (occupancyInflight) return occupancyInflight.then((m) => new Map(m));
+  }
+
+  occupancyInflight = (async () => {
+    const map = new Map<string, string>();
+    let page = 1;
+    const pageSize = 500;
+    for (;;) {
+      const response = await apiRequest(
+        `${ApiPaths.GET_FRANCHISE()}?${new URLSearchParams({
+          page: String(page),
+          limit: String(pageSize),
+        }).toString()}`,
+        "GET",
+        undefined,
+        false,
+        true,
+        true
+      );
+      if (!response.success) break;
+      const records = franchiseRecordsFromGetAllPayload(response.data);
+      for (const f of records) {
+        const aid = String(f?.admin_id ?? "").trim();
+        const fid = String(f?._id ?? f?.id ?? "").trim();
+        if (aid && fid) map.set(aid, fid);
+      }
+      const payload = (response.data ?? {}) as Record<string, unknown>;
+      const inner =
+        payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+          ? (payload.data as Record<string, unknown>)
+          : payload;
+      const totalPages = Number(inner.totalPages ?? payload.totalPages ?? 0) || 0;
+      if (!totalPages || page >= totalPages) break;
+      page += 1;
+      if (page > 40) break;
+    }
+    occupancyCache = { value: map, at: Date.now() };
+    return map;
+  })();
+
+  try {
+    return new Map(await occupancyInflight);
+  } finally {
+    occupancyInflight = null;
+  }
 }
 
 /** Dropdown label: prefer API `name`, then email / phone / user_id. */
@@ -110,27 +194,9 @@ function filterAdminsNotAssignedElsewhere(
   });
 }
 
-/** Paginated franchise admins for Admin dropdown (`/user/getAll` type = franchise admin). */
-async function fetchFranchiseAdminSelectOptions(): Promise<OptionType[]> {
-  const pageSize = 200;
-  let page = 1;
-  const allUsers: any[] = [];
-  for (;;) {
-    const res = await fetchUser(
-      false,
-      WEB_MANAGEMENT_USER_TYPE.FRANCHISE_ADMIN,
-      page,
-      pageSize,
-      {}
-    );
-    if (!res.response) break;
-    allUsers.push(...(res.users ?? []));
-    if (!res.totalPages || page >= res.totalPages) break;
-    page += 1;
-    if (page > 100) break;
-  }
+function mapUsersToAdminOptions(users: any[]): OptionType[] {
   const unique = new Map<string, OptionType>();
-  allUsers.forEach((u: any) => {
+  users.forEach((u: any) => {
     const value = String(u?._id ?? "").trim();
     if (!value) return;
     const label = franchiseAdminOptionLabel(u as Record<string, unknown>);
@@ -142,6 +208,102 @@ async function fetchFranchiseAdminSelectOptions(): Promise<OptionType[]> {
   return Array.from(unique.values()).sort((a, b) =>
     a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
   );
+}
+
+/**
+ * Prefer one `user/getDropDown?type=1` call; fall back to paginated getAll.
+ * Cached so View→Edit / reopen does not re-fetch.
+ */
+async function fetchFranchiseAdminSelectOptions(
+  forceRefresh = false
+): Promise<OptionType[]> {
+  if (!forceRefresh) {
+    const hit = cacheFresh(adminOptionsCache);
+    if (hit) return hit;
+    if (adminOptionsInflight) return adminOptionsInflight;
+  }
+
+  adminOptionsInflight = (async () => {
+    try {
+      const { users } = await fetchUserDropDown(APP_USER_TYPE.FRANCHISE_ADMIN);
+      const fromDrop = mapUsersToAdminOptions(users ?? []);
+      if (fromDrop.length > 0) {
+        adminOptionsCache = { value: fromDrop, at: Date.now() };
+        return fromDrop;
+      }
+    } catch {
+      /* fall through to getAll */
+    }
+
+    const pageSize = 200;
+    let page = 1;
+    const allUsers: any[] = [];
+    for (;;) {
+      const res = await fetchUser(
+        false,
+        WEB_MANAGEMENT_USER_TYPE.FRANCHISE_ADMIN,
+        page,
+        pageSize,
+        {}
+      );
+      if (!res.response) break;
+      allUsers.push(...(res.users ?? []));
+      if (!res.totalPages || page >= res.totalPages) break;
+      page += 1;
+      if (page > 100) break;
+    }
+    const options = mapUsersToAdminOptions(allUsers);
+    adminOptionsCache = { value: options, at: Date.now() };
+    return options;
+  })();
+
+  try {
+    return await adminOptionsInflight;
+  } finally {
+    adminOptionsInflight = null;
+  }
+}
+
+async function fetchAreaDropDownCached(
+  cityId: string,
+  stateId?: string
+): Promise<OptionType[]> {
+  const key = `${String(cityId).trim()}|${String(stateId ?? "").trim()}`;
+  const hit = cacheFresh(areaDropDownCache.get(key));
+  if (hit) return hit;
+
+  const rows = await fetchAreaDropDown(cityId, stateId);
+  const options = rows.map((o) => ({
+    value: String(o.value ?? "").trim(),
+    label: String(o.label ?? "").trim() || String(o.value ?? "").trim(),
+  })).filter((o) => o.value);
+
+  areaDropDownCache.set(key, { value: options, at: Date.now() });
+  return options;
+}
+
+/** Bound parallelism so multi-city franchises don't stampede the API. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const runners = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      for (;;) {
+        const index = next;
+        next += 1;
+        if (index >= items.length) return;
+        results[index] = await worker(items[index], index);
+      }
+    }
+  );
+  await Promise.all(runners);
+  return results;
 }
 
 function toStringArray(raw: unknown): string[] {
@@ -381,9 +543,20 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   const [fetchedAreaOptions, setFetchedAreaOptions] = useState<
     OptionType[] | null
   >(null);
+  /** Edit/Add form dropdown bootstrap — avoid empty selects / premature submit. */
+  const [editFormBootstrapping, setEditFormBootstrapping] = useState(
+    () => !isViewMode
+  );
 
   const selectedState = watch("state_id");
   const watchedAdminId = watch("admin_id");
+
+  /**
+   * View mode only shows fields already on the franchise row.
+   * Defer edit-form bootstrap (admins, occupancy, areas) until the user
+   * leaves view — otherwise View floods the API and can 500 under load.
+   */
+  const needsEditFormData = !localViewMode;
 
   useEffect(() => {
     const v = String(watchedAdminId ?? "").trim();
@@ -402,9 +575,10 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
 
   const reloadAdminOptions = useCallback(async () => {
     try {
+      invalidateFranchiseFormCaches();
       const [usersResult, occupancy] = await Promise.all([
-        fetchFranchiseAdminSelectOptions(),
-        loadFranchiseAdminOccupancy(),
+        fetchFranchiseAdminSelectOptions(true),
+        loadFranchiseAdminOccupancy(true),
       ]);
       const currentFranchiseId =
         isEditable && franchise?._id ? String(franchise._id).trim() : "";
@@ -439,6 +613,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       setFranchiseRecord(franchise);
       return;
     }
+    /** One GET by id — also used in view so category/service ids/names are complete. */
     void fetchFranchiseById(id).then((full) => {
       if (!cancelled) setFranchiseRecord(full ?? franchise);
     });
@@ -448,14 +623,17 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   }, [franchise?._id, isEditable, franchise]);
 
   useEffect(() => {
+    if (!needsEditFormData) return;
     let cancelled = false;
     (async () => {
       if (!cityIds.length) {
         setFetchedAreaOptions(null);
         return;
       }
-      const results = await Promise.all(
-        cityIds.map((cid) => fetchAreaDropDown(cid, selectedState))
+      const results = await mapWithConcurrency(
+        cityIds,
+        AREA_FETCH_CONCURRENCY,
+        (cid) => fetchAreaDropDownCached(cid, selectedState)
       );
       if (cancelled) return;
       const merged = new Map<string, OptionType>();
@@ -484,40 +662,76 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     return () => {
       cancelled = true;
     };
-  }, [cityIds, selectedState, setValue]);
+  }, [cityIds, selectedState, setValue, needsEditFormData]);
 
   useEffect(() => {
+    if (!needsEditFormData) {
+      setEditFormBootstrapping(false);
+      return;
+    }
     let cancelled = false;
+    setEditFormBootstrapping(true);
     void (async () => {
       try {
-        const [states, usersResult, occupancy] = await Promise.all([
+        const stateForCities = String(
+          selectedState || franchise?.state_id || ""
+        ).trim();
+        const [states, usersResult, occupancy, cityRows] = await Promise.all([
           fetchStateDropDown(),
           fetchFranchiseAdminSelectOptions(),
           loadFranchiseAdminOccupancy(),
+          stateForCities
+            ? fetchCityDropDown([stateForCities]).catch(() => [])
+            : Promise.resolve([]),
         ]);
         if (cancelled) return;
         setStateOptions(states);
+        if (stateForCities) {
+          setCityOptions(
+            cityRows.map((r) => ({ value: r.value, label: r.label }))
+          );
+        }
         const currentFranchiseId =
           isEditable && franchise?._id ? String(franchise._id).trim() : "";
-        setAdminOptions(
-          filterAdminsNotAssignedElsewhere(
-            usersResult,
-            occupancy,
-            currentFranchiseId
-          )
+        const filtered = filterAdminsNotAssignedElsewhere(
+          usersResult,
+          occupancy,
+          currentFranchiseId
         );
+        /** Keep current admin visible even if occupancy map is stale. */
+        const currentAdminId = String(franchise?.admin_id ?? "").trim();
+        if (
+          currentAdminId &&
+          !filtered.some((o) => o.value === currentAdminId)
+        ) {
+          const fromAll = usersResult.find((o) => o.value === currentAdminId);
+          filtered.push(
+            fromAll ?? {
+              value: currentAdminId,
+              label:
+                String(franchise?.admin_name ?? "").trim() || currentAdminId,
+            }
+          );
+          filtered.sort((a, b) =>
+            a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+          );
+        }
+        setAdminOptions(filtered);
       } catch {
         if (cancelled) return;
         setStateOptions(STATIC_STATE_OPTIONS);
         setAdminOptions([]);
+      } finally {
+        if (!cancelled) setEditFormBootstrapping(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [franchise?._id, isEditable]);
+  }, [franchise?._id, isEditable, needsEditFormData]);
 
   useEffect(() => {
+    if (!needsEditFormData) return;
     let cancelled = false;
     void (async () => {
       if (!selectedState?.trim()) {
@@ -537,7 +751,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     return () => {
       cancelled = true;
     };
-  }, [selectedState]);
+  }, [selectedState, needsEditFormData]);
 
   const serviceOptions = useMemo(
     () => [
@@ -557,14 +771,23 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     [serviceOptions, serviceIds]
   );
 
+  /** Prefer refreshed get-by-id record in view (list row may omit names). */
+  const viewFranchiseSource = (franchiseRecord ?? franchise) as
+    | FranchiseModel
+    | null;
+
   /** View mode: one row per category with its services in the adjacent column. */
   const viewCategoryServiceGroups = useMemo((): ViewCategoryServicesGroup[] => {
-    if (!franchise) return [];
+    if (!viewFranchiseSource) return [];
 
-    const svcIds = (franchise.service_ids ?? []).map(String);
-    const svcNames = franchise.service_names;
-    const catIdsOrder = (franchise.category_ids ?? []).map(String);
-    const catNames = franchise.category_names;
+    const src = viewFranchiseSource as FranchiseModel & {
+      categories?: unknown;
+      services?: unknown;
+    };
+    const svcIds = toStringArray(src.service_ids ?? src.services);
+    const svcNames = src.service_names;
+    const catIdsOrder = toStringArray(src.category_ids ?? src.categories);
+    const catNames = src.category_names;
 
     const serviceLabel = (sid: string, index: number): string => {
       const fromAll = allServices.find((x) => String(x._id) === sid);
@@ -695,9 +918,56 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       }));
     }
 
-    return built;
-  }, [franchise, allServices, categoryOptions]);
+    /**
+     * Catalog still loading / missing: show franchise names so view is never blank
+     * when the API already sent labels on the row.
+     */
+    if (built.length === 0) {
+      const nameCats = Array.isArray(catNames)
+        ? catNames.map((n) => String(n ?? "").trim()).filter(Boolean)
+        : [];
+      const nameSvcs = Array.isArray(svcNames)
+        ? svcNames.map((n) => String(n ?? "").trim()).filter(Boolean)
+        : [];
+      if (nameCats.length === 1) {
+        return [
+          {
+            categoryId: catIdsOrder[0] || "cat-name-0",
+            categoryLabel: nameCats[0],
+            services: nameSvcs,
+          },
+        ];
+      }
+      if (nameCats.length > 0 || nameSvcs.length > 0) {
+        const groups: ViewCategoryServicesGroup[] = nameCats.map(
+          (label, i) => ({
+            categoryId: catIdsOrder[i] || `cat-name-${i}`,
+            categoryLabel: label,
+            services: [] as string[],
+          })
+        );
+        if (nameSvcs.length > 0) {
+          if (groups.length === 1) {
+            groups[0].services = nameSvcs;
+          } else {
+            groups.push({
+              categoryId: FLAT_SERVICES_KEY,
+              categoryLabel: "Services",
+              services: nameSvcs,
+            });
+          }
+        }
+        return groups;
+      }
+    }
 
+    return built;
+  }, [viewFranchiseSource, allServices, categoryOptions]);
+
+  /**
+   * Categories/services catalog — needed in view (grouping + labels) and edit.
+   * Paginated (no limit=100000). Categories + services load in parallel.
+   */
   useEffect(() => {
     let cancelled = false;
     const catalogFranchiseId =
@@ -706,33 +976,19 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
         : undefined;
     void (async () => {
       try {
-        const catById = new Map<string, OptionType>();
-        if (catalogFranchiseId) {
-          const cres = await fetchCategory(
-            1,
-            100_000,
-            {},
-            [],
-            catalogFranchiseId
-          );
-          if (cancelled) return;
-          if (cres.response) {
-            for (const c of cres.categories) {
-              const id = String((c as { _id?: string })._id ?? "").trim();
-              if (id)
-                catById.set(id, {
-                  value: id,
-                  label:
-                    String((c as { name?: string }).name ?? "").trim() || id,
-                });
-            }
-          }
-        } else {
+        const loadCategories = async (): Promise<OptionType[]> => {
+          const catById = new Map<string, OptionType>();
           let cpage = 1;
           const climit = 200;
           for (;;) {
-            const cres = await fetchCategory(cpage, climit, {}, []);
-            if (cancelled) return;
+            const cres = await fetchCategory(
+              cpage,
+              climit,
+              {},
+              [],
+              catalogFranchiseId
+            );
+            if (cancelled) return [];
             if (!cres.response) break;
             for (const c of cres.categories) {
               const id = String((c as { _id?: string })._id ?? "").trim();
@@ -747,12 +1003,50 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
             cpage += 1;
             if (cpage > 50) break;
           }
-        }
-        const dropCats = await fetchCategoryDropDown();
+          return Array.from(catById.values());
+        };
+
+        const loadServices = async (): Promise<ServiceLite[]> => {
+          const mergedServices: unknown[] = [];
+          let spage = 1;
+          const slimit = catalogFranchiseId ? 200 : 500;
+          for (;;) {
+            const svcRes = await fetchService(
+              spage,
+              slimit,
+              {},
+              [],
+              catalogFranchiseId
+            );
+            if (cancelled) return [];
+            if (!svcRes.response || !Array.isArray(svcRes.services)) break;
+            mergedServices.push(...svcRes.services);
+            if (!svcRes.totalPages || spage >= svcRes.totalPages) break;
+            spage += 1;
+            if (spage > 50) break;
+          }
+          return mergedServices.map((s: any) => ({
+            _id: String(s._id),
+            name: String(s.name ?? ""),
+            category_id: String(s.category_id ?? ""),
+            category_name: s.category_name
+              ? String(s.category_name)
+              : undefined,
+          }));
+        };
+
+        const [catListRaw, services, dropCats] = await Promise.all([
+          loadCategories(),
+          loadServices(),
+          fetchCategoryDropDown().catch(() => [] as { value: string; label: string }[]),
+        ]);
         if (cancelled) return;
+
+        const catById = new Map<string, OptionType>();
+        for (const c of catListRaw) catById.set(c.value, c);
         for (const c of dropCats) {
           if (c.value && c.value !== "select-all" && !catById.has(c.value)) {
-            catById.set(c.value, c);
+            catById.set(c.value, { value: c.value, label: c.label });
           }
         }
         const catList = Array.from(catById.values()).sort((a, b) =>
@@ -762,43 +1056,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
           { value: "select-all", label: "Select All" },
           ...catList,
         ]);
-
-        const mergedServices: unknown[] = [];
-        if (catalogFranchiseId) {
-          const svcRes = await fetchService(
-            1,
-            100_000,
-            {},
-            [],
-            catalogFranchiseId
-          );
-          if (cancelled) return;
-          if (svcRes.response && Array.isArray(svcRes.services)) {
-            mergedServices.push(...svcRes.services);
-          }
-        } else {
-          let spage = 1;
-          const slimit = 500;
-          for (;;) {
-            const svcRes = await fetchService(spage, slimit, {});
-            if (cancelled) return;
-            if (!svcRes.response || !Array.isArray(svcRes.services)) break;
-            mergedServices.push(...svcRes.services);
-            if (!svcRes.totalPages || spage >= svcRes.totalPages) break;
-            spage += 1;
-            if (spage > 50) break;
-          }
-        }
-        setAllServices(
-          mergedServices.map((s: any) => ({
-            _id: String(s._id),
-            name: String(s.name ?? ""),
-            category_id: String(s.category_id ?? ""),
-            category_name: s.category_name
-              ? String(s.category_name)
-              : undefined,
-          }))
-        );
+        setAllServices(services);
       } catch {
         if (!cancelled) {
           setCategoryOptions([{ value: "select-all", label: "Select All" }]);
@@ -819,6 +1077,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   }, [franchise, isEditable]);
 
   useEffect(() => {
+    if (!needsEditFormData) return;
     if (isEditable && franchise) {
       const source = (franchiseRecord ?? franchise) as FranchiseModel;
       setValue("name", source.name || "");
@@ -829,20 +1088,21 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       setValue("desc2", (source as any)?.desc2 || "");
       setValue("state_id", source.state_id || "");
       const cities = normalizeFranchiseCityIds(source.city_id);
-      setCityIds(cities);
+      setCityIds((prev) => (sameIdList(prev, cities) ? prev : cities));
       setValue("city_id", cities);
       setValue("admin_id", source.admin_id || "");
       setValue("is_active", source.is_active ?? true);
     }
-  }, [isEditable, franchise, franchiseRecord, setValue]);
+  }, [isEditable, franchise, franchiseRecord, setValue, needsEditFormData]);
 
   useEffect(() => {
+    if (!needsEditFormData) return;
     if (!isEditable || !franchise) return;
     const source = (franchiseRecord ?? franchise) as unknown as Record<string, unknown>;
     const opts = fetchedAreaOptions ?? [];
     const resolved = resolveFranchiseAreaIds(source, opts);
     if (resolved.length > 0) {
-      setAreaIds(resolved);
+      setAreaIds((prev) => (sameIdList(prev, resolved) ? prev : resolved));
       setValue("area_id", resolved, { shouldValidate: false });
       return;
     }
@@ -850,7 +1110,9 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       isMongoObjectId
     );
     if (pendingMongoIds.length > 0 && opts.length === 0) {
-      setAreaIds(pendingMongoIds);
+      setAreaIds((prev) =>
+        sameIdList(prev, pendingMongoIds) ? prev : pendingMongoIds
+      );
       setValue("area_id", pendingMongoIds, { shouldValidate: false });
     }
   }, [
@@ -859,9 +1121,11 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     franchiseRecord,
     fetchedAreaOptions,
     setValue,
+    needsEditFormData,
   ]);
 
   useEffect(() => {
+    if (!needsEditFormData) return;
     if (isEditable && franchise) {
       const source = (franchiseRecord ?? franchise) as unknown as Record<string, unknown>;
       const rawCategoryIds = toStringArray(
@@ -912,8 +1176,12 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       const dedupCategoryIds = Array.from(new Set(categoryIdsFromNames));
       const dedupServiceIds = Array.from(new Set(serviceIdsFromNames));
 
-      setCategoryIds(dedupCategoryIds);
-      setServiceIds(dedupServiceIds);
+      setCategoryIds((prev) =>
+        sameIdList(prev, dedupCategoryIds) ? prev : dedupCategoryIds
+      );
+      setServiceIds((prev) =>
+        sameIdList(prev, dedupServiceIds) ? prev : dedupServiceIds
+      );
     }
   }, [
     isEditable,
@@ -921,6 +1189,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     franchiseRecord,
     categoryOptions,
     allServices,
+    needsEditFormData,
   ]);
 
   const handleCitySelection = (selectedOptions: OptionType[]) => {
@@ -1102,29 +1371,38 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       </Modal.Header>
 
       <Modal.Body className="px-4 pb-4 pt-0">
-        {localViewMode && franchise ? (
+        {localViewMode && viewFranchiseSource ? (
           <section className="custom-other-details" style={{ padding: "10px" }}>
             <div className="d-flex justify-content-between align-items-center mb-2">
               <h3 className="mb-0">Franchise Information</h3>
               <i
                 className="bi bi-pencil-fill fs-6 text-danger"
                 style={{ cursor: "pointer" }}
-                onClick={() => setLocalViewMode(false)}
+                onClick={() => {
+                  setEditFormBootstrapping(true);
+                  setLocalViewMode(false);
+                }}
               ></i>
             </div>
 
             <div className="row">
               <div className="col-md-6 custom-helper-column">
-                <DetailsRow title="Franchise Name" value={franchise.name} />
+                <DetailsRow
+                  title="Franchise Name"
+                  value={viewFranchiseSource.name}
+                />
                 <DetailsRow
                   title="State"
-                  value={franchise.state_name ?? franchise.state_id}
+                  value={
+                    viewFranchiseSource.state_name ??
+                    viewFranchiseSource.state_id
+                  }
                 />
                 <DetailsRow
                   title="City"
                   value={formatFranchiseCityDisplay(
-                    franchise.city_name,
-                    franchise.city_id
+                    viewFranchiseSource.city_name,
+                    viewFranchiseSource.city_id
                   )}
                 />
               </div>
@@ -1135,7 +1413,9 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                     Admin
                   </label>
                   <label className="col-md-9 custom-personal-row-value">
-                    {franchise.admin_name ?? franchise.admin_id ?? "-"}
+                    {viewFranchiseSource.admin_name ??
+                      viewFranchiseSource.admin_id ??
+                      "-"}
                   </label>
                 </div>
                 <div className="row custom-personal-row">
@@ -1143,10 +1423,10 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                     Area
                   </label>
                   <label className="col-md-9 custom-personal-row-value text-wrap">
-                    {Array.isArray((franchise as any).area_name)
-                      ? (franchise as any).area_name.join(", ")
-                      : (franchise as any).area_name ??
-                        franchise.area_id ??
+                    {Array.isArray((viewFranchiseSource as any).area_name)
+                      ? (viewFranchiseSource as any).area_name.join(", ")
+                      : (viewFranchiseSource as any).area_name ??
+                        viewFranchiseSource.area_id ??
                         "-"}
                   </label>
                 </div>
@@ -1155,7 +1435,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                     Status
                   </label>
                   <label className="col-md-9 custom-personal-row-value">
-                    {franchise.is_active ? "Active" : "Inactive"}
+                    {viewFranchiseSource.is_active ? "Active" : "Inactive"}
                   </label>
                 </div>
               </div>
@@ -1257,12 +1537,21 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                   color: "var(--txt-color)",
                 }}
               >
-                {(franchise as any).description ??
-                  (franchise as any).desc ??
+                {(viewFranchiseSource as any).description ??
+                  (viewFranchiseSource as any).desc ??
                   "-"}
               </div>
             </div>
           </section>
+        ) : editFormBootstrapping ? (
+          <div
+            className="d-flex flex-column align-items-center justify-content-center py-5"
+            role="status"
+            aria-live="polite"
+          >
+            <Spinner animation="border" variant="danger" />
+            <div className="mt-3 text-muted small">Loading franchise form…</div>
+          </div>
         ) : (
           <form
             noValidate
@@ -1457,7 +1746,12 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
 
       {!localViewMode && (
         <Modal.Footer>
-          <Button className="btn-danger" type="submit" form="franchise-form">
+          <Button
+            className="btn-danger"
+            type="submit"
+            form="franchise-form"
+            disabled={editFormBootstrapping}
+          >
             {isEditable ? "Update" : "Add"}
           </Button>
           <Button variant="secondary" onClick={onClose}>

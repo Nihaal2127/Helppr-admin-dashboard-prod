@@ -18,6 +18,7 @@ export function PinCodeHoverPortal({
   listStyle = "ul",
 }: PinCodeHoverPortalProps) {
   const triggerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState({
     top: 0,
@@ -73,7 +74,20 @@ export function PinCodeHoverPortal({
 
   useEffect(() => {
     if (!open) return;
-    const onScrollOrResize = () => setOpen(false);
+    const onScrollOrResize = (event: Event) => {
+      // Capture-phase scroll fires for the tooltip itself — allow in-panel scrolling.
+      const panel = panelRef.current;
+      const target = event.target;
+      if (
+        event.type === "scroll" &&
+        panel &&
+        target instanceof Node &&
+        (target === panel || panel.contains(target))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
     window.addEventListener("scroll", onScrollOrResize, true);
     window.addEventListener("resize", onScrollOrResize);
     return () => {
@@ -86,6 +100,7 @@ export function PinCodeHoverPortal({
     open && typeof document !== "undefined"
       ? createPortal(
           <div
+            ref={panelRef}
             role="tooltip"
             className="pin-code-hover-portal-card"
             style={{
@@ -98,6 +113,10 @@ export function PinCodeHoverPortal({
             }}
             onMouseEnter={onEnterPanel}
             onMouseLeave={onLeavePanel}
+            onWheel={(e) => {
+              // Keep wheel scrolling on the panel; don't let the page steal it.
+              e.stopPropagation();
+            }}
           >
             {listStyle === "ul" ? (
               <ul className="mb-0 ps-3" style={{ margin: 0 }}>
