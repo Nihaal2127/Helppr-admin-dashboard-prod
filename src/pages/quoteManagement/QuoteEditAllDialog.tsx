@@ -34,6 +34,7 @@ import {
   mapRelatedCatalogToQuoteOptions,
   mergeQuoteServiceFeesForBreakdown,
   normalizeQuoteApiStatus,
+  resolveEditQuoteServiceId,
   resolveFranchiseIdForQuoteForm,
   updateQuote,
 } from "../../services/quoteService";
@@ -119,6 +120,8 @@ function collectMissingQuoteEditRequiredFields(
     requirePartner?: boolean;
     /** When false, service price is optional (New-tab Update; required on Send Quote). */
     requireServicePrice?: boolean;
+    /** Pending/accepted edits: validate schedule when partner + category are set. */
+    requireScheduleWhenPartnerCategory?: boolean;
   }
 ): MissingRequiredField[] {
   const missing: MissingRequiredField[] = [];
@@ -145,7 +148,12 @@ function collectMissingQuoteEditRequiredFields(
   const hasServiceSelected = Boolean(
     String(data.requested_services ?? "").trim()
   );
-  if (hasServiceSelected) {
+  const scheduleEligible =
+    hasServiceSelected ||
+    (opts.requireScheduleWhenPartnerCategory &&
+      String(data.requested_partner ?? "").trim() &&
+      String(data.category_id ?? "").trim());
+  if (scheduleEligible) {
     if (!String(data.requested_date ?? "").trim()) {
       missing.push({ field: "requested_date", label: "Start date" });
     }
@@ -280,9 +288,42 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     () => normalizeQuoteApiStatus(quoteRow?.status) === "new",
     [quoteRow?.status]
   );
-  const serviceId = String(form.requested_services ?? "").trim();
-  const hasServiceSelected = Boolean(serviceId);
+  /** Pending / accepted: catalog fields are read-only — keep row ids in dropdown options. */
+  const isCatalogLockedQuoteEdit = useMemo(() => {
+    const key = normalizeQuoteApiStatus(quoteRow?.status);
+    return key === "pending" || key === "accepted";
+  }, [quoteRow?.status]);
+
+  const resolvedQuoteServiceId = useMemo(
+    () =>
+      resolveEditQuoteServiceId(
+        quoteRow,
+        apiServiceFees,
+        quoteCatalogServices
+      ),
+    [quoteRow, apiServiceFees, quoteCatalogServices]
+  );
+
   const partnerSelected = Boolean(String(form.requested_partner ?? "").trim());
+  const serviceId = String(
+    form.requested_services ?? resolvedQuoteServiceId ?? ""
+  ).trim();
+  const hasServiceSelected = Boolean(serviceId);
+  /** Pending/accepted: show schedule once partner + category are set (even if service id was not persisted on send). */
+  const showQuoteScheduleSection = useMemo(() => {
+    if (hasServiceSelected) return true;
+    if (!isCatalogLockedQuoteEdit) return false;
+    return (
+      partnerSelected &&
+      Boolean(String(form.category_id ?? quoteRow?.category_id ?? "").trim())
+    );
+  }, [
+    hasServiceSelected,
+    isCatalogLockedQuoteEdit,
+    partnerSelected,
+    form.category_id,
+    quoteRow?.category_id,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -393,13 +434,50 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     skipAutoPriceRef.current = true;
     userEditedServicePriceRef.current = false;
     skipScheduleRevalidateRef.current = true;
-    reset(seedEditQuoteFormFromRow(quoteRow));
+    const seeded = seedEditQuoteFormFromRow(quoteRow);
+    const sid = resolveEditQuoteServiceId(
+      quoteRow,
+      apiServiceFees,
+      quoteCatalogServices
+    );
+    reset({
+      ...seeded,
+      requested_services: sid || seeded.requested_services,
+    });
     const t = window.setTimeout(() => {
       skipAutoPriceRef.current = false;
       skipScheduleRevalidateRef.current = false;
     }, 0);
     return () => window.clearTimeout(t);
-  }, [quoteRow, catalogBusy, franchisePinsLoadDone, reset]);
+  }, [
+    quoteRow,
+    catalogBusy,
+    franchisePinsLoadDone,
+    apiServiceFees,
+    quoteCatalogServices,
+    reset,
+  ]);
+
+  /** Keep service id on locked edits when the select cannot resolve catalog options. */
+  useEffect(() => {
+    if (!quoteRow || isNewTabQuoteEdit) return;
+    const sid = resolveEditQuoteServiceId(
+      quoteRow,
+      apiServiceFees,
+      quoteCatalogServices
+    );
+    if (!sid) return;
+    if (!String(form.requested_services ?? "").trim()) {
+      setValue("requested_services", sid, { shouldValidate: false });
+    }
+  }, [
+    quoteRow,
+    isNewTabQuoteEdit,
+    apiServiceFees,
+    quoteCatalogServices,
+    form.requested_services,
+    setValue,
+  ]);
 
   const clearScheduleAndPriceFields = useCallback(() => {
     userEditedServicePriceRef.current = false;
@@ -479,14 +557,17 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   );
 
   const editCategoryOptions = useMemo(() => {
-    if (!isNewTabQuoteEdit) return quoteCategoryOptionsForPartner;
-    return buildQuotePrefilledCategoryOptions(
-      quoteCategoryOptions,
-      String(form.category_id ?? quoteRow?.category_id ?? ""),
-      quoteRow?.category_name
-    );
+    if (isNewTabQuoteEdit || isCatalogLockedQuoteEdit) {
+      return buildQuotePrefilledCategoryOptions(
+        quoteCategoryOptions,
+        String(form.category_id ?? quoteRow?.category_id ?? ""),
+        quoteRow?.category_name
+      );
+    }
+    return quoteCategoryOptionsForPartner;
   }, [
     isNewTabQuoteEdit,
+    isCatalogLockedQuoteEdit,
     quoteCategoryOptionsForPartner,
     quoteCategoryOptions,
     form.category_id,
@@ -521,19 +602,25 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   ]);
 
   const editServiceOptions = useMemo(() => {
-    if (!isNewTabQuoteEdit) return quoteServiceOptionsForCategory;
-    return buildQuotePrefilledServiceOptions(
-      quoteCatalogServices,
-      String(form.requested_services ?? quoteRow?.service_id ?? ""),
-      quoteRow?.service_name ?? quoteRow?.requested_services,
-      String(form.category_id ?? quoteRow?.category_id ?? ""),
-      [quoteRow?.services, apiServiceFees?.label]
-    );
+    if (isNewTabQuoteEdit || isCatalogLockedQuoteEdit) {
+      return buildQuotePrefilledServiceOptions(
+        quoteCatalogServices,
+        String(
+          form.requested_services ?? resolvedQuoteServiceId ?? quoteRow?.service_id ?? ""
+        ),
+        quoteRow?.service_name ?? quoteRow?.requested_services,
+        String(form.category_id ?? quoteRow?.category_id ?? ""),
+        [quoteRow?.services, apiServiceFees?.label]
+      );
+    }
+    return quoteServiceOptionsForCategory;
   }, [
     isNewTabQuoteEdit,
+    isCatalogLockedQuoteEdit,
     quoteServiceOptionsForCategory,
     quoteCatalogServices,
     form.requested_services,
+    resolvedQuoteServiceId,
     form.category_id,
     quoteRow?.service_id,
     quoteRow?.service_name,
@@ -565,23 +652,28 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   ]);
 
   const editScheduleMode = useMemo(() => {
-    if (!isNewTabQuoteEdit) return scheduleMode;
-    const sid = String(form.requested_services ?? "").trim();
-    const opt = editServiceOptions.find((o) => o.value === sid);
+    if (!isNewTabQuoteEdit && !isCatalogLockedQuoteEdit) return scheduleMode;
+    const opt =
+      editServiceOptions.find((o) => o.value === serviceId) ?? apiServiceFees;
     return getQuoteScheduleModeForPartnerService(
       opt,
       selectedPartnerCatalogRecord,
-      sid
+      serviceId
     );
   }, [
     isNewTabQuoteEdit,
+    isCatalogLockedQuoteEdit,
     scheduleMode,
-    form.requested_services,
+    serviceId,
     editServiceOptions,
+    apiServiceFees,
     selectedPartnerCatalogRecord,
   ]);
 
-  const activeScheduleMode = isNewTabQuoteEdit ? editScheduleMode : scheduleMode;
+  const activeScheduleMode =
+    isNewTabQuoteEdit || isCatalogLockedQuoteEdit
+      ? editScheduleMode
+      : scheduleMode;
 
   const selectedServiceOption = useMemo(() => {
     if (!serviceId) return undefined;
@@ -614,18 +706,18 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   );
 
   const editBillingHint = useMemo(() => {
-    if (!hasServiceSelected) return "";
+    if (!showQuoteScheduleSection) return "";
     const raw = String(feeOptionForPreview?.payment_type ?? "").trim();
     if (!raw) return "";
     return quoteScheduleBillingHintText(raw);
-  }, [hasServiceSelected, feeOptionForPreview?.payment_type]);
+  }, [showQuoteScheduleSection, feeOptionForPreview?.payment_type]);
 
   const editScheduleDurationLabel = quoteScheduleDurationFieldLabel(
     editScheduleDurationUnit
   );
 
   const isScheduleComplete = useMemo(() => {
-    if (!hasServiceSelected) return false;
+    if (!showQuoteScheduleSection) return false;
     const dur = Number.parseInt(String(form.schedule_duration ?? "").trim(), 10);
     const d = String(form.requested_date ?? "").trim();
     const tFrom = String(form.requested_time_from ?? "").trim();
@@ -635,7 +727,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       Number.isFinite(dur) && dur >= 1 && d && tFrom && dTo && tTo
     );
   }, [
-    hasServiceSelected,
+    showQuoteScheduleSection,
     form.schedule_duration,
     form.requested_date,
     form.requested_date_to,
@@ -712,7 +804,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   ]);
 
   useEffect(() => {
-    if (!hasServiceSelected) return;
+    if (!showQuoteScheduleSection) return;
     const existing = String(form.schedule_duration ?? "").trim();
     const d = String(form.requested_date ?? "").trim();
     const dTo = String(form.requested_date_to ?? "").trim();
@@ -728,7 +820,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     });
     setValue("schedule_duration", String(dur), { shouldValidate: false });
   }, [
-    hasServiceSelected,
+    showQuoteScheduleSection,
     form.schedule_duration,
     form.requested_date,
     form.requested_date_to,
@@ -739,7 +831,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   ]);
 
   useEffect(() => {
-    if (!hasServiceSelected) return;
+    if (!showQuoteScheduleSection) return;
     const dur = Number.parseInt(String(form.schedule_duration ?? "").trim(), 10);
     const d = String(form.requested_date ?? "").trim();
     const tFrom = String(form.requested_time_from ?? "").trim();
@@ -778,7 +870,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       });
     }
   }, [
-    hasServiceSelected,
+    showQuoteScheduleSection,
     editScheduleDurationUnit,
     form.schedule_duration,
     form.requested_date,
@@ -900,7 +992,15 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       return;
     }
 
-    const nextStatus = normalizeQuoteApiStatus(data.quote_status);
+    const formData: EditQuoteFormValues = {
+      ...data,
+      requested_services:
+        String(data.requested_services ?? "").trim() ||
+        resolvedQuoteServiceId ||
+        data.requested_services,
+    };
+
+    const nextStatus = normalizeQuoteApiStatus(formData.quote_status);
     const prev = initialStatusKeyRef.current;
     const isConvertToOrder =
       !isNewTabQuoteEdit &&
@@ -935,13 +1035,13 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
         ? String(
             quoteRow?.total_service_charge ??
               quoteRow?.service_price ??
-              data.service_price ??
+              formData.service_price ??
               ""
           ).trim()
-        : String(data.service_price).trim();
+        : String(formData.service_price).trim();
     const price = Number.parseFloat(priceSource);
 
-    if (String(data.user_id ?? "").trim() && !addressUi.ready) {
+    if (String(formData.user_id ?? "").trim() && !addressUi.ready) {
       showErrorAlert(
         "Still loading address options for this franchise. Please wait a moment."
       );
@@ -953,7 +1053,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     }
 
     const missingRequired = collectMissingQuoteEditRequiredFields(
-      data,
+      formData,
       activeScheduleMode,
       {
         addressUiReady: addressUi.ready,
@@ -961,6 +1061,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
         selectedAddressId,
         requirePartner: !isNewTabQuoteEdit,
         requireServicePrice: !isNewTabQuoteEdit,
+        requireScheduleWhenPartnerCategory: isCatalogLockedQuoteEdit,
       }
     );
     if (missingRequired.length > 0) {
@@ -973,8 +1074,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
     if (activeScheduleMode === "range") {
       const cmp = compareIsoDateOnlyAsc(
-        String(data.requested_date ?? "").trim(),
-        String(data.requested_date_to ?? "").trim()
+        String(formData.requested_date ?? "").trim(),
+        String(formData.requested_date_to ?? "").trim()
       );
       if (cmp != null && cmp > 0) {
         showErrorAlert("End date must be on or after the start date.");
@@ -984,18 +1085,18 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
     const metrics = deriveQuoteScheduleMetrics({
       scheduleMode: activeScheduleMode,
-      requested_date: data.requested_date,
-      requested_date_to: data.requested_date_to,
-      requested_time: data.requested_time,
-      requested_time_from: data.requested_time_from,
-      requested_time_to: data.requested_time_to,
+      requested_date: formData.requested_date,
+      requested_date_to: formData.requested_date_to,
+      requested_time: formData.requested_time,
+      requested_time_from: formData.requested_time_from,
+      requested_time_to: formData.requested_time_to,
     });
     if (!metrics) {
       showErrorAlert("Invalid schedule.");
       return;
     }
 
-    const priceRaw = String(data.service_price ?? "").trim();
+    const priceRaw = String(formData.service_price ?? "").trim();
     if (priceRaw && (Number.isNaN(price) || price < 0)) {
       showErrorAlert("Please enter a valid service price.");
       return;
@@ -1005,9 +1106,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     // Partner and status still go through Update & Send.
     const patch: Record<string, unknown> = isNewTabQuoteEdit
       ? {
-          category_id: String(data.category_id ?? "").trim(),
-          service_id: String(data.requested_services ?? "").trim(),
-          employee_id: String(data.employee_id ?? "").trim() || undefined,
+          category_id: String(formData.category_id ?? "").trim(),
+          service_id: String(formData.requested_services ?? "").trim(),
+          employee_id: String(formData.employee_id ?? "").trim() || undefined,
           address_id: selectedAddressId.trim(),
           ...(priceRaw && Number.isFinite(price) && price >= 0
             ? { service_price: price }
@@ -1019,15 +1120,15 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
           work_hours_per_day: metrics.work_hours_per_day,
           total_work_hours: metrics.total_work_hours,
           quote_description:
-            String(data.user_description ?? "").trim() || undefined,
+            String(formData.user_description ?? "").trim() || undefined,
           admin_description:
-            String(data.admin_description ?? "").trim() || undefined,
+            String(formData.admin_description ?? "").trim() || undefined,
         }
       : {
-          category_id: String(data.category_id ?? "").trim(),
-          service_id: String(data.requested_services ?? "").trim(),
-          partner_id: String(data.requested_partner ?? "").trim() || undefined,
-          employee_id: String(data.employee_id ?? "").trim() || undefined,
+          category_id: String(formData.category_id ?? "").trim(),
+          service_id: String(formData.requested_services ?? "").trim(),
+          partner_id: String(formData.requested_partner ?? "").trim() || undefined,
+          employee_id: String(formData.employee_id ?? "").trim() || undefined,
           address_id: selectedAddressId.trim(),
           service_price: price,
           from_date: metrics.from_date,
@@ -1037,9 +1138,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
           work_hours_per_day: metrics.work_hours_per_day,
           total_work_hours: metrics.total_work_hours,
           quote_description:
-            String(data.user_description ?? "").trim() || undefined,
+            String(formData.user_description ?? "").trim() || undefined,
           admin_description:
-            String(data.admin_description ?? "").trim() || undefined,
+            String(formData.admin_description ?? "").trim() || undefined,
         };
 
     let ok = await updateQuote(id, patch);
@@ -1076,39 +1177,112 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     onClose();
   };
 
-  const handleSendQuote = async () => {
-    const id = String(quoteMongoId ?? "").trim();
-    if (!id) {
-      showErrorAlert("Missing quote id.");
-      return;
-    }
-    const partnerId = String(getValues("requested_partner") ?? "").trim();
-    if (!partnerId) {
-      showErrorAlert("Please select a partner.");
-      return;
-    }
+  const handleSendQuote = () => {
+    void handleSubmit(async (data) => {
+      const id = String(quoteMongoId ?? "").trim();
+      if (!id) {
+        showErrorAlert("Missing quote id.");
+        return;
+      }
 
-    const priceRaw = String(getValues("service_price") ?? "").trim();
-    const price = Number.parseFloat(priceRaw);
-    if (!priceRaw || Number.isNaN(price) || price < 0) {
-      showErrorAlert("Please enter a valid service price.");
-      return;
-    }
+      const formData: EditQuoteFormValues = {
+        ...data,
+        requested_services:
+          String(data.requested_services ?? "").trim() ||
+          resolvedQuoteServiceId ||
+          data.requested_services,
+      };
 
-    // Send Quote: partner + service price + move to pending (single PUT).
-    const ok = await updateQuote(id, {
-      partner_id: partnerId,
-      service_price: price,
-      status: "pending",
-    });
-    if (!ok) {
-      showErrorAlert("Could not send quote.");
-      return;
-    }
+      if (String(formData.user_id ?? "").trim() && !addressUi.ready) {
+        showErrorAlert(
+          "Still loading address options for this franchise. Please wait a moment."
+        );
+        return;
+      }
+      if (addressUi.error) {
+        showErrorAlert(addressUi.error);
+        return;
+      }
 
-    showSuccessAlert("Quote sent.");
-    onSaved?.();
-    onClose();
+      const missingRequired = collectMissingQuoteEditRequiredFields(
+        formData,
+        activeScheduleMode,
+        {
+          addressUiReady: addressUi.ready,
+          addressRowsCount: addressUi.rows.length,
+          selectedAddressId,
+          requirePartner: true,
+          requireServicePrice: true,
+        }
+      );
+      if (missingRequired.length > 0) {
+        applyMissingRequiredFieldErrors(missingRequired, (field, error) => {
+          setError(field as never, error);
+        });
+        showErrorAlert(formatMissingRequiredFieldsAlert(missingRequired));
+        return;
+      }
+
+      if (activeScheduleMode === "range") {
+        const cmp = compareIsoDateOnlyAsc(
+          String(formData.requested_date ?? "").trim(),
+          String(formData.requested_date_to ?? "").trim()
+        );
+        if (cmp != null && cmp > 0) {
+          showErrorAlert("End date must be on or after the start date.");
+          return;
+        }
+      }
+
+      const metrics = deriveQuoteScheduleMetrics({
+        scheduleMode: activeScheduleMode,
+        requested_date: formData.requested_date,
+        requested_date_to: formData.requested_date_to,
+        requested_time: formData.requested_time,
+        requested_time_from: formData.requested_time_from,
+        requested_time_to: formData.requested_time_to,
+      });
+      if (!metrics) {
+        showErrorAlert("Invalid schedule.");
+        return;
+      }
+
+      const priceRaw = String(formData.service_price ?? "").trim();
+      const price = Number.parseFloat(priceRaw);
+      if (!priceRaw || Number.isNaN(price) || price < 0) {
+        showErrorAlert("Please enter a valid service price.");
+        return;
+      }
+
+      const partnerId = String(formData.requested_partner ?? "").trim();
+      const ok = await updateQuote(id, {
+        category_id: String(formData.category_id ?? "").trim(),
+        service_id: String(formData.requested_services ?? "").trim(),
+        partner_id: partnerId,
+        employee_id: String(formData.employee_id ?? "").trim() || undefined,
+        address_id: selectedAddressId.trim(),
+        service_price: price,
+        from_date: metrics.from_date,
+        to_date: metrics.to_date,
+        work_start_time: metrics.work_start_time,
+        work_end_time: metrics.work_end_time,
+        work_hours_per_day: metrics.work_hours_per_day,
+        total_work_hours: metrics.total_work_hours,
+        quote_description:
+          String(formData.user_description ?? "").trim() || undefined,
+        admin_description:
+          String(formData.admin_description ?? "").trim() || undefined,
+        status: "pending",
+      });
+      if (!ok) {
+        showErrorAlert("Could not send quote.");
+        return;
+      }
+
+      showSuccessAlert("Quote sent.");
+      onSaved?.();
+      onClose();
+    })();
   };
 
   const renderAddressCards = (rows: QuoteAddressRowUi[]) =>
@@ -1474,7 +1648,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                             ? "Please select a service"
                             : undefined
                         }
-                        defaultValue={form.requested_services}
+                        defaultValue={serviceId || form.requested_services}
                         setValue={(name, value) => {
                           if (name === "requested_services") {
                             const prev = getValues("requested_services");
@@ -1612,7 +1786,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                           ? "Please select a service"
                           : undefined
                       }
-                      defaultValue={form.requested_services}
+                      defaultValue={serviceId || form.requested_services}
                       setValue={(name, value) => {
                         if (name === "requested_services") {
                           const prev = getValues("requested_services");
@@ -1651,7 +1825,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                 </Row>
               )}
 
-              {hasServiceSelected ? (
+              {showQuoteScheduleSection ? (
                 <>
                   {editBillingHint ? (
                     <p className="small text-muted mb-0 mt-2">{editBillingHint}</p>
@@ -1776,7 +1950,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                 </>
               ) : null}
 
-              {hasServiceSelected ? (
+              {showQuoteScheduleSection ? (
                 <div className="add-quote-price-section mt-4 pt-3 border-top">
                   <h6 className="add-quote-price-section-heading mb-3">
                     Service price
@@ -1944,7 +2118,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                 </Col>
               </Row>
 
-              {editPriceBreakdown && hasServiceSelected ? (
+              {editPriceBreakdown && showQuoteScheduleSection ? (
                 <div className="add-quote-breakdown-end mt-3">
                   <QuotePriceBreakdownPanel breakdown={editPriceBreakdown} />
                 </div>

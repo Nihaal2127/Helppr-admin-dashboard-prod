@@ -1185,13 +1185,34 @@ export function buildQuotePrefilledServiceOptions(
   extraNameCandidates: unknown[] = []
 ): ServiceDropDownOption[] {
   const sid = str(serviceId);
-  if (!sid) return [];
   const nameCandidates = [serviceName, ...extraNameCandidates];
+  const labelFromName = pickHumanQuoteServiceLabel(nameCandidates, sid);
+  const cid = normalizeServiceCategoryRef(categoryId);
+
+  if (!sid) {
+    if (!labelFromName) return [];
+    const lower = labelFromName.toLowerCase();
+    const byName = quoteCatalogServices.filter((o) => {
+      if (String(o.label ?? "").trim().toLowerCase() !== lower) return false;
+      if (!cid) return true;
+      return String(o.category_id ?? "") === cid;
+    });
+    if (byName.length >= 1) {
+      return [
+        enrichQuoteServiceOptionLabel(
+          byName[0],
+          String(byName[0].value),
+          nameCandidates
+        ),
+      ];
+    }
+    return [];
+  }
+
   const match = quoteCatalogServices.find((o) => String(o.value) === sid);
   if (match) {
     return [enrichQuoteServiceOptionLabel(match, sid, nameCandidates)];
   }
-  const cid = normalizeServiceCategoryRef(categoryId);
   const label =
     pickHumanQuoteServiceLabel(nameCandidates, sid) || sid;
   return [
@@ -1201,6 +1222,43 @@ export function buildQuotePrefilledServiceOptions(
       category_id: cid || undefined,
     },
   ];
+}
+
+/** Resolve catalogue / partner-providing service id for quote edit forms. */
+export function resolveEditQuoteServiceId(
+  row: QuoteRow | null | undefined,
+  fees: ServiceDropDownOption | undefined,
+  catalogServices: ServiceDropDownOption[] = []
+): string {
+  const fromRow = String(row?.service_id ?? "").trim();
+  if (fromRow) return fromRow;
+  const fromFees = String(fees?.value ?? "").trim();
+  if (fromFees) return fromFees;
+
+  const name = pickHumanQuoteServiceLabel(
+    [row?.service_name, row?.requested_services, row?.services],
+    ""
+  );
+  if (!name) return "";
+
+  const cid = String(row?.category_id ?? "").trim();
+  const lower = name.toLowerCase();
+  const withCategory = catalogServices.filter((o) => {
+    const label = String(o.label ?? "").trim().toLowerCase();
+    if (label !== lower) return false;
+    if (!cid) return true;
+    return String(o.category_id ?? "") === cid;
+  });
+  if (withCategory.length === 1) {
+    return String(withCategory[0].value ?? "").trim();
+  }
+  if (withCategory.length > 1) {
+    return String(withCategory[0].value ?? "").trim();
+  }
+  const anyMatch = catalogServices.find(
+    (o) => String(o.label ?? "").trim().toLowerCase() === lower
+  );
+  return anyMatch ? String(anyMatch.value ?? "").trim() : "";
 }
 
 function applyQuoteServiceNameFromFees(
@@ -2480,7 +2538,8 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
     state: state || undefined,
     address_line: address_line || undefined,
     pincode: pincode || undefined,
-    service_id: catalogServiceId || undefined,
+    service_id:
+      catalogServiceId || refId(servicePackageRef) || undefined,
     partner_id: refId(r.partner_id) || refId(partnerRef) || undefined,
     partner_user_id:
       str(r.partner_user_id ?? partnerRef?.user_id) || undefined,

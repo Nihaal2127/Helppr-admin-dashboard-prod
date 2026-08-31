@@ -119,7 +119,16 @@ const CustomFormSelect: React.FC<CustomFormSelectProps> = ({
         isValue
           ? option.label === resolvedDefault
           : String(option.value) === resolvedDefault
-      ) || null;
+      ) ||
+      (isDisabled && resolvedDefault
+        ? {
+            value: resolvedDefault,
+            label:
+              normalizedOptions.find(
+                (option) => String(option.value) === resolvedDefault
+              )?.label ?? resolvedDefault,
+          }
+        : null);
     setSelectedOption(defaultOption);
     const sync = setValueRef.current;
     if (sync && defaultOption) {
@@ -131,10 +140,12 @@ const CustomFormSelect: React.FC<CustomFormSelectProps> = ({
       } else {
         sync(fieldName, defaultOption.value, { shouldValidate: false });
       }
+    } else if (sync && isDisabled && resolvedDefault) {
+      sync(fieldName, resolvedDefault, { shouldValidate: false });
     }
     // Intentionally omit `options` / `setValue` — keyed by content and ref above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultValue, optionsSyncKey, fieldName, isValue]);
+  }, [defaultValue, optionsSyncKey, fieldName, isValue, isDisabled]);
 
   const handleChange = (option: { value: string; label: string } | null) => {
     let next = option;
@@ -336,6 +347,7 @@ const CustomFormSelect: React.FC<CustomFormSelectProps> = ({
         placeholder={placeholder ?? DEFAULT_SELECT_LABEL}
         onMenuOpen={onMenuOpen}
         onBlur={() => {
+          if (isDisabled) return;
           if (!selectedOption && setValue) {
             const fallback =
               clearResetsTo !== undefined ? String(clearResetsTo) : "";
