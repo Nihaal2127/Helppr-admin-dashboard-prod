@@ -29,6 +29,7 @@ import {
   getPartnerActiveServiceProvidingRow,
   getQuoteScheduleModeForPartnerService,
   getQuoteScheduleDurationUnit,
+  isQuotePerConsultancyPaymentType,
   quoteScheduleBillingHintText,
   quoteScheduleDurationFieldLabel,
   mapRelatedCatalogToQuoteOptions,
@@ -122,6 +123,8 @@ function collectMissingQuoteEditRequiredFields(
     requireServicePrice?: boolean;
     /** Pending/accepted edits: validate schedule when partner + category are set. */
     requireScheduleWhenPartnerCategory?: boolean;
+    /** Per consultancy: start date/time only — no duration field. */
+    skipScheduleDuration?: boolean;
   }
 ): MissingRequiredField[] {
   const missing: MissingRequiredField[] = [];
@@ -157,9 +160,11 @@ function collectMissingQuoteEditRequiredFields(
     if (!String(data.requested_date ?? "").trim()) {
       missing.push({ field: "requested_date", label: "Start date" });
     }
-    const dur = Number.parseInt(String(data.schedule_duration ?? "").trim(), 10);
-    if (!Number.isFinite(dur) || dur < 1) {
-      missing.push({ field: "schedule_duration", label: "Duration" });
+    if (!opts.skipScheduleDuration) {
+      const dur = Number.parseInt(String(data.schedule_duration ?? "").trim(), 10);
+      if (!Number.isFinite(dur) || dur < 1) {
+        missing.push({ field: "schedule_duration", label: "Duration" });
+      }
     }
     if (!String(data.requested_time_from ?? "").trim()) {
       missing.push({ field: "requested_time_from", label: "Start time" });
@@ -705,6 +710,14 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     [feeOptionForPreview?.payment_type]
   );
 
+  const editIsPerConsultancy = useMemo(
+    () =>
+      isQuotePerConsultancyPaymentType(
+        String(feeOptionForPreview?.payment_type ?? "").trim()
+      ),
+    [feeOptionForPreview?.payment_type]
+  );
+
   const editBillingHint = useMemo(() => {
     if (!showQuoteScheduleSection) return "";
     const raw = String(feeOptionForPreview?.payment_type ?? "").trim();
@@ -718,16 +731,20 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
   const isScheduleComplete = useMemo(() => {
     if (!showQuoteScheduleSection) return false;
-    const dur = Number.parseInt(String(form.schedule_duration ?? "").trim(), 10);
     const d = String(form.requested_date ?? "").trim();
     const tFrom = String(form.requested_time_from ?? "").trim();
     const dTo = String(form.requested_date_to ?? "").trim();
     const tTo = String(form.requested_time_to ?? "").trim();
+    if (editIsPerConsultancy) {
+      return Boolean(d && tFrom && dTo && tTo);
+    }
+    const dur = Number.parseInt(String(form.schedule_duration ?? "").trim(), 10);
     return Boolean(
       Number.isFinite(dur) && dur >= 1 && d && tFrom && dTo && tTo
     );
   }, [
     showQuoteScheduleSection,
+    editIsPerConsultancy,
     form.schedule_duration,
     form.requested_date,
     form.requested_date_to,
@@ -766,6 +783,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   }, [form.service_price, feeOptionForPreview, quoteRow]);
 
   const schedulePricePreview = useMemo(() => {
+    if (editIsPerConsultancy) return null;
     if (!isScheduleComplete || !partnerSelected) return null;
     const metrics = deriveQuoteScheduleMetrics({
       scheduleMode: activeScheduleMode,
@@ -790,6 +808,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       catalogPaymentType
     );
   }, [
+    editIsPerConsultancy,
     isScheduleComplete,
     partnerSelected,
     activeScheduleMode,
@@ -804,7 +823,25 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   ]);
 
   useEffect(() => {
+    if (!editIsPerConsultancy || !showQuoteScheduleSection) return;
+    const d = String(form.requested_date ?? "").trim();
+    const tFrom = String(form.requested_time_from ?? "").trim();
+    if (!d || !tFrom) return;
+    if (String(form.schedule_duration ?? "").trim() !== "1") {
+      setValue("schedule_duration", "1", { shouldValidate: false });
+    }
+  }, [
+    editIsPerConsultancy,
+    showQuoteScheduleSection,
+    form.requested_date,
+    form.requested_time_from,
+    form.schedule_duration,
+    setValue,
+  ]);
+
+  useEffect(() => {
     if (!showQuoteScheduleSection) return;
+    if (editIsPerConsultancy) return;
     const existing = String(form.schedule_duration ?? "").trim();
     const d = String(form.requested_date ?? "").trim();
     const dTo = String(form.requested_date_to ?? "").trim();
@@ -821,6 +858,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     setValue("schedule_duration", String(dur), { shouldValidate: false });
   }, [
     showQuoteScheduleSection,
+    editIsPerConsultancy,
     form.schedule_duration,
     form.requested_date,
     form.requested_date_to,
@@ -832,7 +870,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
   useEffect(() => {
     if (!showQuoteScheduleSection) return;
-    const dur = Number.parseInt(String(form.schedule_duration ?? "").trim(), 10);
+    const dur = editIsPerConsultancy
+      ? 1
+      : Number.parseInt(String(form.schedule_duration ?? "").trim(), 10);
     const d = String(form.requested_date ?? "").trim();
     const tFrom = String(form.requested_time_from ?? "").trim();
     const dTo = String(form.requested_date_to ?? "").trim();
@@ -871,6 +911,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     }
   }, [
     showQuoteScheduleSection,
+    editIsPerConsultancy,
     editScheduleDurationUnit,
     form.schedule_duration,
     form.requested_date,
@@ -1062,6 +1103,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
         requirePartner: !isNewTabQuoteEdit,
         requireServicePrice: !isNewTabQuoteEdit,
         requireScheduleWhenPartnerCategory: isCatalogLockedQuoteEdit,
+        skipScheduleDuration: editIsPerConsultancy,
       }
     );
     if (missingRequired.length > 0) {
@@ -1213,6 +1255,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
           selectedAddressId,
           requirePartner: true,
           requireServicePrice: true,
+          skipScheduleDuration: editIsPerConsultancy,
         }
       );
       if (missingRequired.length > 0) {
@@ -1846,48 +1889,52 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                   </Row>
                   <div className="add-quote-schedule-panel">
                     <Row className="gy-4 gx-md-5">
-                      <Col xs={12} md={4}>
-                        <Form.Group controlId="schedule_duration">
-                          <Form.Label className="fw-medium mb-1">
-                            <FieldLabelText
-                              label={editScheduleDurationLabel}
-                              required
+                      {!editIsPerConsultancy ? (
+                        <Col xs={12} md={4}>
+                          <Form.Group controlId="schedule_duration">
+                            <Form.Label className="fw-medium mb-1">
+                              <FieldLabelText
+                                label={editScheduleDurationLabel}
+                                required
+                              />
+                            </Form.Label>
+                            <Form.Control
+                              type="number"
+                              min={1}
+                              step={1}
+                              inputMode="numeric"
+                              disabled={lockedFields}
+                              className={`custom-form-input${
+                                errors.schedule_duration ? " is-invalid" : ""
+                              }`}
+                              style={
+                                lockedFields
+                                  ? partnerCatalogDisabledControlStyle
+                                  : partnerCatalogControlStyle
+                              }
+                              placeholder={`Enter ${editScheduleDurationLabel.toLowerCase()}`}
+                              {...register("schedule_duration", {
+                                required: `${editScheduleDurationLabel} is required`,
+                                min: {
+                                  value: 1,
+                                  message: "Must be at least 1",
+                                },
+                              })}
                             />
-                          </Form.Label>
-                          <Form.Control
-                            type="number"
-                            min={1}
-                            step={1}
-                            inputMode="numeric"
-                            disabled={lockedFields}
-                            className={`custom-form-input${
-                              errors.schedule_duration ? " is-invalid" : ""
-                            }`}
-                            style={
-                              lockedFields
-                                ? partnerCatalogDisabledControlStyle
-                                : partnerCatalogControlStyle
-                            }
-                            placeholder={`Enter ${editScheduleDurationLabel.toLowerCase()}`}
-                            {...register("schedule_duration", {
-                              required: `${editScheduleDurationLabel} is required`,
-                              min: {
-                                value: 1,
-                                message: "Must be at least 1",
-                              },
-                            })}
-                          />
-                          {errors.schedule_duration ? (
-                            <div className="text-danger small mt-1">
-                              {String(
-                                (errors.schedule_duration as { message?: string })
-                                  ?.message ?? ""
-                              )}
-                            </div>
-                          ) : null}
-                        </Form.Group>
-                      </Col>
-                      <Col xs={12} md={4}>
+                            {errors.schedule_duration ? (
+                              <div className="text-danger small mt-1">
+                                {String(
+                                  (errors.schedule_duration as { message?: string })
+                                    ?.message ?? ""
+                                )}
+                              </div>
+                            ) : null}
+                          </Form.Group>
+                        </Col>
+                      ) : (
+                        <input type="hidden" {...register("schedule_duration")} />
+                      )}
+                      <Col xs={12} md={editIsPerConsultancy ? 6 : 4}>
                         <CustomTextFieldDatePicket
                           label="Start date"
                           controlId="edit_requested_date"
@@ -1907,7 +1954,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                           required
                         />
                       </Col>
-                      <Col xs={12} md={4}>
+                      <Col xs={12} md={editIsPerConsultancy ? 6 : 4}>
                         <CustomTextFieldTimePicket
                           label="Start time"
                           controlId="edit_requested_time_from"

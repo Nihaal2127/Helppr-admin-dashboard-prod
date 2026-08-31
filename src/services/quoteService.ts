@@ -1492,10 +1492,20 @@ export function quoteScheduleDurationFieldLabel(
 export function quoteScheduleBillingHintText(
   paymentTypeKey: string
 ): string {
+  const key = extractMinDepositTypeKey(paymentTypeKey);
+  if (key === "per_consultancy") {
+    return "This service is billed per consultancy.";
+  }
   const unit = getQuoteScheduleDurationUnit(paymentTypeKey);
   const word =
     unit === "hour" ? "hourly" : unit === "month" ? "monthly" : "daily";
   return `This service charges ${word}.`;
+}
+
+export function isQuotePerConsultancyPaymentType(
+  paymentTypeKey: string
+): boolean {
+  return extractMinDepositTypeKey(paymentTypeKey) === "per_consultancy";
 }
 
 const DEFAULT_DAILY_WORK_HOURS = 8;
