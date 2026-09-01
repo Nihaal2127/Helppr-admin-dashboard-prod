@@ -533,10 +533,12 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
 
     if (paymentTypeChanged && partnerCount > 0) {
       openConfirmDialog(
-        "Payment type cannot be changed because partners are already using this service. Changing it would affect their prices.",
-        "",
+        "Updating Payment type may effect partner service prices. Do you want to continue?",
+        "Update",
         "Cancel",
-        () => {}
+        () => {
+          void persistService();
+        }
       );
       return;
     }

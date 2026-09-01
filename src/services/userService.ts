@@ -600,7 +600,7 @@ export const fetchUser = async (
       ? response.data.records
       : [];
     const users = rawRecords.map((row: UserModel) =>
-      normalizeUserListRow(row)
+      normalizeUserListRow(row, type)
     ) as UserModel[];
 
     return {
@@ -619,8 +619,20 @@ export const fetchUser = async (
 };
 
 /** Display/sort count for Users "Service Taken" / Partners "Available Services". */
-function userServiceCount(user: UserModel | Record<string, unknown>): number {
+function userServiceCount(
+  user: UserModel | Record<string, unknown>,
+  listType?: number
+): number {
   const row = user as Record<string, unknown>;
+
+  // Users tab (type=4): API returns total_service / service_paid / service_unpaid.
+  // Do not prefer partner field `no_of_services` (often 0 on customer rows).
+  if (listType === APP_USER_TYPE.CUSTOMER) {
+    const n = Number(
+      row.total_service ?? row.total_services ?? row.service_taken ?? 0
+    );
+    return Number.isFinite(n) ? n : 0;
+  }
 
   const hasExplicit =
     row.no_of_services != null ||
@@ -652,8 +664,16 @@ function userServiceCount(user: UserModel | Record<string, unknown>): number {
   return 0;
 }
 
-function normalizeUserListRow(row: UserModel): UserModel {
-  const count = userServiceCount(row);
+function normalizeUserListRow(row: UserModel, listType?: number): UserModel {
+  const count = userServiceCount(row, listType);
+  if (listType === APP_USER_TYPE.CUSTOMER) {
+    return {
+      ...row,
+      total_service: count,
+      service_paid: Number(row.service_paid ?? 0) || 0,
+      service_unpaid: Number(row.service_unpaid ?? 0) || 0,
+    };
+  }
   return {
     ...row,
     total_service: count,

@@ -453,9 +453,13 @@ const UserManagement = () => {
         accessor: "total_service",
         sort: true,
         Cell: ({ row }: { row: { original: UserModel } }) => {
+          const raw = row.original as UserModel & {
+            total_services?: number | null;
+            service_taken?: number | null;
+          };
           const count =
             Number(
-              row.original?.total_service ?? row.original?.no_of_services ?? 0
+              raw.total_service ?? raw.total_services ?? raw.service_taken ?? 0
             ) || 0;
           const id = String(row.original?._id ?? "").trim();
           return (
