@@ -18,6 +18,14 @@ export type PartnerSubscriptionModel = {
   is_active: boolean;
 };
 
+export type PartnerPostVideoMeta = {
+  hls_url?: string;
+  thumbnail_url?: string;
+  bunny_video_id?: string;
+  duration_seconds?: number;
+  status?: string;
+};
+
 export type PostModel = {
   /** Mongo `_id` from `GET /api/partner-post/getAll`. */
   _id?: string;
@@ -35,4 +43,6 @@ export type PostModel = {
   rejection_reason?: string;
   images?: string[];
   videos?: string[];
+  /** Nested `video` block from partner-post API (Bunny HLS). */
+  video?: PartnerPostVideoMeta | null;
 };

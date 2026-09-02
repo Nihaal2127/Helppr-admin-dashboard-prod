@@ -2,6 +2,7 @@ import { apiRequest } from "../lib/global/remote/apiHelper";
 import { showErrorAlert } from "../lib/global/alertHelper";
 import { ApiPaths } from "../lib/global/remote/apiPaths";
 import type {
+  PartnerPostVideoMeta,
   PartnerSubscriptionModel,
   PostModel,
 } from "../lib/types/partnerManagementTypes";
@@ -1165,6 +1166,101 @@ function pickPartnerPostListRoot(
   return d;
 }
 
+/**
+ * API may return `https://vz-{library}/{video}/playlist.m3u8` (no `.b-cdn.net`).
+ * Browsers need `https://vz-{library}.b-cdn.net/...` for Bunny Stream.
+ */
+function normalizeBunnyStreamMediaUrl(url: string): string {
+  const trimmed = String(url ?? "").trim();
+  if (!trimmed || /^(blob:|data:)/i.test(trimmed)) return trimmed;
+
+  try {
+    const parsed = new URL(trimmed);
+    const host = parsed.hostname.toLowerCase();
+    if (/^vz-[a-f0-9-]+$/i.test(host)) {
+      parsed.hostname = `${host}.b-cdn.net`;
+      return parsed.toString();
+    }
+  } catch {
+    const broken = trimmed.match(/^https?:\/\/(vz-[a-f0-9-]+)\/(.+)$/i);
+    if (broken) {
+      return `https://${broken[1]}.b-cdn.net/${broken[2]}`;
+    }
+  }
+
+  return trimmed;
+}
+
+/** HLS playback URL — use API `video.hls_url` as-is (only normalizes Bunny host). */
+export function resolvePartnerPostVideoPlaybackUrl(
+  url?: string | null
+): string {
+  const raw = String(url ?? "").trim();
+  if (!raw) return "";
+  if (/^(blob:|data:)/i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw)) return normalizeBunnyStreamMediaUrl(raw);
+  return "";
+}
+
+/** Thumbnail URL — use API `video.thumbnail_url` or derive from `hls_url`. */
+export function resolvePartnerPostVideoThumbnailUrl(
+  url?: string | null
+): string {
+  const raw = String(url ?? "").trim();
+  if (!raw) return "";
+  if (/^(blob:|data:)/i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw)) {
+    const normalized = normalizeBunnyStreamMediaUrl(raw);
+    if (/playlist\.m3u8(\?.*)?$/i.test(normalized)) {
+      return normalized.replace(/playlist\.m3u8(\?.*)?$/i, "thumbnail.jpg");
+    }
+    return normalized;
+  }
+  return "";
+}
+
+/** Prefer explicit thumbnail; otherwise derive from playback/HLS URL. */
+export function resolvePartnerPostVideoThumbnailFromSource(
+  playbackOrThumbUrl?: string | null,
+  explicitThumb?: string | null
+): string {
+  const thumb = String(explicitThumb ?? "").trim();
+  if (thumb) return resolvePartnerPostVideoThumbnailUrl(thumb);
+  return resolvePartnerPostVideoThumbnailUrl(playbackOrThumbUrl);
+}
+
+export function isPartnerPostStreamCdnUrl(url?: string | null): boolean {
+  const u = String(url ?? "").trim().toLowerCase();
+  if (!u) return false;
+  return (
+    u.includes(".b-cdn.net") ||
+    /^https?:\/\/vz-[a-f0-9-]+/i.test(u) ||
+    /\/thumbnail\.jpg(\?|$)/i.test(u) ||
+    /\/playlist\.m3u8(\?|$)/i.test(u)
+  );
+}
+
+function parsePartnerPostVideoMeta(raw: unknown): PartnerPostVideoMeta | null {
+  if (!raw || typeof raw !== "object") return null;
+  const v = raw as Record<string, unknown>;
+  const bunnyId = String(v.bunny_video_id ?? v.bunnyVideoId ?? "").trim();
+  const hlsRaw = String(v.hls_url ?? v.hlsUrl ?? "").trim();
+  const thumbRaw = String(v.thumbnail_url ?? v.thumbnailUrl ?? "").trim();
+  const hls_url = hlsRaw ? resolvePartnerPostVideoPlaybackUrl(hlsRaw) : "";
+  const thumbnail_url = thumbRaw
+    ? resolvePartnerPostVideoThumbnailUrl(thumbRaw)
+    : resolvePartnerPostVideoThumbnailUrl(hlsRaw);
+  if (!hls_url && !thumbnail_url && !bunnyId) return null;
+  const duration = Number(v.duration_seconds ?? v.durationSeconds);
+  return {
+    hls_url: hls_url || undefined,
+    thumbnail_url: thumbnail_url || undefined,
+    bunny_video_id: bunnyId || undefined,
+    duration_seconds: Number.isFinite(duration) ? duration : undefined,
+    status: String(v.status ?? "").trim() || undefined,
+  };
+}
+
 function countMediaFromPost(raw: Record<string, unknown>): {
   images: string[];
   videos: string[];
@@ -1228,6 +1324,11 @@ function countMediaFromPost(raw: Record<string, unknown>): {
     }
   }
 
+  const videoMeta = parsePartnerPostVideoMeta(raw.video);
+  if (videoMeta?.hls_url) {
+    pushUrl(videoMeta.hls_url, videoUrls);
+  }
+
   return { images: imageUrls, videos: videoUrls };
 }
 
@@ -1259,8 +1360,14 @@ function mapPartnerPostApiRecord(raw: Record<string, unknown>): PostModel {
   ).trim();
 
   const { images, videos } = countMediaFromPost(raw);
+  const videoMeta = parsePartnerPostVideoMeta(raw.video);
+  const mediaTypeRaw = String(raw.media_type ?? raw.mediaType ?? "")
+    .trim()
+    .toLowerCase();
   const mediaType: PostModel["media_type"] =
-    videos.length > 0 && images.length === 0 ? "video" : "image";
+    mediaTypeRaw === "video" || (videos.length > 0 && images.length === 0)
+      ? "video"
+      : "image";
 
   const uploaded = String(
     raw.created_at ??
@@ -1280,6 +1387,7 @@ function mapPartnerPostApiRecord(raw: Record<string, unknown>): PostModel {
     no_of_videos: videos.length,
     images,
     videos,
+    video: videoMeta,
     location: String(raw.location ?? "").trim(),
     uploaded_date: uploaded,
     status: normalizePartnerPostStatus(String(raw.status ?? "")),
