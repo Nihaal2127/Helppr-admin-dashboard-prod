@@ -1416,20 +1416,24 @@ function formatQuoteDateOnlyFromParts(parts: string[]): string {
 }
 
 /** New / pending / failed rows: requested_date + requested_time */
-export function formatQuoteRequestedSchedule(row: {
-  requested_date?: string;
-  requested_time?: string;
-}): string {
+export function formatQuoteRequestedSchedule(
+  row: {
+    requested_date?: string;
+    requested_time?: string;
+  },
+  omitEndTime = false
+): string {
   const parts = splitDateParts(row.requested_date);
   if (parts.length === 0) return "-";
 
   const [tFrom, tTo] = splitHumanTimeRange(row.requested_time);
+  const endTime = omitEndTime ? "" : tTo;
 
   if (parts.length === 1) {
-    return buildSingleDayLine(parts[0], tFrom, tTo);
+    return buildSingleDayLine(parts[0], tFrom, endTime);
   }
 
-  return buildRangeLines(parts[0], parts[1], tFrom, tTo);
+  return buildRangeLines(parts[0], parts[1], tFrom, endTime);
 }
 
 /** Accepted / success rows: scheduled_date + service time window */
@@ -1474,23 +1478,30 @@ export function formatQuoteScheduleForTable(
   return formatQuoteDateOnlyFromParts(parts);
 }
 
-export function formatQuoteScheduleForView(row: {
-  status: string;
-  requested_date: string;
-  requested_time: string;
-  from_date?: string;
-  to_date?: string;
-  work_start_time?: string;
-  work_end_time?: string;
-  scheduled_date?: string;
-  scheduled_time_from?: string;
-  scheduled_time_to?: string;
-}): string {
+export function formatQuoteScheduleForView(
+  row: {
+    status: string;
+    requested_date: string;
+    requested_time: string;
+    from_date?: string;
+    to_date?: string;
+    work_start_time?: string;
+    work_end_time?: string;
+    scheduled_date?: string;
+    scheduled_time_from?: string;
+    scheduled_time_to?: string;
+  },
+  opts?: { paymentType?: string }
+): string {
+  const omitEndTime =
+    extractMinDepositTypeKey(String(opts?.paymentType ?? "")) ===
+    "per_consultancy";
+
   const fromYmd = row.from_date ? ymdChunk(row.from_date) : "";
   if (fromYmd) {
     const toYmd = row.to_date ? ymdChunk(row.to_date) : fromYmd;
     const ws = String(row.work_start_time ?? "").trim();
-    const we = String(row.work_end_time ?? "").trim();
+    const we = omitEndTime ? "" : String(row.work_end_time ?? "").trim();
     if (toYmd && toYmd !== fromYmd) {
       return buildRangeLines(fromYmd, toYmd, ws, we);
     }
@@ -1502,14 +1513,17 @@ export function formatQuoteScheduleForView(row: {
     const scheduled = formatQuoteScheduledDisplay({
       scheduled_date: row.scheduled_date,
       service_from_time: row.scheduled_time_from,
-      service_to_time: row.scheduled_time_to,
+      service_to_time: omitEndTime ? "" : row.scheduled_time_to,
     });
     if (scheduled !== "-") return scheduled;
   }
-  return formatQuoteRequestedSchedule({
-    requested_date: row.requested_date,
-    requested_time: row.requested_time,
-  });
+  return formatQuoteRequestedSchedule(
+    {
+      requested_date: row.requested_date,
+      requested_time: row.requested_time,
+    },
+    omitEndTime
+  );
 }
 
 export function formatServiceAddressLines(q: {

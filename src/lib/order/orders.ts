@@ -40,6 +40,7 @@ import {
   deriveQuoteScheduleDurationFromStored,
   getQuoteScheduleDurationUnit,
 } from "../../services/quoteService";
+import { extractMinDepositTypeKey } from "../service/serviceMinDepositDisplay";
 import {
   normalizePaymentMethod,
   paymentMethodFromExpenseModeId,
@@ -1602,7 +1603,16 @@ export function formatServiceScheduleLine(
     scheduled_date = `${fromYmd} to ${toYmd}`;
   }
   const fromRaw = String(primary.service_from_time ?? "").trim();
-  const toRaw = String(primary.service_to_time ?? "").trim();
+  const paymentType = String(
+    primary.service_info?.payment_type ??
+      primary.service_info?.min_deposit_type ??
+      ""
+  ).trim();
+  const omitEndTime =
+    extractMinDepositTypeKey(paymentType) === "per_consultancy";
+  const toRaw = omitEndTime
+    ? ""
+    : String(primary.service_to_time ?? "").trim();
   const scheduled = formatQuoteScheduledDisplay({
     scheduled_date: scheduled_date || fromYmd,
     service_from_time: fromRaw,

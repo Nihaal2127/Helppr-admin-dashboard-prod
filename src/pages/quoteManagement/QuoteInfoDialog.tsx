@@ -118,18 +118,25 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
 
   const scheduleDisplay = useMemo(
     () =>
-      formatQuoteScheduleForView({
-        status: displayQuote.status,
-        requested_date: displayQuote.requested_date,
-        requested_time: displayQuote.requested_time,
-        from_date: displayQuote.from_date,
-        to_date: displayQuote.to_date,
-        work_start_time: displayQuote.work_start_time,
-        work_end_time: displayQuote.work_end_time,
-        scheduled_date: displayQuote.scheduled_date,
-        scheduled_time_from: displayQuote.scheduled_time_from,
-        scheduled_time_to: displayQuote.scheduled_time_to,
-      }),
+      formatQuoteScheduleForView(
+        {
+          status: displayQuote.status,
+          requested_date: displayQuote.requested_date,
+          requested_time: displayQuote.requested_time,
+          from_date: displayQuote.from_date,
+          to_date: displayQuote.to_date,
+          work_start_time: displayQuote.work_start_time,
+          work_end_time: displayQuote.work_end_time,
+          scheduled_date: displayQuote.scheduled_date,
+          scheduled_time_from: displayQuote.scheduled_time_from,
+          scheduled_time_to: displayQuote.scheduled_time_to,
+        },
+        {
+          paymentType: String(
+            serviceFees?.payment_type ?? serviceFees?.min_deposit_type ?? ""
+          ).trim(),
+        }
+      ),
     [
       displayQuote.status,
       displayQuote.requested_date,
@@ -141,6 +148,8 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
       displayQuote.scheduled_date,
       displayQuote.scheduled_time_from,
       displayQuote.scheduled_time_to,
+      serviceFees?.payment_type,
+      serviceFees?.min_deposit_type,
     ]
   );
 
