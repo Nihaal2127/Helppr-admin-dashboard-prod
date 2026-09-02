@@ -42,6 +42,7 @@ import {
   getPartnerActiveServiceProvidingRow,
   getQuoteScheduleModeForPartnerService,
   getQuoteScheduleDurationUnit,
+  isQuotePerConsultancyPaymentType,
   quoteScheduleBillingHintText,
   quoteScheduleDurationFieldLabel,
   mapRelatedCatalogToQuoteOptions,
@@ -483,6 +484,14 @@ const QuoteManagement = () => {
     [addQuoteFeeOptionForBreakdown?.payment_type]
   );
 
+  const addQuoteIsPerConsultancy = useMemo(
+    () =>
+      isQuotePerConsultancyPaymentType(
+        String(addQuoteFeeOptionForBreakdown?.payment_type ?? "").trim()
+      ),
+    [addQuoteFeeOptionForBreakdown?.payment_type]
+  );
+
   const addQuoteBillingHint = useMemo(() => {
     if (!hasAddQuoteServiceSelected) return "";
     const raw = String(addQuoteFeeOptionForBreakdown?.payment_type ?? "").trim();
@@ -496,19 +505,23 @@ const QuoteManagement = () => {
 
   const isAddQuoteScheduleComplete = useMemo(() => {
     if (!hasAddQuoteServiceSelected) return false;
-    const dur = Number.parseInt(
-      String(addQuote.schedule_duration ?? "").trim(),
-      10
-    );
     const d = String(addQuote.requested_date ?? "").trim();
     const tFrom = String(addQuote.requested_time_from ?? "").trim();
     const dTo = String(addQuote.requested_date_to ?? "").trim();
     const tTo = String(addQuote.requested_time_to ?? "").trim();
+    if (addQuoteIsPerConsultancy) {
+      return Boolean(d && tFrom && dTo && tTo);
+    }
+    const dur = Number.parseInt(
+      String(addQuote.schedule_duration ?? "").trim(),
+      10
+    );
     return Boolean(
       Number.isFinite(dur) && dur >= 1 && d && tFrom && dTo && tTo
     );
   }, [
     hasAddQuoteServiceSelected,
+    addQuoteIsPerConsultancy,
     addQuote.schedule_duration,
     addQuote.requested_date,
     addQuote.requested_date_to,
@@ -526,6 +539,7 @@ const QuoteManagement = () => {
   );
 
   const addQuoteSchedulePricePreview = useMemo(() => {
+    if (addQuoteIsPerConsultancy) return null;
     if (!isAddQuoteScheduleComplete || !addQuotePartnerSelected) return null;
     const sid = String(addQuote.requested_services ?? "").trim();
     if (!sid) return null;
@@ -552,6 +566,7 @@ const QuoteManagement = () => {
       catalogPaymentType
     );
   }, [
+    addQuoteIsPerConsultancy,
     isAddQuoteScheduleComplete,
     addQuotePartnerSelected,
     addQuote.requested_services,
@@ -566,11 +581,30 @@ const QuoteManagement = () => {
   ]);
 
   useEffect(() => {
+    if (!addQuoteIsPerConsultancy || !hasAddQuoteServiceSelected) return;
+    const d = String(addQuote.requested_date ?? "").trim();
+    const tFrom = String(addQuote.requested_time_from ?? "").trim();
+    if (!d || !tFrom) return;
+    if (String(addQuote.schedule_duration ?? "").trim() !== "1") {
+      setAddQuoteValue("schedule_duration", "1", { shouldValidate: false });
+    }
+  }, [
+    addQuoteIsPerConsultancy,
+    hasAddQuoteServiceSelected,
+    addQuote.requested_date,
+    addQuote.requested_time_from,
+    addQuote.schedule_duration,
+    setAddQuoteValue,
+  ]);
+
+  useEffect(() => {
     if (!hasAddQuoteServiceSelected) return;
-    const dur = Number.parseInt(
-      String(addQuote.schedule_duration ?? "").trim(),
-      10
-    );
+    const dur = addQuoteIsPerConsultancy
+      ? 1
+      : Number.parseInt(
+          String(addQuote.schedule_duration ?? "").trim(),
+          10
+        );
     const d = String(addQuote.requested_date ?? "").trim();
     const tFrom = String(addQuote.requested_time_from ?? "").trim();
     const dTo = String(addQuote.requested_date_to ?? "").trim();
@@ -611,6 +645,7 @@ const QuoteManagement = () => {
     }
   }, [
     hasAddQuoteServiceSelected,
+    addQuoteIsPerConsultancy,
     addQuoteScheduleDurationUnit,
     addQuote.schedule_duration,
     addQuote.requested_date,
@@ -1390,12 +1425,14 @@ const QuoteManagement = () => {
       showErrorAlert("Please select start date.");
       return;
     }
-    const dur = Number.parseInt(String(data.schedule_duration ?? "").trim(), 10);
-    if (!Number.isFinite(dur) || dur < 1) {
-      showErrorAlert(
-        `Please enter ${addQuoteScheduleDurationLabel.toLowerCase()}.`
-      );
-      return;
+    if (!addQuoteIsPerConsultancy) {
+      const dur = Number.parseInt(String(data.schedule_duration ?? "").trim(), 10);
+      if (!Number.isFinite(dur) || dur < 1) {
+        showErrorAlert(
+          `Please enter ${addQuoteScheduleDurationLabel.toLowerCase()}.`
+        );
+        return;
+      }
     }
     if (!String(data.requested_time_from ?? "").trim()) {
       showErrorAlert("Please select start time.");
@@ -2354,49 +2391,56 @@ const QuoteManagement = () => {
 
                   <div className="add-quote-schedule-panel">
                     <Row className="gy-3 gx-md-4">
-                      <Col xs={12} md={4}>
-                        <Form.Group controlId="schedule_duration">
-                          <Form.Label className="fw-medium mb-1">
-                            <FieldLabelText
-                              label={addQuoteScheduleDurationLabel}
-                              required
+                      {!addQuoteIsPerConsultancy ? (
+                        <Col xs={12} md={4}>
+                          <Form.Group controlId="schedule_duration">
+                            <Form.Label className="fw-medium mb-1">
+                              <FieldLabelText
+                                label={addQuoteScheduleDurationLabel}
+                                required
+                              />
+                            </Form.Label>
+                            <Form.Control
+                              type="number"
+                              min={1}
+                              step={1}
+                              inputMode="numeric"
+                              disabled={addQuoteFieldsLocked}
+                              className={`custom-form-input${
+                                addQuoteErrors.schedule_duration
+                                  ? " is-invalid"
+                                  : ""
+                              }`}
+                              style={partnerCatalogControlStyle}
+                              placeholder={`Enter ${addQuoteScheduleDurationLabel.toLowerCase()}`}
+                              {...addQuoteRegister("schedule_duration", {
+                                required: `${addQuoteScheduleDurationLabel} is required`,
+                                min: {
+                                  value: 1,
+                                  message: "Must be at least 1",
+                                },
+                              })}
                             />
-                          </Form.Label>
-                          <Form.Control
-                            type="number"
-                            min={1}
-                            step={1}
-                            inputMode="numeric"
-                            disabled={addQuoteFieldsLocked}
-                            className={`custom-form-input${
-                              addQuoteErrors.schedule_duration
-                                ? " is-invalid"
-                                : ""
-                            }`}
-                            style={partnerCatalogControlStyle}
-                            placeholder={`Enter ${addQuoteScheduleDurationLabel.toLowerCase()}`}
-                            {...addQuoteRegister("schedule_duration", {
-                              required: `${addQuoteScheduleDurationLabel} is required`,
-                              min: {
-                                value: 1,
-                                message: "Must be at least 1",
-                              },
-                            })}
-                          />
-                          {addQuoteErrors.schedule_duration ? (
-                            <div className="text-danger small mt-1">
-                              {String(
-                                (
-                                  addQuoteErrors.schedule_duration as {
-                                    message?: string;
-                                  }
-                                )?.message ?? ""
-                              )}
-                            </div>
-                          ) : null}
-                        </Form.Group>
-                      </Col>
-                      <Col xs={12} md={4}>
+                            {addQuoteErrors.schedule_duration ? (
+                              <div className="text-danger small mt-1">
+                                {String(
+                                  (
+                                    addQuoteErrors.schedule_duration as {
+                                      message?: string;
+                                    }
+                                  )?.message ?? ""
+                                )}
+                              </div>
+                            ) : null}
+                          </Form.Group>
+                        </Col>
+                      ) : (
+                        <input
+                          type="hidden"
+                          {...addQuoteRegister("schedule_duration")}
+                        />
+                      )}
+                      <Col xs={12} md={addQuoteIsPerConsultancy ? 6 : 4}>
                         <CustomTextFieldDatePicket
                           label="Start date"
                           controlId="requested_date"
@@ -2423,7 +2467,7 @@ const QuoteManagement = () => {
                           required
                         />
                       </Col>
-                      <Col xs={12} md={4}>
+                      <Col xs={12} md={addQuoteIsPerConsultancy ? 6 : 4}>
                         <CustomTextFieldTimePicket
                           label="Start time"
                           controlId="requested_time_from"

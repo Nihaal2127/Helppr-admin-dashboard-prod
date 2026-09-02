@@ -533,12 +533,8 @@ function mapRelatedCatalogEmployeesAndCustomers(
   });
 
   for (const u of out.quoteCustomerRecords) {
-    const id = str(u._id ?? u.id);
-    if (!id) continue;
-    const name = str(u.name) || id;
-    const email = str(u.email);
-    const label = email ? `${name} (${email})` : name;
-    out.quoteUserOptions.push({ value: id, label, user_name: name });
+    const opt = buildQuoteCustomerUserOption(u);
+    if (opt) out.quoteUserOptions.push(opt);
   }
   out.quoteUserOptions.sort((a, b) =>
     a.user_name.localeCompare(b.user_name)
@@ -2661,6 +2657,44 @@ export async function fetchQuoteServiceOptionsForCategory(
  * `GET /category/getDropDown`, `GET /user/getDropDown?type=4` (customers), `GET /user/getDropDown?type=3` (employees).
  * When `franchiseId` is set (super admin / staff after choosing **Franchise**), adds `franchise_id` to user dropdowns so lists match that franchise.
  */
+/** Customer row → Add Quote user dropdown option (never show raw Mongo ids as labels). */
+type QuoteCustomerUserRow = {
+  _id?: unknown;
+  id?: unknown;
+  name?: unknown;
+  user_name?: unknown;
+  email?: unknown;
+  phone_number?: unknown;
+};
+
+export function buildQuoteCustomerUserOption(
+  u: QuoteCustomerUserRow
+): QuoteUserOption | null {
+  const id = str(u._id ?? u.id);
+  if (!id) return null;
+
+  const rawName = str(u.name ?? u.user_name);
+  const email = str(u.email);
+  const phone = str(u.phone_number);
+
+  let user_name = rawName;
+  if (!user_name || isMongoObjectId(user_name)) {
+    user_name = email || phone || "";
+  }
+  if (!user_name || isMongoObjectId(user_name)) {
+    return null;
+  }
+
+  let label = user_name;
+  if (email && email.toLowerCase() !== user_name.toLowerCase()) {
+    label = `${user_name} (${email})`;
+  } else if (phone && phone !== user_name) {
+    label = `${user_name} (${phone})`;
+  }
+
+  return { value: id, label, user_name };
+}
+
 export async function fetchQuoteCreateOptions(opts?: {
   franchiseId?: string;
 }): Promise<{
@@ -2679,18 +2713,9 @@ export async function fetchQuoteCreateOptions(opts?: {
     fetchUserDropDown(EMPLOYEE_USER_TYPE, undefined, extra),
   ]);
 
-  const quoteUserOptions: QuoteUserOption[] = (customers.users ?? []).map(
-    (u: any) => {
-      const name = str(u.name) || str(u._id);
-      const phone = str(u.phone_number);
-      const label = phone ? `${name} (${phone})` : name;
-      return {
-        value: str(u._id),
-        label,
-        user_name: name,
-      };
-    }
-  );
+  const quoteUserOptions: QuoteUserOption[] = (customers.users ?? [])
+    .map((u) => buildQuoteCustomerUserOption(u))
+    .filter((o): o is QuoteUserOption => o != null);
 
   const quoteEmployeeOptions: OptionType[] = (employees.users ?? []).map(
     (u: any) => ({
