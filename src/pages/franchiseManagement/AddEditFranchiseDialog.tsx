@@ -20,7 +20,7 @@ import {
   fetchCategory,
   fetchCategoryDropDown,
 } from "../../services/categoryService";
-import { fetchService } from "../../services/servicesService";
+import { fetchService, normalizeServiceCategoryRef } from "../../services/servicesService";
 import { fetchStateDropDown } from "../../services/stateService";
 import { fetchCityDropDown } from "../../services/cityService";
 import {
@@ -540,6 +540,9 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   const [allServices, setAllServices] = useState<ServiceLite[]>([]);
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [serviceIds, setServiceIds] = useState<string[]>([]);
+  /** Avoid re-applying API category/service ids after the user edits the multi-selects. */
+  const catalogSelectionSeedKeyRef = useRef("");
+  const catalogSelectionTouchedRef = useRef(false);
   const [fetchedAreaOptions, setFetchedAreaOptions] = useState<
     OptionType[] | null
   >(null);
@@ -1009,14 +1012,17 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
         const loadServices = async (): Promise<ServiceLite[]> => {
           const mergedServices: unknown[] = [];
           let spage = 1;
-          const slimit = catalogFranchiseId ? 200 : 500;
+          // Edit needs the full service catalog so newly added categories can
+          // pick their services (franchise-scoped lists often omit unassigned ones).
+          const serviceFranchiseId = undefined;
+          const slimit = 500;
           for (;;) {
             const svcRes = await fetchService(
               spage,
               slimit,
               {},
               [],
-              catalogFranchiseId
+              serviceFranchiseId
             );
             if (cancelled) return [];
             if (!svcRes.response || !Array.isArray(svcRes.services)) break;
@@ -1028,7 +1034,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
           return mergedServices.map((s: any) => ({
             _id: String(s._id),
             name: String(s.name ?? ""),
-            category_id: String(s.category_id ?? ""),
+            category_id: normalizeServiceCategoryRef(s.category_id),
             category_name: s.category_name
               ? String(s.category_name)
               : undefined,
@@ -1038,14 +1044,10 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
         const [catListRaw, services, dropCats] = await Promise.all([
           loadCategories(),
           loadServices(),
-          // Edit: only franchise-scoped categories. Add: merge global dropdown.
-          catalogFranchiseId
-            ? Promise.resolve(
-                [] as { value: string; label: string }[]
-              )
-            : fetchCategoryDropDown().catch(
-                () => [] as { value: string; label: string }[]
-              ),
+          // Always merge global dropdown so Edit can add categories not yet assigned.
+          fetchCategoryDropDown().catch(
+            () => [] as { value: string; label: string }[]
+          ),
         ]);
         if (cancelled) return;
 
@@ -1133,63 +1135,86 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
 
   useEffect(() => {
     if (!needsEditFormData) return;
-    if (isEditable && franchise) {
-      const source = (franchiseRecord ?? franchise) as unknown as Record<string, unknown>;
-      const rawCategoryIds = toStringArray(
-        source.category_ids ?? source.categories ?? []
-      );
-      const rawServiceIds = toStringArray(
-        source.service_ids ?? source.services ?? []
-      );
+    if (!isEditable || !franchise) return;
 
-      const categoryIdsFromApi = rawCategoryIds.filter(isMongoObjectId);
-      const serviceIdsFromApi = rawServiceIds.filter(isMongoObjectId);
+    const franchiseKey = String(franchise._id ?? "").trim();
+    const seedKey = `${franchiseKey}|${categoryOptions.length}|${allServices.length}`;
+    // Seed once per franchise when catalog is ready; never overwrite after user edits.
+    if (catalogSelectionTouchedRef.current) return;
+    if (
+      catalogSelectionSeedKeyRef.current.startsWith(`${franchiseKey}|`) &&
+      categoryOptions.length > 1 &&
+      allServices.length > 0
+    ) {
+      // Already seeded with a non-empty catalog for this franchise.
+      return;
+    }
 
-      const categoryNames = toStringArray(source.category_names ?? []);
-      const serviceNames = toStringArray(source.service_names ?? []);
+    const source = (franchiseRecord ?? franchise) as unknown as Record<string, unknown>;
+    const rawCategoryIds = toStringArray(
+      source.category_ids ?? source.categories ?? []
+    );
+    const rawServiceIds = toStringArray(
+      source.service_ids ?? source.services ?? []
+    );
 
-      const categoryIdsFromNames =
-        categoryIdsFromApi.length > 0
-          ? categoryIdsFromApi
-          : categoryOptions
-              .filter(
-                (c) =>
-                  c.value !== "select-all" &&
-                  categoryNames.some(
-                    (n) =>
-                      n.toLowerCase() ===
-                      String(c.label ?? "")
-                        .trim()
-                        .toLowerCase()
-                  )
-              )
-              .map((c) => String(c.value));
+    const categoryIdsFromApi = rawCategoryIds.filter(isMongoObjectId);
+    const serviceIdsFromApi = rawServiceIds.filter(isMongoObjectId);
 
-      const serviceIdsFromNames =
-        serviceIdsFromApi.length > 0
-          ? serviceIdsFromApi
-          : allServices
-              .filter((s) =>
-                serviceNames.some(
+    const categoryNames = toStringArray(source.category_names ?? []);
+    const serviceNames = toStringArray(source.service_names ?? []);
+
+    // Wait for options before name-based resolution (avoids empty first seed).
+    if (
+      categoryIdsFromApi.length === 0 &&
+      categoryNames.length > 0 &&
+      categoryOptions.length <= 1
+    ) {
+      return;
+    }
+
+    const categoryIdsFromNames =
+      categoryIdsFromApi.length > 0
+        ? categoryIdsFromApi
+        : categoryOptions
+            .filter(
+              (c) =>
+                c.value !== "select-all" &&
+                categoryNames.some(
                   (n) =>
                     n.toLowerCase() ===
-                    String(s.name ?? "")
+                    String(c.label ?? "")
                       .trim()
                       .toLowerCase()
                 )
+            )
+            .map((c) => String(c.value));
+
+    const serviceIdsFromNames =
+      serviceIdsFromApi.length > 0
+        ? serviceIdsFromApi
+        : allServices
+            .filter((s) =>
+              serviceNames.some(
+                (n) =>
+                  n.toLowerCase() ===
+                  String(s.name ?? "")
+                    .trim()
+                    .toLowerCase()
               )
-              .map((s) => String(s._id));
+            )
+            .map((s) => String(s._id));
 
-      const dedupCategoryIds = Array.from(new Set(categoryIdsFromNames));
-      const dedupServiceIds = Array.from(new Set(serviceIdsFromNames));
+    const dedupCategoryIds = Array.from(new Set(categoryIdsFromNames));
+    const dedupServiceIds = Array.from(new Set(serviceIdsFromNames));
 
-      setCategoryIds((prev) =>
-        sameIdList(prev, dedupCategoryIds) ? prev : dedupCategoryIds
-      );
-      setServiceIds((prev) =>
-        sameIdList(prev, dedupServiceIds) ? prev : dedupServiceIds
-      );
-    }
+    catalogSelectionSeedKeyRef.current = seedKey;
+    setCategoryIds((prev) =>
+      sameIdList(prev, dedupCategoryIds) ? prev : dedupCategoryIds
+    );
+    setServiceIds((prev) =>
+      sameIdList(prev, dedupServiceIds) ? prev : dedupServiceIds
+    );
   }, [
     isEditable,
     franchise,
@@ -1198,6 +1223,11 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     allServices,
     needsEditFormData,
   ]);
+
+  useEffect(() => {
+    catalogSelectionTouchedRef.current = false;
+    catalogSelectionSeedKeyRef.current = "";
+  }, [franchise?._id, isEditable]);
 
   const handleCitySelection = (selectedOptions: OptionType[]) => {
     const selectedIds = selectedOptions
@@ -1214,6 +1244,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   };
 
   const handleCategorySelection = (selectedOptions: OptionType[]) => {
+    catalogSelectionTouchedRef.current = true;
     const selectedIds = parseMultiSelectIds(selectedOptions, categoryOptions);
     const removedCategoryIds = categoryIds.filter(
       (id) => !selectedIds.includes(id)
@@ -1247,22 +1278,24 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   };
 
   const handleServiceSelection = (selectedOptions: OptionType[]) => {
+    catalogSelectionTouchedRef.current = true;
     const selectedIds = parseMultiSelectIds(selectedOptions, serviceOptions);
     setServiceIds(selectedIds);
-  };
-
-  /** If no service from a category remains selected, drop that category from the Category field. */
-  useEffect(() => {
-    if (allServices.length === 0) return;
+    // Only drop a category when the user cleared all of its catalog services.
+    // Keep categories that have no services in the loaded catalog (newly added).
     setCategoryIds((prev) =>
-      prev.filter((catId) =>
-        serviceIds.some((sid) => {
+      prev.filter((catId) => {
+        const hasCatalogServices = allServices.some(
+          (s) => String(s.category_id) === String(catId)
+        );
+        if (!hasCatalogServices) return true;
+        return selectedIds.some((sid) => {
           const svc = allServices.find((x) => String(x._id) === String(sid));
           return Boolean(svc && String(svc.category_id) === String(catId));
-        })
-      )
+        });
+      })
     );
-  }, [serviceIds, allServices]);
+  };
 
   const onSubmitEvent = async (data: FranchiseFormValues) => {
     if (cityIds.length === 0) {
