@@ -93,6 +93,8 @@ export type QuoteRow = {
   category_name?: string;
   /** Resolved catalog service display name (parallel to `category_name`). */
   service_name?: string;
+  /** Billing cadence from populated `service_id.payment_type` (e.g. `per_consultancy`). */
+  payment_type?: string;
   area?: string;
   landmark?: string;
   state?: string;

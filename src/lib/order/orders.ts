@@ -1603,9 +1603,17 @@ export function formatServiceScheduleLine(
     scheduled_date = `${fromYmd} to ${toYmd}`;
   }
   const fromRaw = String(primary.service_from_time ?? "").trim();
+  const nestedService =
+    primary.service_info &&
+    typeof (primary.service_info as { service?: unknown }).service === "object"
+      ? ((primary.service_info as { service?: Record<string, unknown> })
+          .service ?? undefined)
+      : undefined;
   const paymentType = String(
     primary.service_info?.payment_type ??
       primary.service_info?.min_deposit_type ??
+      nestedService?.payment_type ??
+      nestedService?.min_deposit_type ??
       ""
   ).trim();
   const omitEndTime =
@@ -3018,7 +3026,7 @@ export function seedEditOrderFormFromRow(order: OrderModel): EditOrderFormValues
     user_name: order.user_name ?? order.user_info?.name ?? "",
     requested_services: serviceId,
     requested_partner: partnerId,
-    employee_id: String(order.created_by_id ?? "").trim(),
+    employee_id: String(order.employee_info?._id ?? "").trim(),
     category_id: categoryId,
     requested_date,
     schedule_duration,

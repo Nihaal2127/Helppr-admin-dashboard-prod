@@ -1353,12 +1353,14 @@ export function mergeQuoteServiceFeesForBreakdown(
     base.min_deposit_value;
 
   const pay = firstNonEmptyPaymentType(
+    base.payment_type,
     pr.payment_type,
     pr.min_deposit_type,
     nested?.payment_type,
     nested?.min_deposit_type
   );
   const mdType = firstNonEmptyPaymentType(
+    base.min_deposit_type,
     pr.min_deposit_type,
     pr.payment_type,
     nested?.min_deposit_type,
@@ -2539,6 +2541,17 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
     category_id: refId(r.category_id) || refId(categoryRef) || undefined,
     category_name: str(r.category_name ?? categoryRef?.name) || undefined,
     service_name: service_name || undefined,
+    payment_type:
+      firstNonEmptyPaymentType(
+        servicePackageRef?.payment_type,
+        servicePackageRef?.min_deposit_type,
+        innerCatalogService?.payment_type,
+        innerCatalogService?.min_deposit_type,
+        packageServiceRef?.payment_type,
+        packageServiceRef?.min_deposit_type,
+        r.payment_type,
+        r.min_deposit_type
+      ) || undefined,
     area: area || undefined,
     landmark: landmark || undefined,
     state: state || undefined,

@@ -5,20 +5,108 @@ import html2pdf from "html2pdf.js";
 import { formatDate, formatUtcToLocalTime } from "../../helper/utility";
 import logoDark from "../../assets/images/helper-logo.png";
 import { AppConstant } from "../../lib/global/AppConstant";
+import { extractMinDepositTypeKey } from "../../lib/service/serviceMinDepositDisplay";
 import {
   fetchOrderById,
+  OrderItemModel,
   OrderModel,
   OrderPaymentModeEnum,
   OrderStatusEnum,
 } from "../../lib/order/orders";
 
+function orderItemPaymentType(item: OrderItemModel): string {
+  const info = item.service_info as
+    | (NonNullable<OrderItemModel["service_info"]> & {
+        service?: { payment_type?: string; min_deposit_type?: string };
+      })
+    | undefined
+    | null;
+  const nested = info?.service;
+  return String(
+    info?.payment_type ??
+      info?.min_deposit_type ??
+      nested?.payment_type ??
+      nested?.min_deposit_type ??
+      ""
+  ).trim();
+}
+
+function isOrderItemPerConsultancy(item: OrderItemModel): boolean {
+  return (
+    extractMinDepositTypeKey(orderItemPaymentType(item)) === "per_consultancy"
+  );
+}
+
 export function orderInvoiceHtml(invoiceData: OrderModel): string {
+  const items = Array.isArray(invoiceData.service_items)
+    ? invoiceData.service_items
+    : [];
+  /** Per-consultancy: single Schedule column (date + start time), no To Time. */
+  const isPerConsultancyInvoice =
+    items.length > 0 && items.every((item) => isOrderItemPerConsultancy(item));
+
+  const itemRowsHtml = items
+    .map((item, index) => {
+      const dateLabel = formatDate(item.service_date ? item.service_date : "");
+      const fromLabel = formatUtcToLocalTime(item.service_from_time);
+      const priceLabel = `${AppConstant.currencySymbol} ${Number(
+        item.sub_total ?? 0
+      ).toFixed(2)}`;
+      const name = item.service_info?.name ?? "";
+
+      if (isPerConsultancyInvoice) {
+        const schedule =
+          dateLabel && fromLabel && fromLabel !== "-"
+            ? `${dateLabel}, ${fromLabel}`
+            : dateLabel || fromLabel || "-";
+        return `
+                <tr>
+                  <td class="col-num">${index + 1}</td>
+                  <td class="col-schedule">${schedule}</td>
+                  <td class="col-name">${name}</td>
+                  <td class="col-price">${priceLabel}</td>
+                </tr>`;
+      }
+
+      const omitTo = isOrderItemPerConsultancy(item);
+      return `
+                <tr>
+                  <td class="col-num">${index + 1}</td>
+                  <td class="col-date">${dateLabel}</td>
+                  <td class="col-name">${name}</td>
+                  <td class="col-time">${fromLabel}</td>
+                  <td class="col-time">${
+                    omitTo ? "-" : formatUtcToLocalTime(item.service_to_time)
+                  }</td>
+                  <td class="col-price">${priceLabel}</td>
+                </tr>`;
+    })
+    .join("");
+
+  const tableHeadHtml = isPerConsultancyInvoice
+    ? `
+              <tr>
+                <th class="col-num">#</th>
+                <th class="col-schedule">Schedule</th>
+                <th class="col-name">Service Name</th>
+                <th class="col-price">Price</th>
+              </tr>`
+    : `
+              <tr>
+                <th class="col-num">#</th>
+                <th class="col-date">Service Date</th>
+                <th class="col-name">Service Name</th>
+                <th class="col-time">From Time</th>
+                <th class="col-time">To Time</th>
+                <th class="col-price">Price</th>
+              </tr>`;
+
   return `
   <html>
     <head>
       <style>
         .invoice-container {
-          font-family: 'Arial, sans-serif';
+          font-family: Arial, Helvetica, sans-serif;
           max-width: 800px;
           margin: auto;
           padding: 20px;
@@ -52,23 +140,59 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
         .items-table {
           width: 100%;
           border-collapse: collapse;
+          table-layout: fixed;
         }
         .items-table th, .items-table td {
-          padding: 12px 10px;
-          text-align: center;
+          padding: 10px 8px;
           border: 1px solid #E8E8E8;
+          vertical-align: middle;
+          word-wrap: break-word;
         }
         .items-table th {
           background-color: #740909;
           color: #F7F7F7;
+          font-weight: 700;
+          white-space: nowrap;
+          text-align: center;
         }
-        .items-table tr:nth-child(even) td {
+        .items-table td {
+          text-align: center;
           background-color: #F7F7F7;
           color: #1A1A1A;
         }
-        .items-table tr:nth-child(odd) td {
+        .items-table .col-num { width: 8%; }
+        .items-table .col-date { width: 18%; }
+        .items-table .col-schedule { width: 32%; }
+        .items-table .col-name { width: ${isPerConsultancyInvoice ? "40%" : "22%"}; text-align: left; }
+        .items-table .col-time { width: 14%; white-space: nowrap; }
+        .items-table .col-price { width: ${isPerConsultancyInvoice ? "20%" : "14%"}; text-align: right; white-space: nowrap; }
+        .items-table th.col-name,
+        .items-table th.col-price { text-align: center; }
+        .summary-table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-top: 0;
+          table-layout: fixed;
+        }
+        .summary-table td {
+          border: 1px solid #E8E8E8;
           background-color: #F7F7F7;
-          color: #1A1A1A;
+          padding: 12px 10px;
+          vertical-align: top;
+          font-size: 12px;
+          line-height: 1.55;
+        }
+        .summary-company {
+          width: 58%;
+          text-align: left;
+        }
+        .summary-totals {
+          width: 42%;
+          text-align: right;
+        }
+        .summary-totals .total-line {
+          font-weight: 700;
+          margin-top: 4px;
         }
         @media print {
           * {
@@ -143,57 +267,41 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
           }<br />
         </section>
         <section style="margin-bottom: 8px;">
-          <table class="items-table striped">
+          <table class="items-table">
             <thead>
-              <tr>
-                <th>#</th>
-                <th>Service Date</th>
-                <th>Service Name</th>
-                <th>From Time</th>
-                <th>To Time</th>
-                <th>Price</th>
-              </tr>
+              ${tableHeadHtml}
             </thead>
             <tbody>
-              ${invoiceData.service_items
-                .map(
-                  (item, index) => `
-                <tr>
-                  <td>${index + 1}</td>
-                  <td>${formatDate(item.service_date ? item.service_date : "")}</td>
-                  <td>${item.service_info?.name ?? ""}</td>
-                  <td>${formatUtcToLocalTime(item.service_from_time)}</td>
-                  <td>${formatUtcToLocalTime(item.service_to_time)}</td>
-                  <td>${AppConstant.currencySymbol} ${item.sub_total.toFixed(2)}</td>
-                </tr>
-              `
-                )
-                .join("")}
-              <tr>
-                <td colSpan="3" style="text-align: left;">
-                  <strong>${AppConstant.companyName}</strong><br />
-                  <strong>Helpline Number:</strong> ${AppConstant.helplineNumber}<br />
-                  <strong>Support Email:</strong> ${AppConstant.supportEmail}<br />
-                  <strong>Location:</strong> ${AppConstant.companyLocation}<br />
-                </td>
-                <td colSpan="3" style="text-align: right;">
-                  <strong>Service Amount:</strong> ${AppConstant.currencySymbol} ${
-                    invoiceData?.sub_total ? invoiceData.sub_total.toFixed(2) : 0
-                  }<br />
-                  <strong>User Platform Fee:</strong> ${AppConstant.currencySymbol} ${
-                    invoiceData?.user_paltform_fee
-                      ? invoiceData.user_paltform_fee.toFixed(2)
-                      : 0
-                  }<br />
-                  <strong>Taxes:</strong> ${AppConstant.currencySymbol} ${
-                    invoiceData?.tax ? invoiceData.tax.toFixed(2) : 0
-                  }<br />
+              ${itemRowsHtml}
+            </tbody>
+          </table>
+          <table class="summary-table">
+            <tr>
+              <td class="summary-company">
+                <strong>${AppConstant.companyName}</strong><br />
+                <strong>Helpline Number:</strong> ${AppConstant.helplineNumber}<br />
+                <strong>Support Email:</strong> ${AppConstant.supportEmail}<br />
+                <strong>Location:</strong> ${AppConstant.companyLocation}
+              </td>
+              <td class="summary-totals">
+                <strong>Service Amount:</strong> ${AppConstant.currencySymbol} ${
+                  invoiceData?.sub_total ? invoiceData.sub_total.toFixed(2) : 0
+                }<br />
+                <strong>User Platform Fee:</strong> ${AppConstant.currencySymbol} ${
+                  invoiceData?.user_paltform_fee
+                    ? invoiceData.user_paltform_fee.toFixed(2)
+                    : 0
+                }<br />
+                <strong>Taxes:</strong> ${AppConstant.currencySymbol} ${
+                  invoiceData?.tax ? invoiceData.tax.toFixed(2) : 0
+                }<br />
+                <div class="total-line">
                   <strong>Total Price:</strong> ${AppConstant.currencySymbol} ${
                     invoiceData?.total_price ? invoiceData.total_price.toFixed(2) : 0
                   }
-                </td>
-              </tr>
-            </tbody>
+                </div>
+              </td>
+            </tr>
           </table>
         </section>
       </div>

@@ -442,6 +442,8 @@ export type QuoteViewData = {
   category_id?: string;
   category_name?: string;
   service_name?: string;
+  /** From quote/order service `payment_type` (e.g. `per_consultancy`). */
+  payment_type?: string;
   requested_date: string;
   requested_time: string;
   from_date?: string;
@@ -846,6 +848,7 @@ export function toQuoteViewData(row: QuoteRow): QuoteViewData {
     category_id: row.category_id,
     category_name: row.category_name,
     service_name: row.service_name,
+    payment_type: row.payment_type,
     requested_date: row.requested_date,
     requested_time: row.requested_time,
     from_date: row.from_date,

@@ -133,7 +133,10 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
         },
         {
           paymentType: String(
-            serviceFees?.payment_type ?? serviceFees?.min_deposit_type ?? ""
+            displayQuote.payment_type ??
+              serviceFees?.payment_type ??
+              serviceFees?.min_deposit_type ??
+              ""
           ).trim(),
         }
       ),
@@ -148,6 +151,7 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
       displayQuote.scheduled_date,
       displayQuote.scheduled_time_from,
       displayQuote.scheduled_time_to,
+      displayQuote.payment_type,
       serviceFees?.payment_type,
       serviceFees?.min_deposit_type,
     ]
