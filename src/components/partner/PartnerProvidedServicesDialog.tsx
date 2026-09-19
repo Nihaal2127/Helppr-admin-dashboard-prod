@@ -4,7 +4,10 @@ import CustomCloseButton from "../CustomCloseButton";
 import { openDialog } from "../../lib/global/DialogManager";
 import { fetchUserById } from "../../services/userService";
 import { fetchService } from "../../services/servicesService";
-import { collectPartnerProvidedServiceNames } from "../../lib/partner/partnerCategoryServiceView";
+import {
+  collectPartnerProvidedServiceNames,
+} from "../../lib/partner/partnerCategoryServiceView";
+import type { PartnerProvidedServiceNameItem } from "../../lib/partner/partnerCategoryServiceView";
 
 type PartnerProvidedServicesDialogProps = {
   partnerId: string;
@@ -16,7 +19,7 @@ const PartnerProvidedServicesDialog: React.FC<PartnerProvidedServicesDialogProps
   show: (partnerId: string, partnerName?: string) => void;
 } = ({ partnerId, partnerName, onClose }) => {
   const [loading, setLoading] = useState(true);
-  const [names, setNames] = useState<string[]>([]);
+  const [items, setItems] = useState<PartnerProvidedServiceNameItem[]>([]);
   const [loadError, setLoadError] = useState("");
   const fetchSeqRef = useRef(0);
 
@@ -32,13 +35,13 @@ const PartnerProvidedServicesDialog: React.FC<PartnerProvidedServicesDialogProps
       if (!response || !user) {
         setLoading(false);
         setLoadError("Could not load services for this partner.");
-        setNames([]);
+        setItems([]);
         return;
       }
 
       const collected = collectPartnerProvidedServiceNames(user);
-      const resolved = [...collected.names];
-      const seen = new Set(resolved.map((n) => n.toLowerCase()));
+      const resolved: PartnerProvidedServiceNameItem[] = [...collected.items];
+      const seen = new Set(resolved.map((n) => n.name.toLowerCase()));
 
       if (collected.unresolvedIds.length > 0) {
         const svcRes = await fetchService(1, 500, {});
@@ -48,23 +51,33 @@ const PartnerProvidedServicesDialog: React.FC<PartnerProvidedServicesDialogProps
             ? svcRes.services
             : [];
         const byId = new Map(
-          catalog.map((s) => [
-            String((s as { _id?: string })._id ?? "").trim(),
-            String((s as { name?: string }).name ?? "").trim(),
-          ])
+          catalog.map((s) => {
+            const id = String((s as { _id?: string })._id ?? "").trim();
+            const name = String((s as { name?: string }).name ?? "").trim();
+            const active =
+              (s as { is_active?: unknown }).is_active !== false &&
+              (s as { is_active?: unknown }).is_active !== 0 &&
+              String((s as { is_active?: unknown }).is_active ?? "true").toLowerCase() !==
+                "false";
+            return [id, { name, isActive: active }] as const;
+          })
         );
         for (const id of collected.unresolvedIds) {
-          const label = byId.get(id);
-          if (!label) continue;
-          const key = label.toLowerCase();
+          const catalogHit = byId.get(id);
+          if (!catalogHit?.name) continue;
+          const key = catalogHit.name.toLowerCase();
           if (seen.has(key)) continue;
           seen.add(key);
-          resolved.push(label);
+          const partnerActive = collected.unresolvedActiveById[id] !== false;
+          resolved.push({
+            name: catalogHit.name,
+            isActive: partnerActive && catalogHit.isActive,
+          });
         }
       }
 
       if (cancelled || seq !== fetchSeqRef.current) return;
-      setNames(resolved);
+      setItems(resolved);
       setLoading(false);
     })();
 
@@ -90,12 +103,14 @@ const PartnerProvidedServicesDialog: React.FC<PartnerProvidedServicesDialogProps
           </div>
         ) : loadError ? (
           <p className="text-danger mb-0">{loadError}</p>
-        ) : names.length === 0 ? (
+        ) : items.length === 0 ? (
           <p className="text-muted mb-0">No services for this partner.</p>
         ) : (
           <ul className="mb-0 ps-3">
-            {names.map((name) => (
-              <li key={name}>{name}</li>
+            {items.map((item) => (
+              <li key={item.name}>
+                {item.isActive ? item.name : `${item.name} (inactive)`}
+              </li>
             ))}
           </ul>
         )}

@@ -16,6 +16,9 @@ import {
   buildQuoteCategoryOptionsForSelectedPartner,
   filterPartnerServicesForCategory,
   getQuoteScheduleModeForPartnerService,
+  getQuoteScheduleDurationUnit,
+  isQuotePerConsultancyPaymentType,
+  deriveQuoteScheduleEndFromDuration,
   mapRelatedCatalogToQuoteOptions,
   mergeQuoteServiceFeesForBreakdown,
 } from "../../services/quoteService";
@@ -118,6 +121,8 @@ function collectMissingOrderEditRequiredFields(
     selectedAddressId: string;
     orderAddress: string;
     hasServiceSelected: boolean;
+    /** Per consultancy: start date/time only — end is auto-derived. */
+    skipEndTime?: boolean;
   }
 ): MissingRequiredField[] {
   const missing: MissingRequiredField[] = [];
@@ -151,7 +156,10 @@ function collectMissingOrderEditRequiredFields(
         label: "Start time",
       });
     }
-    if (!String(data.requested_time_to ?? "").trim()) {
+    if (
+      !opts.skipEndTime &&
+      !String(data.requested_time_to ?? "").trim()
+    ) {
       missing.push({
         field: "requested_time_to",
         label: "End time",
@@ -682,6 +690,65 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
     return merged ?? apiServiceFees;
   }, [selectedServiceOption, selectedPartnerCatalogRecord, serviceId, apiServiceFees]);
 
+  const editPaymentTypeKey = useMemo(() => {
+    const fromFees = String(
+      feeOptionForPreview?.payment_type ??
+        feeOptionForPreview?.min_deposit_type ??
+        selectedServiceOption?.payment_type ??
+        selectedServiceOption?.min_deposit_type ??
+        ""
+    ).trim();
+    if (fromFees) return fromFees;
+
+    const primary = orderRow ? getPrimaryServiceItem(orderRow) : undefined;
+    const info = primary?.service_info as
+      | (NonNullable<typeof primary>["service_info"] & {
+          service_type?: string;
+          service?: {
+            payment_type?: string;
+            min_deposit_type?: string;
+            service_type?: string;
+          };
+        })
+      | undefined
+      | null;
+    const nested = info?.service;
+    const fromOrder = String(
+      info?.payment_type ??
+        info?.min_deposit_type ??
+        info?.service_type ??
+        nested?.payment_type ??
+        nested?.min_deposit_type ??
+        nested?.service_type ??
+        ""
+    ).trim();
+    if (fromOrder) return fromOrder;
+
+    const orderRec = orderRow as unknown as Record<string, unknown> | null;
+    return String(
+      orderRec?.service_type ??
+        orderRec?.payment_type ??
+        orderRec?.min_deposit_type ??
+        ""
+    ).trim();
+  }, [
+    feeOptionForPreview?.payment_type,
+    feeOptionForPreview?.min_deposit_type,
+    selectedServiceOption?.payment_type,
+    selectedServiceOption?.min_deposit_type,
+    orderRow,
+  ]);
+
+  const editIsPerConsultancy = useMemo(
+    () => isQuotePerConsultancyPaymentType(editPaymentTypeKey),
+    [editPaymentTypeKey]
+  );
+
+  const editScheduleDurationUnit = useMemo(
+    () => getQuoteScheduleDurationUnit(editPaymentTypeKey),
+    [editPaymentTypeKey]
+  );
+
   const editEndMinTime = useMemo(
     () =>
       scheduleEndTimeMinAfterStart(String(form.requested_time_from ?? "")),
@@ -936,13 +1003,60 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
   }, [formHydrated, form.service_price, editPaymentExtForCaps, orderRow]);
 
   useEffect(() => {
+    if (!editIsPerConsultancy || !hasServiceSelected) return;
+    const d = String(form.requested_date ?? "").trim();
+    const tFrom = String(form.requested_time_from ?? "").trim();
+    const dTo = String(form.requested_date_to ?? "").trim();
+    const tTo = String(form.requested_time_to ?? "").trim();
+    if (!d || !tFrom) {
+      if (dTo) setValue("requested_date_to", "", { shouldValidate: false });
+      if (tTo) setValue("requested_time_to", "", { shouldValidate: false });
+      return;
+    }
+    const end = deriveQuoteScheduleEndFromDuration({
+      unit: editScheduleDurationUnit,
+      duration: 1,
+      startDate: d,
+      startTimeStorage: tFrom,
+    });
+    if (!end) {
+      if (dTo) setValue("requested_date_to", "", { shouldValidate: false });
+      if (tTo) setValue("requested_time_to", "", { shouldValidate: false });
+      return;
+    }
+    if (dTo !== end.to_date) {
+      setValue("requested_date_to", end.to_date, { shouldValidate: false });
+    }
+    if (tTo !== end.end_time_storage) {
+      setValue("requested_time_to", end.end_time_storage, {
+        shouldValidate: false,
+      });
+    }
+  }, [
+    editIsPerConsultancy,
+    hasServiceSelected,
+    editScheduleDurationUnit,
+    form.requested_date,
+    form.requested_date_to,
+    form.requested_time_from,
+    form.requested_time_to,
+    setValue,
+  ]);
+
+  useEffect(() => {
+    if (editIsPerConsultancy) return;
     const from = String(form.requested_time_from ?? "").trim();
     const to = String(form.requested_time_to ?? "").trim();
     if (!from || !to) return;
     if (!isScheduleEndAfterStartSameDay(from, to)) {
       setValue("requested_time_to", "", { shouldValidate: false });
     }
-  }, [form.requested_time_from, form.requested_time_to, setValue]);
+  }, [
+    editIsPerConsultancy,
+    form.requested_time_from,
+    form.requested_time_to,
+    setValue,
+  ]);
 
   /** Edit: allow any calendar date (existing quotes may be in the past). Create keeps today+. */
   const scheduleDateAllowAll = useCallback(() => true, []);
@@ -1039,6 +1153,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
         selectedAddressId,
         orderAddress: String(orderRow.address ?? "").trim(),
         hasServiceSelected,
+        skipEndTime: editIsPerConsultancy,
       }
     );
     if (missingRequired.length > 0) {
@@ -1077,6 +1192,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       }
     }
     if (
+      !editIsPerConsultancy &&
       !isScheduleEndAfterStartSameDay(
         String(data.requested_time_from ?? "").trim(),
         String(data.requested_time_to ?? "").trim()
@@ -1635,40 +1751,42 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                               filterTime={scheduleTimeAllowAll}
                             />
                           </Col>
-                          <Col
-                            xs={12}
-                            md={3}
-                            style={orderEditFieldShellStyle(endTimeReadOnly)}
-                          >
-                            <CustomTextFieldTimePicket
-                              label="End time"
-                              controlId="edit_requested_time_to"
-                              selectedTime={timeStorageOrNull(form.requested_time_to)}
-                              onChange={(date) =>
-                                setValue(
-                                  "requested_time_to",
-                                  toTimeStorageFromDate(date),
-                                  { shouldValidate: true }
-                                )
-                              }
-                              placeholderText="After start time"
-                              error={errors.requested_time_to}
-                              register={register}
-                              validation={{ required: "End time is required" }}
-                              setValue={setValue}
-                              asCol={false}
-                              labelSize={12}
-                              minTime={editEndMinTime}
-                              maxTime={scheduleEndTimeMaxForDay()}
-                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                            />
-                          </Col>
+                          {!editIsPerConsultancy ? (
+                            <Col
+                              xs={12}
+                              md={3}
+                              style={orderEditFieldShellStyle(endTimeReadOnly)}
+                            >
+                              <CustomTextFieldTimePicket
+                                label="End time"
+                                controlId="edit_requested_time_to"
+                                selectedTime={timeStorageOrNull(form.requested_time_to)}
+                                onChange={(date) =>
+                                  setValue(
+                                    "requested_time_to",
+                                    toTimeStorageFromDate(date),
+                                    { shouldValidate: true }
+                                  )
+                                }
+                                placeholderText="After start time"
+                                error={errors.requested_time_to}
+                                register={register}
+                                validation={{ required: "End time is required" }}
+                                setValue={setValue}
+                                asCol={false}
+                                labelSize={12}
+                                minTime={editEndMinTime}
+                                maxTime={scheduleEndTimeMaxForDay()}
+                                timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
+                              />
+                            </Col>
+                          ) : null}
                         </>
                       ) : (
                         <>
                           <Col
                             xs={12}
-                            md={4}
+                            md={editIsPerConsultancy ? 6 : 4}
                             style={orderEditFieldShellStyle(fromDateReadOnly)}
                           >
                             <CustomTextFieldDatePicket
@@ -1694,7 +1812,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                           </Col>
                           <Col
                             xs={12}
-                            md={4}
+                            md={editIsPerConsultancy ? 6 : 4}
                             style={orderEditFieldShellStyle(startTimeReadOnly)}
                           >
                             <CustomTextFieldTimePicket
@@ -1719,34 +1837,36 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                               filterTime={scheduleTimeAllowAll}
                             />
                           </Col>
-                          <Col
-                            xs={12}
-                            md={4}
-                            style={orderEditFieldShellStyle(endTimeReadOnly)}
-                          >
-                            <CustomTextFieldTimePicket
-                              label="End time"
-                              controlId="edit_requested_time_to"
-                              selectedTime={timeStorageOrNull(form.requested_time_to)}
-                              onChange={(date) =>
-                                setValue(
-                                  "requested_time_to",
-                                  toTimeStorageFromDate(date),
-                                  { shouldValidate: true }
-                                )
-                              }
-                              placeholderText="After start time"
-                              error={errors.requested_time_to}
-                              register={register}
-                              validation={{ required: "End time is required" }}
-                              setValue={setValue}
-                              asCol={false}
-                              labelSize={12}
-                              minTime={editEndMinTime}
-                              maxTime={scheduleEndTimeMaxForDay()}
-                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                            />
-                          </Col>
+                          {!editIsPerConsultancy ? (
+                            <Col
+                              xs={12}
+                              md={4}
+                              style={orderEditFieldShellStyle(endTimeReadOnly)}
+                            >
+                              <CustomTextFieldTimePicket
+                                label="End time"
+                                controlId="edit_requested_time_to"
+                                selectedTime={timeStorageOrNull(form.requested_time_to)}
+                                onChange={(date) =>
+                                  setValue(
+                                    "requested_time_to",
+                                    toTimeStorageFromDate(date),
+                                    { shouldValidate: true }
+                                  )
+                                }
+                                placeholderText="After start time"
+                                error={errors.requested_time_to}
+                                register={register}
+                                validation={{ required: "End time is required" }}
+                                setValue={setValue}
+                                asCol={false}
+                                labelSize={12}
+                                minTime={editEndMinTime}
+                                maxTime={scheduleEndTimeMaxForDay()}
+                                timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
+                              />
+                            </Col>
+                          ) : null}
                         </>
                       )}
                     </Row>

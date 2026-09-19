@@ -214,14 +214,66 @@ export type PartnerServiceApiRow = {
   category_id?:
     | string
     | null
-    | { _id?: string; name?: string };
+    | { _id?: string; name?: string; is_active?: boolean };
   service_id?:
     | string
     | null
-    | { _id?: string; name?: string };
+    | { _id?: string; name?: string; is_active?: boolean };
   description?: string | null;
   price?: number | string | null;
+  /** Partner-level on/off for this service assignment. */
+  is_active?: boolean | string | number | null;
+  category_is_active?: boolean | string | number | null;
+  /** Grouped save/GET shape: `{ category_id, is_active, services: [...] }`. */
+  services?: PartnerServiceApiRow[] | null;
 };
+
+function partnerServiceRowIsActive(row: PartnerServiceApiRow): boolean {
+  const asInactive = (value: unknown): boolean =>
+    value === false ||
+    value === 0 ||
+    String(value).toLowerCase() === "false";
+
+  const rec = row as Record<string, unknown>;
+  if (asInactive(rec.category_is_active)) return false;
+  const catRef = row.category_id;
+  if (catRef != null && typeof catRef === "object") {
+    if (asInactive((catRef as { is_active?: unknown }).is_active)) return false;
+  }
+  if (asInactive(row.is_active)) return false;
+  const svcRef = row.service_id;
+  if (svcRef != null && typeof svcRef === "object") {
+    if (asInactive((svcRef as { is_active?: unknown }).is_active)) return false;
+  }
+  return true;
+}
+
+function flattenPartnerServiceRows(
+  partnerServices: PartnerServiceApiRow[] | null | undefined
+): PartnerServiceApiRow[] {
+  if (!Array.isArray(partnerServices) || partnerServices.length === 0) {
+    return [];
+  }
+  const first = partnerServices[0] as PartnerServiceApiRow;
+  if (Array.isArray(first?.services)) {
+    const flat: PartnerServiceApiRow[] = [];
+    for (const cat of partnerServices) {
+      const catActive = partnerServiceRowIsActive(cat);
+      const nested = Array.isArray(cat.services) ? cat.services : [];
+      for (const svc of nested) {
+        flat.push({
+          ...svc,
+          category_id: svc.category_id ?? cat.category_id,
+          category_is_active: catActive,
+          is_active:
+            catActive && partnerServiceRowIsActive(svc) ? true : false,
+        });
+      }
+    }
+    return flat;
+  }
+  return partnerServices;
+}
 
 function nestedRefId(
   ref: string | { _id?: string; name?: string } | null | undefined
@@ -245,7 +297,8 @@ function nestedRefName(
 export function buildViewCategoryServiceGroupsFromPartnerServices(
   partnerServices: PartnerServiceApiRow[] | null | undefined
 ): ViewCategoryServicesGroup[] {
-  if (!Array.isArray(partnerServices) || partnerServices.length === 0) {
+  const flatRows = flattenPartnerServiceRows(partnerServices);
+  if (flatRows.length === 0) {
     return [];
   }
 
@@ -255,7 +308,7 @@ export function buildViewCategoryServiceGroupsFromPartnerServices(
   >();
   const insertOrder: string[] = [];
 
-  for (const ps of partnerServices) {
+  for (const ps of flatRows) {
     const cid = nestedRefId(ps.category_id) || UNCATEGORIZED_KEY;
     const catLabel = nestedRefName(ps.category_id, cid);
     const sid = nestedRefId(ps.service_id);
@@ -297,22 +350,38 @@ export type PartnerCatalogNameSource = {
   partner_services?: PartnerServiceApiRow[] | null;
   service_names?: string[] | null;
   service_ids?: string[] | null;
+  service_is_active?: Array<boolean | string | number | null> | null;
   ["partner-services"]?: PartnerServiceApiRow[] | null;
+};
+
+export type PartnerProvidedServiceNameItem = {
+  name: string;
+  isActive: boolean;
 };
 
 /** Unique display names of services this partner provides (catalog rows / name lists). */
 export function collectPartnerProvidedServiceNames(
   source: PartnerCatalogNameSource | null | undefined
-): { names: string[]; unresolvedIds: string[] } {
+): {
+  names: string[];
+  items: PartnerProvidedServiceNameItem[];
+  unresolvedIds: string[];
+  unresolvedActiveById: Record<string, boolean>;
+} {
   const seenName = new Set<string>();
   const names: string[] = [];
+  const items: PartnerProvidedServiceNameItem[] = [];
   const unresolved = new Set<string>();
+  const unresolvedActiveById: Record<string, boolean> = {};
   const resolvedIds = new Set<string>();
 
-  const addName = (raw: string, serviceId?: string) => {
+  const addItem = (raw: string, isActive: boolean, serviceId?: string) => {
     const n = String(raw ?? "").trim();
     if (isPlaceholderServiceName(n, serviceId)) {
-      if (serviceId) unresolved.add(serviceId);
+      if (serviceId) {
+        unresolved.add(serviceId);
+        unresolvedActiveById[serviceId] = isActive;
+      }
       return;
     }
     const key = n.toLowerCase();
@@ -320,25 +389,43 @@ export function collectPartnerProvidedServiceNames(
     if (seenName.has(key)) return;
     seenName.add(key);
     names.push(n);
+    items.push({ name: n, isActive });
   };
 
   const partnerServices =
     source?.partner_services ?? source?.["partner-services"] ?? null;
-  const groups =
-    buildViewCategoryServiceGroupsFromPartnerServices(partnerServices);
-  for (const g of groups) {
-    for (const row of g.rows) {
-      addName(row.name, row.serviceId);
-    }
+  const flatRows = flattenPartnerServiceRows(partnerServices);
+  for (const ps of flatRows) {
+    const sid = nestedRefId(ps.service_id);
+    const svcName = nestedRefName(ps.service_id, sid);
+    addItem(svcName, partnerServiceRowIsActive(ps), sid || undefined);
   }
 
   const listedNames = source?.service_names ?? [];
-  for (const n of listedNames) addName(String(n ?? ""));
+  const listedActive = source?.service_is_active ?? [];
+  listedNames.forEach((n, index) => {
+    const activeFlag = listedActive[index];
+    const isActive =
+      activeFlag === false ||
+      activeFlag === 0 ||
+      String(activeFlag).toLowerCase() === "false"
+        ? false
+        : true;
+    addItem(String(n ?? ""), isActive);
+  });
 
   for (const raw of source?.service_ids ?? []) {
     const id = String(raw ?? "").trim();
-    if (id && !resolvedIds.has(id)) unresolved.add(id);
+    if (id && !resolvedIds.has(id)) {
+      unresolved.add(id);
+      if (!(id in unresolvedActiveById)) unresolvedActiveById[id] = true;
+    }
   }
 
-  return { names, unresolvedIds: Array.from(unresolved) };
+  return {
+    names,
+    items,
+    unresolvedIds: Array.from(unresolved),
+    unresolvedActiveById,
+  };
 }

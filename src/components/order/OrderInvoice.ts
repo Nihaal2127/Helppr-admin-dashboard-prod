@@ -2,15 +2,17 @@
  * Order tax-invoice PDF (html2pdf). UI layer — not part of lib/order API module.
  */
 import html2pdf from "html2pdf.js";
-import { formatDate, formatUtcToLocalTime } from "../../helper/utility";
+import { formatDate } from "../../helper/utility";
 import logoDark from "../../assets/images/helper-logo.png";
 import { AppConstant } from "../../lib/global/AppConstant";
+import { paymentMethodLabel } from "../../lib/global/paymentAndCurrency";
 import { extractMinDepositTypeKey } from "../../lib/service/serviceMinDepositDisplay";
 import {
   fetchOrderById,
+  formatServiceScheduleLine,
+  getOrderServiceAddress,
   OrderItemModel,
   OrderModel,
-  OrderPaymentModeEnum,
   OrderStatusEnum,
 } from "../../lib/order/orders";
 
@@ -37,6 +39,33 @@ function isOrderItemPerConsultancy(item: OrderItemModel): boolean {
   );
 }
 
+/** Resolve cash/card/etc. — not payment status (`payment_mode_id`). */
+function orderInvoicePaymentMethodLabel(order: OrderModel): string {
+  const rec = order as unknown as Record<string, unknown>;
+  const payments = Array.isArray(order.order_payments)
+    ? order.order_payments
+    : [];
+  const paidRow = payments.find((p) => {
+    const row = p as Record<string, unknown>;
+    const method = String(row.payment_method ?? row.type ?? "")
+      .trim()
+      .toLowerCase();
+    if (!method || method === "refund") return false;
+    const amt = Number(row.amount ?? row.paid_amount ?? 0);
+    return Number.isFinite(amt) ? amt > 0 : true;
+  }) as Record<string, unknown> | undefined;
+
+  const raw =
+    order.payment_mode ||
+    rec.customer_payment_method ||
+    paidRow?.payment_method ||
+    paidRow?.type ||
+    "";
+  const label = paymentMethodLabel(String(raw ?? "").trim());
+  if (!label || label === "—" || label === "-") return "-";
+  return label;
+}
+
 export function orderInvoiceHtml(invoiceData: OrderModel): string {
   const items = Array.isArray(invoiceData.service_items)
     ? invoiceData.service_items
@@ -45,20 +74,27 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
   const isPerConsultancyInvoice =
     items.length > 0 && items.every((item) => isOrderItemPerConsultancy(item));
 
+  const serviceAddressHtml = (() => {
+    const full = getOrderServiceAddress(invoiceData);
+    if (!full || full === "-") return "-";
+    return full
+      .split(/\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("<br />");
+  })();
+
+  const paymentMethodHtml = orderInvoicePaymentMethodLabel(invoiceData);
+
   const itemRowsHtml = items
     .map((item, index) => {
-      const dateLabel = formatDate(item.service_date ? item.service_date : "");
-      const fromLabel = formatUtcToLocalTime(item.service_from_time);
+      const schedule = formatServiceScheduleLine(item, invoiceData);
       const priceLabel = `${AppConstant.currencySymbol} ${Number(
         item.sub_total ?? 0
       ).toFixed(2)}`;
       const name = item.service_info?.name ?? "";
 
       if (isPerConsultancyInvoice) {
-        const schedule =
-          dateLabel && fromLabel && fromLabel !== "-"
-            ? `${dateLabel}, ${fromLabel}`
-            : dateLabel || fromLabel || "-";
         return `
                 <tr>
                   <td class="col-num">${index + 1}</td>
@@ -69,15 +105,20 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
       }
 
       const omitTo = isOrderItemPerConsultancy(item);
+      const scheduleParts = schedule.split(/,\s+/);
+      const dateLabel = scheduleParts[0] || "-";
+      const timePart = scheduleParts.slice(1).join(", ");
+      const timeBits = timePart.split(/\s+to\s+/i);
+      const fromLabel = timeBits[0]?.trim() || "-";
+      const toLabel = omitTo ? "-" : timeBits[1]?.trim() || "-";
+
       return `
                 <tr>
                   <td class="col-num">${index + 1}</td>
                   <td class="col-date">${dateLabel}</td>
                   <td class="col-name">${name}</td>
                   <td class="col-time">${fromLabel}</td>
-                  <td class="col-time">${
-                    omitTo ? "-" : formatUtcToLocalTime(item.service_to_time)
-                  }</td>
+                  <td class="col-time">${toLabel}</td>
                   <td class="col-price">${priceLabel}</td>
                 </tr>`;
     })
@@ -136,6 +177,12 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
           text-align: center;
           margin: 0;
           padding: 6px 0;
+        }
+        .invoice-address {
+          white-space: pre-wrap;
+          word-break: break-word;
+          overflow-wrap: anywhere;
+          line-height: 1.45;
         }
         .items-table {
           width: 100%;
@@ -244,17 +291,14 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
                   ? '<span style="color: green;">Paid</span>'
                   : '<span style="color: red;">Unpaid</span>'
               }<br />
-              <strong>Payment Method:</strong> ${
-                OrderPaymentModeEnum.get(Number(invoiceData.payment_mode_id))
-                  ?.label ?? "-"
-              }<br />
+              <strong>Payment Method:</strong> ${paymentMethodHtml}<br />
             </div>
             <div style="clear: both;"></div>
           </div>
         </section>
         <section class="invoice-section">
           <h2>Service Address</h2>
-          ${invoiceData?.address ?? "-"}<br />
+          <div class="invoice-address">${serviceAddressHtml}</div>
         </section>
         <section class="invoice-section">
           <h2>User Information</h2>

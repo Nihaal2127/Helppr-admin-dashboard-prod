@@ -16,7 +16,7 @@ import {
 
 export { resolveExistingImageSrc };
 
-/** Recommended upload dimensions — center-cropped to this square when needed. */
+/** Recommended upload dimensions (shown as guidance only). */
 const RECOMMENDED_IMAGE_SIZE_PX = 375;
 const RECOMMENDED_ASPECT_RATIO = "1:1";
 
@@ -35,13 +35,13 @@ interface CustomImageUploaderProps {
   compact?: boolean;
   /** Omit the built-in label (use an external label in the parent row). */
   hideLabel?: boolean;
-  /** Center-crop uploads to this size (default 375×375). */
+  /** Preview / recommended size guidance (default 375×375). File is uploaded as-is. */
   outputSize?: ImageUploaderOutputSize;
   /** Optional size guidance shown in the uploader help text. */
   sizeHint?: string;
   /**
    * Verification & Documents: accept any file type (PDF, etc.) up to 512 KB.
-   * Skips image crop/normalization. Profile photos keep the default image-only path.
+   * Profile photos keep the default image-only path.
    */
   allowAnyFile?: boolean;
 }
@@ -148,7 +148,6 @@ function ImageUploadGuidelines({
         formats,
         `Max size: ${maxKb} KB`,
         sizeHint ?? `Recommended: ${outputWidth} × ${outputHeight} px`,
-        "Other sizes will be center-cropped automatically",
       ];
 
   return (
@@ -163,103 +162,6 @@ function ImageUploadGuidelines({
         <div key={line}>• {line}</div>
       ))}
     </div>
-  );
-}
-
-function canvasToFile(
-  canvas: HTMLCanvasElement,
-  fileName: string,
-  mime: string,
-  quality?: number
-): Promise<File> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) {
-          reject(new Error("Could not encode image"));
-          return;
-        }
-        resolve(new File([blob], fileName, { type: mime }));
-      },
-      mime,
-      quality
-    );
-  });
-}
-
-async function normalizeImageToOutputSize(
-  file: File,
-  targetWidth: number,
-  targetHeight: number
-): Promise<File> {
-  const bitmap = await createImageBitmap(file);
-  try {
-    const targetAspect = targetWidth / targetHeight;
-    const sourceAspect = bitmap.width / bitmap.height;
-    let sw: number;
-    let sh: number;
-    let sx: number;
-    let sy: number;
-    if (sourceAspect > targetAspect) {
-      sh = bitmap.height;
-      sw = sh * targetAspect;
-      sx = (bitmap.width - sw) / 2;
-      sy = 0;
-    } else {
-      sw = bitmap.width;
-      sh = sw / targetAspect;
-      sx = 0;
-      sy = (bitmap.height - sh) / 2;
-    }
-
-    const canvas = document.createElement("canvas");
-    canvas.width = targetWidth;
-    canvas.height = targetHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas unavailable");
-
-    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight);
-
-    const baseName = file.name.replace(/\.[^.]+$/, "") || "image";
-    const maxBytes = getSupportedImageMaxSizeBytes();
-    const preferPng = file.type === "image/png";
-
-    if (preferPng) {
-      const pngFile = await canvasToFile(
-        canvas,
-        `${baseName}.png`,
-        "image/png"
-      );
-      if (pngFile.size <= maxBytes) return pngFile;
-    }
-
-    let quality = 0.92;
-    let jpegFile = await canvasToFile(
-      canvas,
-      `${baseName}.jpg`,
-      "image/jpeg",
-      quality
-    );
-    while (jpegFile.size > maxBytes && quality > 0.45) {
-      quality -= 0.08;
-      jpegFile = await canvasToFile(
-        canvas,
-        `${baseName}.jpg`,
-        "image/jpeg",
-        quality
-      );
-    }
-    return jpegFile;
-  } finally {
-    bitmap.close();
-  }
-}
-
-async function normalizeImageToRecommendedSize(file: File): Promise<File> {
-  return normalizeImageToOutputSize(
-    file,
-    RECOMMENDED_IMAGE_SIZE_PX,
-    RECOMMENDED_IMAGE_SIZE_PX
   );
 }
 
@@ -438,28 +340,7 @@ const CustomImageUploader: React.FC<CustomImageUploaderProps> = ({
       return;
     }
 
-    try {
-      const processed = outputSize
-        ? await normalizeImageToOutputSize(
-            selectedFile,
-            outputWidth,
-            outputHeight
-          )
-        : await normalizeImageToRecommendedSize(selectedFile);
-      if (processed.size > getSupportedImageMaxSizeBytes()) {
-        showErrorAlert(
-          `Image is too large after cropping to ${outputWidth}×${outputHeight} px. Use a smaller source file (max ${maxKb} KB).`
-        );
-        const input = inputRefs.current[index];
-        if (input) input.value = "";
-        return;
-      }
-      handleFileChange(index, processed);
-    } catch {
-      showErrorAlert("Could not process image. Try another file.");
-      const input = inputRefs.current[index];
-      if (input) input.value = "";
-    }
+    handleFileChange(index, selectedFile);
   };
 
   return (

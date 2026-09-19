@@ -600,7 +600,7 @@ export const fetchUser = async (
       ? response.data.records
       : [];
     const users = rawRecords.map((row: UserModel) =>
-      normalizeUserListRow(row)
+      normalizeUserListRow(row, type)
     ) as UserModel[];
 
     return {
@@ -618,24 +618,14 @@ export const fetchUser = async (
   }
 };
 
-/** Display/sort count for Users "Service Taken" / Partners "Available Services". */
-function userServiceCount(user: UserModel | Record<string, unknown>): number {
+/** Partners "Available Services" — prefer `no_of_services`, then catalog arrays. */
+function partnerAvailableServiceCount(
+  user: UserModel | Record<string, unknown>
+): number {
   const row = user as Record<string, unknown>;
 
-  const hasExplicit =
-    row.no_of_services != null ||
-    row.total_service != null ||
-    row.total_services != null ||
-    row.service_taken != null;
-
-  if (hasExplicit) {
-    const n = Number(
-      row.no_of_services ??
-        row.total_service ??
-        row.total_services ??
-        row.service_taken ??
-        0
-    );
+  if (row.no_of_services != null) {
+    const n = Number(row.no_of_services);
     if (Number.isFinite(n)) return n;
   }
 
@@ -652,13 +642,34 @@ function userServiceCount(user: UserModel | Record<string, unknown>): number {
   return 0;
 }
 
-function normalizeUserListRow(row: UserModel): UserModel {
-  const count = userServiceCount(row);
-  return {
-    ...row,
-    total_service: count,
-    no_of_services: count,
-  };
+/** Users "Service Taken" — API `total_service` (not `no_of_services`). */
+function customerServiceTakenCount(
+  user: UserModel | Record<string, unknown>
+): number {
+  const row = user as Record<string, unknown>;
+  const n = Number(
+    row.total_service ?? row.total_services ?? row.service_taken ?? 0
+  );
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeUserListRow(row: UserModel, type: number): UserModel {
+  if (type === APP_USER_TYPE.CUSTOMER) {
+    const count = customerServiceTakenCount(row);
+    return {
+      ...row,
+      total_service: count,
+    };
+  }
+  if (type === APP_USER_TYPE.PARTNER) {
+    const count = partnerAvailableServiceCount(row);
+    return {
+      ...row,
+      no_of_services: count,
+      total_service: count,
+    };
+  }
+  return row;
 }
 
 function userSelectLabel(user: UserModel): string {
