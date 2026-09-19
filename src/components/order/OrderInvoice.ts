@@ -5,74 +5,91 @@ import html2pdf from "html2pdf.js";
 import { formatDate } from "../../helper/utility";
 import logoDark from "../../assets/images/helper-logo.png";
 import { AppConstant } from "../../lib/global/AppConstant";
-import { paymentMethodLabel } from "../../lib/global/paymentAndCurrency";
-import { extractMinDepositTypeKey } from "../../lib/service/serviceMinDepositDisplay";
+import {
+  normalizePaymentMethod,
+  paymentMethodLabel,
+  paymentRowEffectiveAmount,
+} from "../../lib/global/paymentAndCurrency";
 import {
   fetchOrderById,
   formatServiceScheduleLine,
   getOrderServiceAddress,
+  getPrimaryServiceItem,
+  resolvePaymentExtension,
   OrderItemModel,
   OrderModel,
   OrderStatusEnum,
 } from "../../lib/order/orders";
 
-function orderItemPaymentType(item: OrderItemModel): string {
-  const info = item.service_info as
-    | (NonNullable<OrderItemModel["service_info"]> & {
-        service?: { payment_type?: string; min_deposit_type?: string };
-      })
-    | undefined
-    | null;
-  const nested = info?.service;
-  return String(
-    info?.payment_type ??
-      info?.min_deposit_type ??
-      nested?.payment_type ??
-      nested?.min_deposit_type ??
-      ""
-  ).trim();
-}
-
-function isOrderItemPerConsultancy(item: OrderItemModel): boolean {
-  return (
-    extractMinDepositTypeKey(orderItemPaymentType(item)) === "per_consultancy"
-  );
-}
-
-/** Resolve cash/card/etc. — not payment status (`payment_mode_id`). */
+/**
+ * Prefer concrete cash/card/UPI/bank from payment rows over a generic
+ * `payment_mode` like "Online" when a more specific method exists.
+ */
 function orderInvoicePaymentMethodLabel(order: OrderModel): string {
   const rec = order as unknown as Record<string, unknown>;
-  const payments = Array.isArray(order.order_payments)
+  const primary = getPrimaryServiceItem(order);
+  const ext = resolvePaymentExtension(order, primary);
+  const paidExtRows = (ext.customerPayments ?? []).filter(
+    (r) => paymentRowEffectiveAmount(r) > 0.009
+  );
+
+  const candidates: unknown[] = [];
+  for (const r of paidExtRows) {
+    if (r.type) candidates.push(r.type);
+  }
+  for (const r of ext.customerPayments ?? []) {
+    if (r.type) candidates.push(r.type);
+  }
+
+  const apiPayments = Array.isArray(order.order_payments)
     ? order.order_payments
     : [];
-  const paidRow = payments.find((p) => {
+  for (const p of apiPayments) {
     const row = p as Record<string, unknown>;
     const method = String(row.payment_method ?? row.type ?? "")
       .trim()
       .toLowerCase();
-    if (!method || method === "refund") return false;
-    const amt = Number(row.amount ?? row.paid_amount ?? 0);
-    return Number.isFinite(amt) ? amt > 0 : true;
-  }) as Record<string, unknown> | undefined;
+    if (!method || method === "refund") continue;
+    candidates.push(row.payment_method ?? row.type);
+  }
 
-  const raw =
-    order.payment_mode ||
-    rec.customer_payment_method ||
-    paidRow?.payment_method ||
-    paidRow?.type ||
-    "";
-  const label = paymentMethodLabel(String(raw ?? "").trim());
-  if (!label || label === "—" || label === "-") return "-";
-  return label;
+  candidates.push(
+    rec.customer_payment_method,
+    order.payment_mode,
+    rec.payment_method
+  );
+
+  const specific: string[] = [];
+  const generic: string[] = [];
+  for (const raw of candidates) {
+    const label = paymentMethodLabel(String(raw ?? "").trim());
+    if (!label || label === "—" || label === "-") continue;
+    const slug = normalizePaymentMethod(String(raw ?? "").trim());
+    if (slug === "online") generic.push(label);
+    else specific.push(label);
+  }
+
+  return specific[0] || generic[0] || "-";
+}
+
+/** Match Order info: range as `From: … To: …`; per_consultancy as single date/time. */
+function formatInvoiceServiceTimeHtml(
+  item: OrderItemModel,
+  order: OrderModel
+): string {
+  const scheduled = formatServiceScheduleLine(item, order);
+  if (!scheduled || scheduled === "-") return "-";
+  return scheduled
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function orderInvoiceHtml(invoiceData: OrderModel): string {
   const items = Array.isArray(invoiceData.service_items)
     ? invoiceData.service_items
     : [];
-  /** Per-consultancy: single Schedule column (date + start time), no To Time. */
-  const isPerConsultancyInvoice =
-    items.length > 0 && items.every((item) => isOrderItemPerConsultancy(item));
 
   const serviceAddressHtml = (() => {
     const full = getOrderServiceAddress(invoiceData);
@@ -88,57 +105,27 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
 
   const itemRowsHtml = items
     .map((item, index) => {
-      const schedule = formatServiceScheduleLine(item, invoiceData);
+      const serviceTime = formatInvoiceServiceTimeHtml(item, invoiceData);
       const priceLabel = `${AppConstant.currencySymbol} ${Number(
         item.sub_total ?? 0
       ).toFixed(2)}`;
       const name = item.service_info?.name ?? "";
 
-      if (isPerConsultancyInvoice) {
-        return `
-                <tr>
-                  <td class="col-num">${index + 1}</td>
-                  <td class="col-schedule">${schedule}</td>
-                  <td class="col-name">${name}</td>
-                  <td class="col-price">${priceLabel}</td>
-                </tr>`;
-      }
-
-      const omitTo = isOrderItemPerConsultancy(item);
-      const scheduleParts = schedule.split(/,\s+/);
-      const dateLabel = scheduleParts[0] || "-";
-      const timePart = scheduleParts.slice(1).join(", ");
-      const timeBits = timePart.split(/\s+to\s+/i);
-      const fromLabel = timeBits[0]?.trim() || "-";
-      const toLabel = omitTo ? "-" : timeBits[1]?.trim() || "-";
-
       return `
                 <tr>
                   <td class="col-num">${index + 1}</td>
-                  <td class="col-date">${dateLabel}</td>
                   <td class="col-name">${name}</td>
-                  <td class="col-time">${fromLabel}</td>
-                  <td class="col-time">${toLabel}</td>
+                  <td class="col-schedule">${serviceTime}</td>
                   <td class="col-price">${priceLabel}</td>
                 </tr>`;
     })
     .join("");
 
-  const tableHeadHtml = isPerConsultancyInvoice
-    ? `
+  const tableHeadHtml = `
               <tr>
                 <th class="col-num">#</th>
-                <th class="col-schedule">Schedule</th>
                 <th class="col-name">Service Name</th>
-                <th class="col-price">Price</th>
-              </tr>`
-    : `
-              <tr>
-                <th class="col-num">#</th>
-                <th class="col-date">Service Date</th>
-                <th class="col-name">Service Name</th>
-                <th class="col-time">From Time</th>
-                <th class="col-time">To Time</th>
+                <th class="col-schedule">Service time</th>
                 <th class="col-price">Price</th>
               </tr>`;
 
@@ -208,13 +195,13 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
           color: #1A1A1A;
         }
         .items-table .col-num { width: 8%; }
-        .items-table .col-date { width: 18%; }
-        .items-table .col-schedule { width: 32%; }
-        .items-table .col-name { width: ${isPerConsultancyInvoice ? "40%" : "22%"}; text-align: left; }
-        .items-table .col-time { width: 14%; white-space: nowrap; }
-        .items-table .col-price { width: ${isPerConsultancyInvoice ? "20%" : "14%"}; text-align: right; white-space: nowrap; }
+        .items-table .col-name { width: 28%; text-align: left; }
+        .items-table .col-schedule { width: 48%; text-align: left; }
+        .items-table .col-price { width: 16%; text-align: right; white-space: nowrap; }
         .items-table th.col-name,
+        .items-table th.col-schedule,
         .items-table th.col-price { text-align: center; }
+        .items-table td.col-schedule { text-align: left; }
         .summary-table {
           width: 100%;
           border-collapse: collapse;

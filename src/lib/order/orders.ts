@@ -1612,8 +1612,11 @@ export function formatServiceScheduleLine(
   const paymentType = String(
     primary.service_info?.payment_type ??
       primary.service_info?.min_deposit_type ??
+      (primary.service_info as { service_type?: string } | undefined)
+        ?.service_type ??
       nestedService?.payment_type ??
       nestedService?.min_deposit_type ??
+      nestedService?.service_type ??
       ""
   ).trim();
   const omitEndTime =
