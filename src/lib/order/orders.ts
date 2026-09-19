@@ -3152,8 +3152,17 @@ export function buildOrderEditAllUpdatePayload(input: {
   const primary = getPrimaryServiceItem(order);
   if (!primary) return null;
 
+  const fromYmdForMode = normalizeOrderApiDateYmd(form.requested_date);
+  const toYmdForMode =
+    normalizeOrderApiDateYmd(form.requested_date_to) || fromYmdForMode;
+  /** Multi-day duration (e.g. Per Day “No of days”) must use range metrics. */
+  const effectiveScheduleMode =
+    fromYmdForMode && toYmdForMode && toYmdForMode !== fromYmdForMode
+      ? "range"
+      : scheduleMode;
+
   const metrics = deriveOrderScheduleMetrics({
-    scheduleMode,
+    scheduleMode: effectiveScheduleMode,
     requested_date: form.requested_date,
     requested_date_to: form.requested_date_to,
     requested_time: form.requested_time,
@@ -3187,7 +3196,10 @@ export function buildOrderEditAllUpdatePayload(input: {
     form.requested_date,
     form.requested_time_from
   );
-  const toIso = scheduleStorageToIso(form.requested_date, form.requested_time_to);
+  const endDateYmd =
+    String(form.requested_date_to ?? "").trim() ||
+    String(form.requested_date ?? "").trim();
+  const toIso = scheduleStorageToIso(endDateYmd, form.requested_time_to);
 
   const lineUpdate: Record<string, unknown> = {
     partner_id: partnerId,

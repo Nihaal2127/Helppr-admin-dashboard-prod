@@ -22,6 +22,7 @@ import {
   mapRelatedCatalogToQuoteOptions,
   mergeQuoteServiceFeesForBreakdown,
 } from "../../services/quoteService";
+import { extractMinDepositTypeKey } from "../../lib/service/serviceMinDepositDisplay";
 import { fetchOrderById } from "../../services/orderService";
 import { createOrUpdateOrder } from "../../lib/order/orders";
 import type { OrderModel } from "../../lib/order/orders";
@@ -121,8 +122,10 @@ function collectMissingOrderEditRequiredFields(
     selectedAddressId: string;
     orderAddress: string;
     hasServiceSelected: boolean;
-    /** Per consultancy: start date/time only — end is auto-derived. */
+    /** Per consultancy / per day: end is auto-derived — do not require End time. */
     skipEndTime?: boolean;
+    /** Per day: No of days + start date/time (end date/time auto-derived). */
+    usePerDayDurationSchedule?: boolean;
   }
 ): MissingRequiredField[] {
   const missing: MissingRequiredField[] = [];
@@ -138,32 +141,54 @@ function collectMissingOrderEditRequiredFields(
   }
 
   if (opts.hasServiceSelected) {
-    if (!String(data.requested_date ?? "").trim()) {
-      missing.push({
-        field: "requested_date",
-        label: scheduleMode === "range" ? "From date" : "Date",
-      });
-    }
-    if (scheduleMode === "range" && !String(data.requested_date_to ?? "").trim()) {
-      missing.push({
-        field: "requested_date_to",
-        label: "To date",
-      });
-    }
-    if (!String(data.requested_time_from ?? "").trim()) {
-      missing.push({
-        field: "requested_time_from",
-        label: "Start time",
-      });
-    }
-    if (
-      !opts.skipEndTime &&
-      !String(data.requested_time_to ?? "").trim()
-    ) {
-      missing.push({
-        field: "requested_time_to",
-        label: "End time",
-      });
+    if (opts.usePerDayDurationSchedule) {
+      const dur = Number.parseInt(
+        String(data.schedule_duration ?? "").trim(),
+        10
+      );
+      if (!Number.isFinite(dur) || dur < 1) {
+        missing.push({ field: "schedule_duration", label: "No of days" });
+      }
+      if (!String(data.requested_date ?? "").trim()) {
+        missing.push({ field: "requested_date", label: "Start date" });
+      }
+      if (!String(data.requested_time_from ?? "").trim()) {
+        missing.push({
+          field: "requested_time_from",
+          label: "Start time",
+        });
+      }
+    } else {
+      if (!String(data.requested_date ?? "").trim()) {
+        missing.push({
+          field: "requested_date",
+          label: scheduleMode === "range" ? "From date" : "Date",
+        });
+      }
+      if (
+        scheduleMode === "range" &&
+        !String(data.requested_date_to ?? "").trim()
+      ) {
+        missing.push({
+          field: "requested_date_to",
+          label: "To date",
+        });
+      }
+      if (!String(data.requested_time_from ?? "").trim()) {
+        missing.push({
+          field: "requested_time_from",
+          label: "Start time",
+        });
+      }
+      if (
+        !opts.skipEndTime &&
+        !String(data.requested_time_to ?? "").trim()
+      ) {
+        missing.push({
+          field: "requested_time_to",
+          label: "End time",
+        });
+      }
     }
     const priceRaw = String(data.service_price ?? "").trim();
     const price = Number.parseFloat(priceRaw);
@@ -744,6 +769,11 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
     [editPaymentTypeKey]
   );
 
+  const editIsPerDay = useMemo(
+    () => extractMinDepositTypeKey(editPaymentTypeKey) === "per_day",
+    [editPaymentTypeKey]
+  );
+
   const editScheduleDurationUnit = useMemo(
     () => getQuoteScheduleDurationUnit(editPaymentTypeKey),
     [editPaymentTypeKey]
@@ -1003,19 +1033,23 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
   }, [formHydrated, form.service_price, editPaymentExtForCaps, orderRow]);
 
   useEffect(() => {
-    if (!editIsPerConsultancy || !hasServiceSelected) return;
+    if (!hasServiceSelected) return;
+    if (!editIsPerConsultancy && !editIsPerDay) return;
+    const dur = editIsPerConsultancy
+      ? 1
+      : Number.parseInt(String(form.schedule_duration ?? "").trim(), 10);
     const d = String(form.requested_date ?? "").trim();
     const tFrom = String(form.requested_time_from ?? "").trim();
     const dTo = String(form.requested_date_to ?? "").trim();
     const tTo = String(form.requested_time_to ?? "").trim();
-    if (!d || !tFrom) {
+    if (!Number.isFinite(dur) || dur < 1 || !d || !tFrom) {
       if (dTo) setValue("requested_date_to", "", { shouldValidate: false });
       if (tTo) setValue("requested_time_to", "", { shouldValidate: false });
       return;
     }
     const end = deriveQuoteScheduleEndFromDuration({
       unit: editScheduleDurationUnit,
-      duration: 1,
+      duration: dur,
       startDate: d,
       startTimeStorage: tFrom,
     });
@@ -1034,8 +1068,10 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
     }
   }, [
     editIsPerConsultancy,
+    editIsPerDay,
     hasServiceSelected,
     editScheduleDurationUnit,
+    form.schedule_duration,
     form.requested_date,
     form.requested_date_to,
     form.requested_time_from,
@@ -1044,7 +1080,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
   ]);
 
   useEffect(() => {
-    if (editIsPerConsultancy) return;
+    if (editIsPerConsultancy || editIsPerDay) return;
     const from = String(form.requested_time_from ?? "").trim();
     const to = String(form.requested_time_to ?? "").trim();
     if (!from || !to) return;
@@ -1053,6 +1089,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
     }
   }, [
     editIsPerConsultancy,
+    editIsPerDay,
     form.requested_time_from,
     form.requested_time_to,
     setValue,
@@ -1153,7 +1190,8 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
         selectedAddressId,
         orderAddress: String(orderRow.address ?? "").trim(),
         hasServiceSelected,
-        skipEndTime: editIsPerConsultancy,
+        skipEndTime: editIsPerConsultancy || editIsPerDay,
+        usePerDayDurationSchedule: editIsPerDay,
       }
     );
     if (missingRequired.length > 0) {
@@ -1181,7 +1219,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       return;
     }
 
-    if (scheduleMode === "range") {
+    if (scheduleMode === "range" && !editIsPerDay) {
       const cmp = compareIsoDateOnlyAsc(
         String(data.requested_date ?? "").trim(),
         String(data.requested_date_to ?? "").trim()
@@ -1193,6 +1231,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
     }
     if (
       !editIsPerConsultancy &&
+      !editIsPerDay &&
       !isScheduleEndAfterStartSameDay(
         String(data.requested_time_from ?? "").trim(),
         String(data.requested_time_to ?? "").trim()
@@ -1247,10 +1286,34 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       return;
     }
 
+    const scheduleForm: EditOrderFormValues = { ...data };
+    const effectiveScheduleMode =
+      editIsPerDay || editIsPerConsultancy ? "range" : scheduleMode;
+
+    if (editIsPerDay || editIsPerConsultancy) {
+      const dur = editIsPerConsultancy
+        ? 1
+        : Number.parseInt(String(data.schedule_duration ?? "").trim(), 10);
+      const d = String(data.requested_date ?? "").trim();
+      const tFrom = String(data.requested_time_from ?? "").trim();
+      if (Number.isFinite(dur) && dur >= 1 && d && tFrom) {
+        const end = deriveQuoteScheduleEndFromDuration({
+          unit: editScheduleDurationUnit,
+          duration: dur,
+          startDate: d,
+          startTimeStorage: tFrom,
+        });
+        if (end) {
+          scheduleForm.requested_date_to = end.to_date;
+          scheduleForm.requested_time_to = end.end_time_storage;
+        }
+      }
+    }
+
     const fullPayload = buildOrderEditAllUpdatePayload({
       order: orderRow,
-      form: data,
-      scheduleMode,
+      form: scheduleForm,
+      scheduleMode: effectiveScheduleMode,
       servicePrice: paymentExt?.serviceAmount ?? price,
       addressLine,
       selectedAddressId,
@@ -1670,7 +1733,118 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                   </Row>
                   <div className="add-quote-schedule-panel">
                     <Row className="gy-4 gx-md-5">
-                      {scheduleMode === "range" ? (
+                      {editIsPerDay ? (
+                        <>
+                          <Col
+                            xs={12}
+                            md={4}
+                            style={orderEditFieldShellStyle(fromDateReadOnly)}
+                          >
+                            <Form.Group controlId="edit_schedule_duration">
+                              <Form.Label className="fw-medium mb-1">
+                                <FieldLabelText
+                                  label="No of days"
+                                  required
+                                />
+                              </Form.Label>
+                              <Form.Control
+                                type="number"
+                                min={1}
+                                step={1}
+                                inputMode="numeric"
+                                disabled={fromDateReadOnly}
+                                className={`custom-form-input${
+                                  errors.schedule_duration ? " is-invalid" : ""
+                                }`}
+                                placeholder="Enter no of days"
+                                {...register("schedule_duration", {
+                                  required: "No of days is required",
+                                  min: {
+                                    value: 1,
+                                    message: "Must be at least 1",
+                                  },
+                                })}
+                              />
+                              {errors.schedule_duration ? (
+                                <div className="text-danger small mt-1">
+                                  {String(
+                                    (
+                                      errors.schedule_duration as {
+                                        message?: string;
+                                      }
+                                    )?.message ?? ""
+                                  )}
+                                </div>
+                              ) : null}
+                            </Form.Group>
+                          </Col>
+                          <Col
+                            xs={12}
+                            md={4}
+                            style={orderEditFieldShellStyle(fromDateReadOnly)}
+                          >
+                            <CustomTextFieldDatePicket
+                              label="Start date"
+                              controlId="edit_requested_date"
+                              selectedDate={form.requested_date || null}
+                              onChange={(date) => {
+                                const next = toIsoCalendarDate(date) ?? "";
+                                setValue("requested_date", next, {
+                                  shouldValidate: true,
+                                });
+                              }}
+                              register={
+                                register as unknown as UseFormRegister<AddQuoteFormValues>
+                              }
+                              setValue={
+                                setValue as (n: string, v: unknown) => void
+                              }
+                              asCol={false}
+                              labelSize={12}
+                              placeholderText="Start date"
+                              filterDate={scheduleDateAllowAll}
+                              required
+                              error={errors.requested_date}
+                              validation={{
+                                required: "Start date is required",
+                              }}
+                            />
+                          </Col>
+                          <Col
+                            xs={12}
+                            md={4}
+                            style={orderEditFieldShellStyle(startTimeReadOnly)}
+                          >
+                            <CustomTextFieldTimePicket
+                              label="Start time"
+                              controlId="edit_requested_time_from"
+                              selectedTime={timeStorageOrNull(
+                                form.requested_time_from
+                              )}
+                              onChange={(date) =>
+                                setValue(
+                                  "requested_time_from",
+                                  toTimeStorageFromDate(date),
+                                  { shouldValidate: true }
+                                )
+                              }
+                              placeholderText="Select start time"
+                              error={errors.requested_time_from}
+                              register={register}
+                              validation={{
+                                required: "Start time is required",
+                              }}
+                              setValue={setValue}
+                              asCol={false}
+                              labelSize={12}
+                              timeIntervals={
+                                SCHEDULE_TIME_PICKER_INTERVAL_MINUTES
+                              }
+                              filterTime={scheduleTimeAllowAll}
+                            />
+                          </Col>
+                        </>
+                      ) : scheduleMode === "range" ? (
                         <>
                           <Col
                             xs={12}

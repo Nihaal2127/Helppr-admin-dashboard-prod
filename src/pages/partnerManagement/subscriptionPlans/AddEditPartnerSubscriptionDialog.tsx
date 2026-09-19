@@ -494,10 +494,11 @@ const AddEditPartnerSubscriptionDialog: React.FC<AddEditPartnerSubscriptionDialo
           onSubmit={handleSubmit(onSubmitEvent, onSubmitInvalid)}
         >
           <Modal.Body
-            className="px-4 pb-4 pt-0"
+            className="px-4 pt-0"
             style={{
-              overflow: "visible",
-              maxHeight: "min(90vh, calc(100vh - 140px))",
+              overflowY: "auto",
+              maxHeight: "min(70vh, calc(100vh - 160px))",
+              paddingBottom: 24,
             }}
           >
             <div className="pt-1">
@@ -648,12 +649,12 @@ const AddEditPartnerSubscriptionDialog: React.FC<AddEditPartnerSubscriptionDialo
                   </Col>
                 )}
 
-                <Col md={12}>
-                  <Form.Group style={{ marginTop: "10px" }}>
-                    <Form.Label className="fw-medium mb-1">Status</Form.Label>
+                <Col md={12} className="pb-1">
+                  <Form.Group className="mb-0 mt-2">
+                    <Form.Label className="fw-medium mb-2">Status</Form.Label>
                     <div
-                      className="d-flex"
-                      style={{ flexDirection: "row", gap: "8px" }}
+                      className="d-flex align-items-center"
+                      style={{ flexDirection: "row", gap: "16px", minHeight: 28 }}
                     >
                       <Form.Check
                         type="radio"
@@ -669,7 +670,7 @@ const AddEditPartnerSubscriptionDialog: React.FC<AddEditPartnerSubscriptionDialo
                           });
                           setViewData((prev) => ({ ...prev, is_active: true }));
                         }}
-                        className="custom-radio-check"
+                        className="custom-radio-check mb-0"
                       />
                       <Form.Check
                         type="radio"
@@ -688,7 +689,7 @@ const AddEditPartnerSubscriptionDialog: React.FC<AddEditPartnerSubscriptionDialo
                             is_active: false,
                           }));
                         }}
-                        className="custom-radio-check"
+                        className="custom-radio-check mb-0"
                       />
                     </div>
                   </Form.Group>
