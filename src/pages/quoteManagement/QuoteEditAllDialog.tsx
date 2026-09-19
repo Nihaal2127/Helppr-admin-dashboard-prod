@@ -702,28 +702,34 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     return merged ?? apiServiceFees;
   }, [selectedServiceOption, selectedPartnerCatalogRecord, serviceId, apiServiceFees]);
 
-  const editScheduleDurationUnit = useMemo(
+  const editPaymentTypeKey = useMemo(
     () =>
-      getQuoteScheduleDurationUnit(
-        String(feeOptionForPreview?.payment_type ?? "").trim()
-      ),
-    [feeOptionForPreview?.payment_type]
+      String(
+        feeOptionForPreview?.payment_type ??
+          feeOptionForPreview?.min_deposit_type ??
+          ""
+      ).trim(),
+    [
+      feeOptionForPreview?.payment_type,
+      feeOptionForPreview?.min_deposit_type,
+    ]
+  );
+
+  const editScheduleDurationUnit = useMemo(
+    () => getQuoteScheduleDurationUnit(editPaymentTypeKey),
+    [editPaymentTypeKey]
   );
 
   const editIsPerConsultancy = useMemo(
-    () =>
-      isQuotePerConsultancyPaymentType(
-        String(feeOptionForPreview?.payment_type ?? "").trim()
-      ),
-    [feeOptionForPreview?.payment_type]
+    () => isQuotePerConsultancyPaymentType(editPaymentTypeKey),
+    [editPaymentTypeKey]
   );
 
   const editBillingHint = useMemo(() => {
     if (!showQuoteScheduleSection) return "";
-    const raw = String(feeOptionForPreview?.payment_type ?? "").trim();
-    if (!raw) return "";
-    return quoteScheduleBillingHintText(raw);
-  }, [showQuoteScheduleSection, feeOptionForPreview?.payment_type]);
+    if (!editPaymentTypeKey) return "";
+    return quoteScheduleBillingHintText(editPaymentTypeKey);
+  }, [showQuoteScheduleSection, editPaymentTypeKey]);
 
   const editScheduleDurationLabel = quoteScheduleDurationFieldLabel(
     editScheduleDurationUnit

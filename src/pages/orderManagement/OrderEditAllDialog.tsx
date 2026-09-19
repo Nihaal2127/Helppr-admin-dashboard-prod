@@ -19,6 +19,7 @@ import {
   getQuoteScheduleDurationUnit,
   isQuotePerConsultancyPaymentType,
   deriveQuoteScheduleEndFromDuration,
+  quoteScheduleDurationFieldLabel,
   mapRelatedCatalogToQuoteOptions,
   mergeQuoteServiceFeesForBreakdown,
 } from "../../services/quoteService";
@@ -122,10 +123,15 @@ function collectMissingOrderEditRequiredFields(
     selectedAddressId: string;
     orderAddress: string;
     hasServiceSelected: boolean;
-    /** Per consultancy / per day: end is auto-derived — do not require End time. */
+    /** Per consultancy / duration schedule: end is auto-derived. */
     skipEndTime?: boolean;
-    /** Per day: No of days + start date/time (end date/time auto-derived). */
-    usePerDayDurationSchedule?: boolean;
+    /**
+     * Simplified schedule: optional duration + start date/time
+     * (per hour / day / month). Per consultancy skips duration.
+     */
+    useDurationSchedule?: boolean;
+    skipScheduleDuration?: boolean;
+    durationFieldLabel?: string;
   }
 ): MissingRequiredField[] {
   const missing: MissingRequiredField[] = [];
@@ -141,13 +147,18 @@ function collectMissingOrderEditRequiredFields(
   }
 
   if (opts.hasServiceSelected) {
-    if (opts.usePerDayDurationSchedule) {
-      const dur = Number.parseInt(
-        String(data.schedule_duration ?? "").trim(),
-        10
-      );
-      if (!Number.isFinite(dur) || dur < 1) {
-        missing.push({ field: "schedule_duration", label: "No of days" });
+    if (opts.useDurationSchedule) {
+      if (!opts.skipScheduleDuration) {
+        const dur = Number.parseInt(
+          String(data.schedule_duration ?? "").trim(),
+          10
+        );
+        if (!Number.isFinite(dur) || dur < 1) {
+          missing.push({
+            field: "schedule_duration",
+            label: opts.durationFieldLabel || "No of days",
+          });
+        }
       }
       if (!String(data.requested_date ?? "").trim()) {
         missing.push({ field: "requested_date", label: "Start date" });
@@ -769,14 +780,24 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
     [editPaymentTypeKey]
   );
 
-  const editIsPerDay = useMemo(
-    () => extractMinDepositTypeKey(editPaymentTypeKey) === "per_day",
-    [editPaymentTypeKey]
-  );
+  /** Per hour / day / month / consultancy — simplified schedule (no End time UI). */
+  const editUsesSimplifiedSchedule = useMemo(() => {
+    const key = extractMinDepositTypeKey(editPaymentTypeKey);
+    return (
+      key === "per_hour" ||
+      key === "per_day" ||
+      key === "per_month" ||
+      key === "per_consultancy"
+    );
+  }, [editPaymentTypeKey]);
 
   const editScheduleDurationUnit = useMemo(
     () => getQuoteScheduleDurationUnit(editPaymentTypeKey),
     [editPaymentTypeKey]
+  );
+
+  const editScheduleDurationLabel = quoteScheduleDurationFieldLabel(
+    editScheduleDurationUnit
   );
 
   const editEndMinTime = useMemo(
@@ -1033,8 +1054,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
   }, [formHydrated, form.service_price, editPaymentExtForCaps, orderRow]);
 
   useEffect(() => {
-    if (!hasServiceSelected) return;
-    if (!editIsPerConsultancy && !editIsPerDay) return;
+    if (!hasServiceSelected || !editUsesSimplifiedSchedule) return;
     const dur = editIsPerConsultancy
       ? 1
       : Number.parseInt(String(form.schedule_duration ?? "").trim(), 10);
@@ -1068,7 +1088,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
     }
   }, [
     editIsPerConsultancy,
-    editIsPerDay,
+    editUsesSimplifiedSchedule,
     hasServiceSelected,
     editScheduleDurationUnit,
     form.schedule_duration,
@@ -1080,7 +1100,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
   ]);
 
   useEffect(() => {
-    if (editIsPerConsultancy || editIsPerDay) return;
+    if (editUsesSimplifiedSchedule) return;
     const from = String(form.requested_time_from ?? "").trim();
     const to = String(form.requested_time_to ?? "").trim();
     if (!from || !to) return;
@@ -1088,8 +1108,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       setValue("requested_time_to", "", { shouldValidate: false });
     }
   }, [
-    editIsPerConsultancy,
-    editIsPerDay,
+    editUsesSimplifiedSchedule,
     form.requested_time_from,
     form.requested_time_to,
     setValue,
@@ -1190,8 +1209,10 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
         selectedAddressId,
         orderAddress: String(orderRow.address ?? "").trim(),
         hasServiceSelected,
-        skipEndTime: editIsPerConsultancy || editIsPerDay,
-        usePerDayDurationSchedule: editIsPerDay,
+        skipEndTime: editUsesSimplifiedSchedule,
+        useDurationSchedule: editUsesSimplifiedSchedule,
+        skipScheduleDuration: editIsPerConsultancy,
+        durationFieldLabel: editScheduleDurationLabel,
       }
     );
     if (missingRequired.length > 0) {
@@ -1219,7 +1240,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       return;
     }
 
-    if (scheduleMode === "range" && !editIsPerDay) {
+    if (scheduleMode === "range" && !editUsesSimplifiedSchedule) {
       const cmp = compareIsoDateOnlyAsc(
         String(data.requested_date ?? "").trim(),
         String(data.requested_date_to ?? "").trim()
@@ -1230,8 +1251,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       }
     }
     if (
-      !editIsPerConsultancy &&
-      !editIsPerDay &&
+      !editUsesSimplifiedSchedule &&
       !isScheduleEndAfterStartSameDay(
         String(data.requested_time_from ?? "").trim(),
         String(data.requested_time_to ?? "").trim()
@@ -1287,10 +1307,15 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
     }
 
     const scheduleForm: EditOrderFormValues = { ...data };
+    const paymentKey = extractMinDepositTypeKey(editPaymentTypeKey);
     const effectiveScheduleMode =
-      editIsPerDay || editIsPerConsultancy ? "range" : scheduleMode;
+      paymentKey === "per_day" || paymentKey === "per_month"
+        ? "range"
+        : paymentKey === "per_hour" || paymentKey === "per_consultancy"
+          ? "hourly"
+          : scheduleMode;
 
-    if (editIsPerDay || editIsPerConsultancy) {
+    if (editUsesSimplifiedSchedule) {
       const dur = editIsPerConsultancy
         ? 1
         : Number.parseInt(String(data.schedule_duration ?? "").trim(), 10);
@@ -1733,54 +1758,63 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                   </Row>
                   <div className="add-quote-schedule-panel">
                     <Row className="gy-4 gx-md-5">
-                      {editIsPerDay ? (
+                      {editUsesSimplifiedSchedule ? (
                         <>
-                          <Col
-                            xs={12}
-                            md={4}
-                            style={orderEditFieldShellStyle(fromDateReadOnly)}
-                          >
-                            <Form.Group controlId="edit_schedule_duration">
-                              <Form.Label className="fw-medium mb-1">
-                                <FieldLabelText
-                                  label="No of days"
-                                  required
+                          {!editIsPerConsultancy ? (
+                            <Col
+                              xs={12}
+                              md={4}
+                              style={orderEditFieldShellStyle(fromDateReadOnly)}
+                            >
+                              <Form.Group controlId="edit_schedule_duration">
+                                <Form.Label className="fw-medium mb-1">
+                                  <FieldLabelText
+                                    label={editScheduleDurationLabel}
+                                    required
+                                  />
+                                </Form.Label>
+                                <Form.Control
+                                  type="number"
+                                  min={1}
+                                  step={1}
+                                  inputMode="numeric"
+                                  disabled={fromDateReadOnly}
+                                  className={`custom-form-input${
+                                    errors.schedule_duration
+                                      ? " is-invalid"
+                                      : ""
+                                  }`}
+                                  placeholder={`Enter ${editScheduleDurationLabel.toLowerCase()}`}
+                                  {...register("schedule_duration", {
+                                    required: `${editScheduleDurationLabel} is required`,
+                                    min: {
+                                      value: 1,
+                                      message: "Must be at least 1",
+                                    },
+                                  })}
                                 />
-                              </Form.Label>
-                              <Form.Control
-                                type="number"
-                                min={1}
-                                step={1}
-                                inputMode="numeric"
-                                disabled={fromDateReadOnly}
-                                className={`custom-form-input${
-                                  errors.schedule_duration ? " is-invalid" : ""
-                                }`}
-                                placeholder="Enter no of days"
-                                {...register("schedule_duration", {
-                                  required: "No of days is required",
-                                  min: {
-                                    value: 1,
-                                    message: "Must be at least 1",
-                                  },
-                                })}
-                              />
-                              {errors.schedule_duration ? (
-                                <div className="text-danger small mt-1">
-                                  {String(
-                                    (
-                                      errors.schedule_duration as {
-                                        message?: string;
-                                      }
-                                    )?.message ?? ""
-                                  )}
-                                </div>
-                              ) : null}
-                            </Form.Group>
-                          </Col>
+                                {errors.schedule_duration ? (
+                                  <div className="text-danger small mt-1">
+                                    {String(
+                                      (
+                                        errors.schedule_duration as {
+                                          message?: string;
+                                        }
+                                      )?.message ?? ""
+                                    )}
+                                  </div>
+                                ) : null}
+                              </Form.Group>
+                            </Col>
+                          ) : (
+                            <input
+                              type="hidden"
+                              {...register("schedule_duration")}
+                            />
+                          )}
                           <Col
                             xs={12}
-                            md={4}
+                            md={editIsPerConsultancy ? 6 : 4}
                             style={orderEditFieldShellStyle(fromDateReadOnly)}
                           >
                             <CustomTextFieldDatePicket
@@ -1812,7 +1846,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                           </Col>
                           <Col
                             xs={12}
-                            md={4}
+                            md={editIsPerConsultancy ? 6 : 4}
                             style={orderEditFieldShellStyle(startTimeReadOnly)}
                           >
                             <CustomTextFieldTimePicket
@@ -1925,42 +1959,40 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                               filterTime={scheduleTimeAllowAll}
                             />
                           </Col>
-                          {!editIsPerConsultancy ? (
-                            <Col
-                              xs={12}
-                              md={3}
-                              style={orderEditFieldShellStyle(endTimeReadOnly)}
-                            >
-                              <CustomTextFieldTimePicket
-                                label="End time"
-                                controlId="edit_requested_time_to"
-                                selectedTime={timeStorageOrNull(form.requested_time_to)}
-                                onChange={(date) =>
-                                  setValue(
-                                    "requested_time_to",
-                                    toTimeStorageFromDate(date),
-                                    { shouldValidate: true }
-                                  )
-                                }
-                                placeholderText="After start time"
-                                error={errors.requested_time_to}
-                                register={register}
-                                validation={{ required: "End time is required" }}
-                                setValue={setValue}
-                                asCol={false}
-                                labelSize={12}
-                                minTime={editEndMinTime}
-                                maxTime={scheduleEndTimeMaxForDay()}
-                                timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                              />
-                            </Col>
-                          ) : null}
+                          <Col
+                            xs={12}
+                            md={3}
+                            style={orderEditFieldShellStyle(endTimeReadOnly)}
+                          >
+                            <CustomTextFieldTimePicket
+                              label="End time"
+                              controlId="edit_requested_time_to"
+                              selectedTime={timeStorageOrNull(form.requested_time_to)}
+                              onChange={(date) =>
+                                setValue(
+                                  "requested_time_to",
+                                  toTimeStorageFromDate(date),
+                                  { shouldValidate: true }
+                                )
+                              }
+                              placeholderText="After start time"
+                              error={errors.requested_time_to}
+                              register={register}
+                              validation={{ required: "End time is required" }}
+                              setValue={setValue}
+                              asCol={false}
+                              labelSize={12}
+                              minTime={editEndMinTime}
+                              maxTime={scheduleEndTimeMaxForDay()}
+                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
+                            />
+                          </Col>
                         </>
                       ) : (
                         <>
                           <Col
                             xs={12}
-                            md={editIsPerConsultancy ? 6 : 4}
+                            md={4}
                             style={orderEditFieldShellStyle(fromDateReadOnly)}
                           >
                             <CustomTextFieldDatePicket
@@ -1986,7 +2018,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                           </Col>
                           <Col
                             xs={12}
-                            md={editIsPerConsultancy ? 6 : 4}
+                            md={4}
                             style={orderEditFieldShellStyle(startTimeReadOnly)}
                           >
                             <CustomTextFieldTimePicket
@@ -2011,36 +2043,34 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                               filterTime={scheduleTimeAllowAll}
                             />
                           </Col>
-                          {!editIsPerConsultancy ? (
-                            <Col
-                              xs={12}
-                              md={4}
-                              style={orderEditFieldShellStyle(endTimeReadOnly)}
-                            >
-                              <CustomTextFieldTimePicket
-                                label="End time"
-                                controlId="edit_requested_time_to"
-                                selectedTime={timeStorageOrNull(form.requested_time_to)}
-                                onChange={(date) =>
-                                  setValue(
-                                    "requested_time_to",
-                                    toTimeStorageFromDate(date),
-                                    { shouldValidate: true }
-                                  )
-                                }
-                                placeholderText="After start time"
-                                error={errors.requested_time_to}
-                                register={register}
-                                validation={{ required: "End time is required" }}
-                                setValue={setValue}
-                                asCol={false}
-                                labelSize={12}
-                                minTime={editEndMinTime}
-                                maxTime={scheduleEndTimeMaxForDay()}
-                                timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
-                              />
-                            </Col>
-                          ) : null}
+                          <Col
+                            xs={12}
+                            md={4}
+                            style={orderEditFieldShellStyle(endTimeReadOnly)}
+                          >
+                            <CustomTextFieldTimePicket
+                              label="End time"
+                              controlId="edit_requested_time_to"
+                              selectedTime={timeStorageOrNull(form.requested_time_to)}
+                              onChange={(date) =>
+                                setValue(
+                                  "requested_time_to",
+                                  toTimeStorageFromDate(date),
+                                  { shouldValidate: true }
+                                )
+                              }
+                              placeholderText="After start time"
+                              error={errors.requested_time_to}
+                              register={register}
+                              validation={{ required: "End time is required" }}
+                              setValue={setValue}
+                              asCol={false}
+                              labelSize={12}
+                              minTime={editEndMinTime}
+                              maxTime={scheduleEndTimeMaxForDay()}
+                              timeIntervals={SCHEDULE_TIME_PICKER_INTERVAL_MINUTES}
+                            />
+                          </Col>
                         </>
                       )}
                     </Row>

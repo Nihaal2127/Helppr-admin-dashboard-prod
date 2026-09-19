@@ -1481,9 +1481,9 @@ export function getQuoteScheduleDurationUnit(
 export function quoteScheduleDurationFieldLabel(
   unit: QuoteScheduleDurationUnit
 ): string {
-  if (unit === "hour") return "Hours";
-  if (unit === "month") return "Months";
-  return "Days";
+  if (unit === "hour") return "No of hours";
+  if (unit === "month") return "No of months";
+  return "No of days";
 }
 
 /** Short hint shown under Requested Services in Add Quote. */
