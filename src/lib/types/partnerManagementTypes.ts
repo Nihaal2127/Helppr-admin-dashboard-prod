@@ -26,6 +26,16 @@ export type PartnerPostVideoMeta = {
   status?: string;
 };
 
+export type PartnerPostReport = {
+  _id?: string;
+  /** Reporter user id, when the post API includes it. */
+  user_id?: string;
+  user_name: string;
+  reason: string;
+  /** Free-text note when `reason` is `other`. */
+  details?: string;
+};
+
 export type PostModel = {
   /** Mongo `_id` from `GET /api/partner-post/getAll`. */
   _id?: string;
@@ -45,4 +55,8 @@ export type PostModel = {
   videos?: string[];
   /** Nested `video` block from partner-post API (Bunny HLS). */
   video?: PartnerPostVideoMeta | null;
+  /** `reports_count` from `GET /api/partner-post/getAll`. */
+  reports_count?: number;
+  /** Nested `reports` from `GET /api/partner-post/getAll`. */
+  reports?: PartnerPostReport[];
 };

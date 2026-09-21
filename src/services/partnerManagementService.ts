@@ -2,6 +2,7 @@ import { apiRequest } from "../lib/global/remote/apiHelper";
 import { showErrorAlert } from "../lib/global/alertHelper";
 import { ApiPaths } from "../lib/global/remote/apiPaths";
 import type {
+  PartnerPostReport,
   PartnerPostVideoMeta,
   PartnerSubscriptionModel,
   PostModel,
@@ -1332,6 +1333,46 @@ function countMediaFromPost(raw: Record<string, unknown>): {
   return { images: imageUrls, videos: videoUrls };
 }
 
+function readNestedId(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (value && typeof value === "object") {
+    const row = value as Record<string, unknown>;
+    const id = row._id ?? row.id;
+    if (typeof id === "string") return id.trim();
+  }
+  return "";
+}
+
+function parsePartnerPostReports(raw: unknown): PartnerPostReport[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item) => item && typeof item === "object")
+    .map((item) => {
+      const report = item as Record<string, unknown>;
+      const userObj =
+        report.user && typeof report.user === "object"
+          ? (report.user as Record<string, unknown>)
+          : null;
+      const user_id =
+        readNestedId(report.user_id) ||
+        readNestedId(report.userId) ||
+        readNestedId(report.reported_by) ||
+        readNestedId(report.reported_by_id) ||
+        readNestedId(report.reporter_id) ||
+        readNestedId(userObj?._id ?? userObj?.id) ||
+        undefined;
+      return {
+        _id: String(report._id ?? "").trim() || undefined,
+        user_id,
+        user_name: String(
+          report.user_name ?? userObj?.user_name ?? userObj?.name ?? ""
+        ).trim(),
+        reason: String(report.reason ?? "").trim(),
+        details: String(report.details ?? "").trim() || undefined,
+      };
+    });
+}
+
 function mapPartnerPostApiRecord(raw: Record<string, unknown>): PostModel {
   const partnerObj =
     raw.partner && typeof raw.partner === "object"
@@ -1361,6 +1402,11 @@ function mapPartnerPostApiRecord(raw: Record<string, unknown>): PostModel {
 
   const { images, videos } = countMediaFromPost(raw);
   const videoMeta = parsePartnerPostVideoMeta(raw.video);
+  const reports = parsePartnerPostReports(raw.reports);
+  const reportsCountRaw = Number(raw.reports_count);
+  const reports_count = Number.isFinite(reportsCountRaw)
+    ? reportsCountRaw
+    : reports.length;
   const mediaTypeRaw = String(raw.media_type ?? raw.mediaType ?? "")
     .trim()
     .toLowerCase();
@@ -1392,6 +1438,8 @@ function mapPartnerPostApiRecord(raw: Record<string, unknown>): PostModel {
     uploaded_date: uploaded,
     status: normalizePartnerPostStatus(String(raw.status ?? "")),
     rejection_reason: String(raw.rejection_reason ?? "").trim() || undefined,
+    reports_count,
+    reports,
   };
 }
 

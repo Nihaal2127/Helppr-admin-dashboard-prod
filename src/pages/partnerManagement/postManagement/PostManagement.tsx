@@ -185,6 +185,14 @@ const PostManagement = ({ onBack }: PostManagementProps) => {
       accessor: "uploaded_date",
     },
     {
+      Header: "Reports Count",
+      accessor: "reports_count",
+      Cell: ({ row }: { row: any }) => {
+        const count = (row.original as PostModel).reports_count;
+        return <span>{count ?? 0}</span>;
+      },
+    },
+    {
       Header: "Status",
       accessor: "status",
       Cell: ({ row }: { row: any }) => {

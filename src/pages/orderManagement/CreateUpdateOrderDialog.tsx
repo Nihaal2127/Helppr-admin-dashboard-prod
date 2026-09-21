@@ -98,6 +98,7 @@ import {
   getPartnerActiveServiceProvidingRow,
   getQuoteScheduleModeForPartnerService,
   getQuoteScheduleDurationUnit,
+  isQuotePerConsultancyPaymentType,
   quoteScheduleBillingHintText,
   quoteScheduleDurationFieldLabel,
   mergeQuoteServiceFeesForBreakdown,
@@ -1635,6 +1636,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
   const {
     register,
     formState: { errors, isSubmitted: createFormSubmitted },
+    clearErrors,
     setValue,
     getValues,
     handleSubmit,
@@ -1969,21 +1971,33 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
     createOrderScheduleDurationUnit
   );
 
+  const createOrderIsPerConsultancy = useMemo(
+    () =>
+      isQuotePerConsultancyPaymentType(
+        String(createOrderFeeOption?.payment_type ?? "").trim()
+      ),
+    [createOrderFeeOption?.payment_type]
+  );
+
   const isCreateOrderScheduleComplete = useMemo(() => {
     if (!hasCreateOrderServiceSelected) return false;
-    const dur = Number.parseInt(
-      String(createScheduleDurationWatch ?? "").trim(),
-      10
-    );
     const d = String(serviceItems[0]?.service_date ?? "").trim();
     const dTo = String(createScheduleDateToWatch ?? "").trim();
     const tFrom = String(serviceItems[0]?.service_from_time ?? "").trim();
     const tTo = String(serviceItems[0]?.service_to_time ?? "").trim();
+    if (createOrderIsPerConsultancy) {
+      return Boolean(d && tFrom && dTo && tTo);
+    }
+    const dur = Number.parseInt(
+      String(createScheduleDurationWatch ?? "").trim(),
+      10
+    );
     return Boolean(
       Number.isFinite(dur) && dur >= 1 && d && tFrom && dTo && tTo
     );
   }, [
     hasCreateOrderServiceSelected,
+    createOrderIsPerConsultancy,
     createScheduleDurationWatch,
     serviceItems,
     createScheduleDateToWatch,
@@ -2984,11 +2998,35 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
   );
 
   useEffect(() => {
+    if (isEditable || !createOrderIsPerConsultancy || !hasCreateOrderServiceSelected) {
+      return;
+    }
+    clearErrors("service_schedule_duration");
+    const d = createScheduleDateWatch.trim();
+    const tFrom = createScheduleTimeFromWatch.trim();
+    if (!d || !tFrom) return;
+    if (String(createScheduleDurationWatch ?? "").trim() !== "1") {
+      setValue("service_schedule_duration", "1", { shouldValidate: false });
+    }
+  }, [
+    isEditable,
+    createOrderIsPerConsultancy,
+    hasCreateOrderServiceSelected,
+    createScheduleDateWatch,
+    createScheduleTimeFromWatch,
+    createScheduleDurationWatch,
+    setValue,
+    clearErrors,
+  ]);
+
+  useEffect(() => {
     if (isEditable || !hasCreateOrderServiceSelected) return;
-    const dur = Number.parseInt(
-      String(createScheduleDurationWatch ?? "").trim(),
-      10
-    );
+    const dur = createOrderIsPerConsultancy
+      ? 1
+      : Number.parseInt(
+          String(createScheduleDurationWatch ?? "").trim(),
+          10
+        );
     const d = createScheduleDateWatch.trim();
     const tFrom = createScheduleTimeFromWatch.trim();
     const currentDateTo = String(createScheduleDateToWatch ?? "").trim();
@@ -3026,6 +3064,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
   }, [
     isEditable,
     hasCreateOrderServiceSelected,
+    createOrderIsPerConsultancy,
     createOrderScheduleDurationUnit,
     createScheduleDurationWatch,
     createScheduleDateWatch,
@@ -3162,10 +3201,12 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
       const schedTo = String(data.service_date_to ?? "").trim();
       const tFrom = String(serviceItems[0]?.service_from_time ?? "").trim();
       const tTo = String(serviceItems[0]?.service_to_time ?? "").trim();
-      const dur = Number.parseInt(
-        String(data.service_schedule_duration ?? "").trim(),
-        10
-      );
+      const dur = createOrderIsPerConsultancy
+        ? 1
+        : Number.parseInt(
+            String(data.service_schedule_duration ?? "").trim(),
+            10
+          );
       if (
         !Number.isFinite(dur) ||
         dur < 1 ||
@@ -3175,7 +3216,9 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
         !tTo
       ) {
         showErrorAlert(
-          "Please complete the schedule (duration, start date, and start time)."
+          createOrderIsPerConsultancy
+            ? "Please complete the schedule (start date and start time)."
+            : "Please complete the schedule (duration, start date, and start time)."
         );
         return;
       }
@@ -3787,6 +3830,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                       </Row>
                           <div className="add-quote-schedule-panel">
                             <Row className="gy-3 gx-md-4">
+                              {!createOrderIsPerConsultancy ? (
                               <Col xs={12} md={4}>
                                 <Form.Group controlId="service_schedule_duration">
                                   <Form.Label className="fw-medium mb-1">
@@ -3814,7 +3858,13 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                                   />
                                 </Form.Group>
                               </Col>
-                              <Col xs={12} md={4}>
+                              ) : (
+                                <input
+                                  type="hidden"
+                                  {...register("service_schedule_duration")}
+                                />
+                              )}
+                              <Col xs={12} md={createOrderIsPerConsultancy ? 6 : 4}>
                                 <CustomTextFieldDatePicket
                                   label="Start date"
                                   controlId="create-order-from-date"
@@ -3836,7 +3886,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                                   required
                                 />
                               </Col>
-                              <Col xs={12} md={4}>
+                              <Col xs={12} md={createOrderIsPerConsultancy ? 6 : 4}>
                                 <CustomTextFieldTimePicket
                                   label="Start time"
                                   controlId="create-order-time-from"

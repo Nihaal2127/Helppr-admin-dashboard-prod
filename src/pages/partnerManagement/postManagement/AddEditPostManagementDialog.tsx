@@ -16,9 +16,17 @@ import {
   resolvePartnerPostVideoThumbnailFromSource,
   isPartnerPostStreamCdnUrl,
 } from "../../../services/partnerManagementService";
-import type { PostModel } from "../../../lib/types/partnerManagementTypes";
+import type {
+  PartnerPostReport,
+  PostModel,
+} from "../../../lib/types/partnerManagementTypes";
 import PostVideoPreviewModal from "../../../components/PostVideoPreviewModal";
 import PostImagePreviewModal from "../../../components/PostImagePreviewModal";
+import { showUserDetailsDialog } from "../../../components/user";
+import {
+  APP_USER_TYPE,
+  fetchUser,
+} from "../../../services/userService";
 
 type AddEditPostManagementDialogProps = {
   isEditable: boolean;
@@ -26,6 +34,43 @@ type AddEditPostManagementDialogProps = {
   onClose: () => void;
   onRefreshData: () => void;
 };
+
+function reportReasonDisplay(report: PartnerPostReport): string {
+  const reason = String(report.reason ?? "").trim();
+  if (reason.toLowerCase() === "other" || reason.toLowerCase() === "others") {
+    return String(report.details ?? "").trim() || "—";
+  }
+  return reason || "—";
+}
+
+async function openReportUserInformation(
+  report: PartnerPostReport
+): Promise<void> {
+  let userId = String(report.user_id ?? "").trim();
+
+  if (!userId) {
+    const name = String(report.user_name ?? "").trim();
+    if (!name) {
+      showErrorAlert("User information is not available for this report.");
+      return;
+    }
+    const { users } = await fetchUser(false, APP_USER_TYPE.CUSTOMER, 1, 20, {
+      search: name,
+    });
+    const needle = name.toLowerCase();
+    const match =
+      users.find(
+        (u) => String(u.name ?? "").trim().toLowerCase() === needle
+      ) ?? users[0];
+    userId = String(match?._id ?? "").trim();
+  }
+
+  if (!userId) {
+    showErrorAlert("User information is not available for this report.");
+    return;
+  }
+  showUserDetailsDialog(userId, () => {});
+}
 
 type MediaItem = {
   id: number;
@@ -679,6 +724,109 @@ const AddEditPostManagementDialog: React.FC<
               </div>
               {mediaToolbar}
               {mediaGrid}
+
+              <div className="d-flex align-items-center gap-2 mt-4 mb-2">
+                <i
+                  className="bi bi-file-earmark-exclamation"
+                  aria-hidden
+                  style={{ color: "#3f3f3f", fontSize: 18 }}
+                />
+                <span className="fw-bold" style={{ color: "#1f1f1f" }}>
+                  Reports
+                </span>
+                <span
+                  className="d-inline-flex align-items-center justify-content-center fw-bold"
+                  style={{
+                    minWidth: 22,
+                    height: 22,
+                    padding: "0 6px",
+                    borderRadius: 6,
+                    backgroundColor: "var(--primary-new-color)",
+                    color: "#fff",
+                    fontSize: 12,
+                    lineHeight: 1,
+                  }}
+                >
+                  {formData.reports_count ?? (formData.reports ?? []).length}
+                </span>
+              </div>
+              {(formData.reports ?? []).length === 0 ? (
+                <div className="text-muted">—</div>
+              ) : (
+                <div className="d-flex flex-column gap-2">
+                  {(formData.reports ?? []).map((report, index) => (
+                    <button
+                      key={report._id ?? index}
+                      type="button"
+                      className="w-100 d-flex align-items-center gap-3 text-start rounded-3 px-3 py-3"
+                      style={{
+                        background: "#fff",
+                        border: "1px solid #ececec",
+                        cursor: "pointer",
+                      }}
+                      onClick={() => {
+                        void openReportUserInformation(report);
+                      }}
+                    >
+                      <span
+                        className="d-inline-flex align-items-center justify-content-center flex-shrink-0"
+                        style={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: "50%",
+                          backgroundColor: "#FDECEC",
+                          color: "var(--primary-new-txt-color)",
+                        }}
+                      >
+                        <i className="bi bi-exclamation-triangle" aria-hidden />
+                      </span>
+                      <span className="flex-grow-1 min-w-0">
+                        <span
+                          className="d-block"
+                          style={{ color: "#6b6b6b", fontSize: 14 }}
+                        >
+                          Reported by:{" "}
+                          <span className="fw-bold" style={{ color: "#222" }}>
+                            {report.user_name || "—"}
+                          </span>
+                        </span>
+                        <span
+                          className="d-block mt-1"
+                          style={{ color: "#9a9a9a", fontSize: 13 }}
+                        >
+                          Reason: {reportReasonDisplay(report)}
+                        </span>
+                      </span>
+                      <span
+                        className="d-inline-flex align-items-center gap-1 flex-shrink-0 px-2 py-1"
+                        style={{
+                          backgroundColor: "#FDECEC",
+                          color: "var(--primary-new-txt-color)",
+                          borderRadius: 999,
+                          fontSize: 13,
+                          fontWeight: 600,
+                        }}
+                      >
+                        <span
+                          aria-hidden
+                          style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: "50%",
+                            backgroundColor: "var(--primary-new-txt-color)",
+                          }}
+                        />
+                        Reported
+                      </span>
+                      <i
+                        className="bi bi-chevron-right flex-shrink-0"
+                        aria-hidden
+                        style={{ color: "#9a9a9a" }}
+                      />
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <div className="custom-other-details" style={{ padding: "10px" }}>
