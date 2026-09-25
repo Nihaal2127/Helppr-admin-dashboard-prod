@@ -419,16 +419,28 @@ function buildAreaOptionsWithPreserved(
   const base = fetched ?? [];
   if (selectedIds.length === 0) return base;
 
+  /** Prefer id→name from parallel area_id / area_name lists (same length). */
+  const idToName = new Map<string, string>();
+  const collected = collectFranchiseAreaIds(franchise);
   const names = franchiseAreaNameList(franchise ?? {});
+  if (collected.length > 0 && collected.length === names.length) {
+    collected.forEach((id, i) => {
+      const key = String(id ?? "").trim();
+      const label = String(names[i] ?? "").trim();
+      if (key && label) idToName.set(key, label);
+    });
+  }
+
   const merged = [...base];
-  selectedIds.forEach((id, index) => {
-    if (!id || merged.some((o) => o.value === id)) return;
+  for (const rawId of selectedIds) {
+    const id = String(rawId ?? "").trim();
+    if (!id || merged.some((o) => o.value === id)) continue;
     const label =
-      names[index] ??
+      idToName.get(id) ??
       names.find((n) => n.toLowerCase() === id.toLowerCase()) ??
       id;
     merged.push({ value: id, label });
-  });
+  }
   return merged;
 }
 
@@ -543,6 +555,8 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   /** Avoid re-applying API category/service ids after the user edits the multi-selects. */
   const catalogSelectionSeedKeyRef = useRef("");
   const catalogSelectionTouchedRef = useRef(false);
+  /** Avoid re-applying franchise area_ids after the user edits the Area multi-select. */
+  const areaSelectionTouchedRef = useRef(false);
   const [fetchedAreaOptions, setFetchedAreaOptions] = useState<
     OptionType[] | null
   >(null);
@@ -773,6 +787,16 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     () => serviceOptions.filter((s) => serviceIds.includes(s.value)),
     [serviceOptions, serviceIds]
   );
+
+  /** Keep chip order aligned with `areaIds` (not alphabetical options order). */
+  const selectedAreaOptions = useMemo(() => {
+    const byId = new Map(
+      areaOptions.map((o) => [String(o.value), o] as const)
+    );
+    return areaIds
+      .map((id) => byId.get(String(id)))
+      .filter((o): o is OptionType => Boolean(o));
+  }, [areaOptions, areaIds]);
 
   /** Prefer refreshed get-by-id record in view (list row may omit names). */
   const viewFranchiseSource = (franchiseRecord ?? franchise) as
@@ -1107,6 +1131,8 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   useEffect(() => {
     if (!needsEditFormData) return;
     if (!isEditable || !franchise) return;
+    // Do not overwrite chips after the user adds/removes areas.
+    if (areaSelectionTouchedRef.current) return;
     const source = (franchiseRecord ?? franchise) as unknown as Record<string, unknown>;
     const opts = fetchedAreaOptions ?? [];
     const resolved = resolveFranchiseAreaIds(source, opts);
@@ -1227,6 +1253,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   useEffect(() => {
     catalogSelectionTouchedRef.current = false;
     catalogSelectionSeedKeyRef.current = "";
+    areaSelectionTouchedRef.current = false;
   }, [franchise?._id, isEditable]);
 
   const handleCitySelection = (selectedOptions: OptionType[]) => {
@@ -1237,8 +1264,27 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     setValue("city_id", selectedIds, { shouldValidate: true });
   };
 
-  const handleAreaSelection = (selectedOptions: OptionType[]) => {
-    const selectedIds = selectedOptions.map((option) => option.value);
+  const handleAreaSelection = (
+    selectedOptions: OptionType[],
+    actionMeta?: { action?: string; removedValue?: OptionType }
+  ) => {
+    areaSelectionTouchedRef.current = true;
+    // Remove by the clicked chip's id (avoids wrong chip when value order ≠ options order).
+    if (
+      actionMeta?.action === "remove-value" &&
+      actionMeta.removedValue?.value != null
+    ) {
+      const removedId = String(actionMeta.removedValue.value).trim();
+      setAreaIds((prev) => {
+        const next = prev.filter((id) => String(id) !== removedId);
+        setValue("area_id", next, { shouldValidate: true });
+        return next;
+      });
+      return;
+    }
+    const selectedIds = selectedOptions
+      .map((option) => String(option.value ?? "").trim())
+      .filter(Boolean);
     setAreaIds(selectedIds);
     setValue("area_id", selectedIds, { shouldValidate: true });
   };
@@ -1672,6 +1718,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                   defaultValue={isEditable ? franchise?.state_id : ""}
                   setValue={setValue as (name: string, value: any) => void}
                   onChange={() => {
+                    areaSelectionTouchedRef.current = true;
                     setCityIds([]);
                     setValue("city_id", [], { shouldValidate: false });
                     setAreaIds([]);
@@ -1703,11 +1750,12 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                   controlId="Area"
                   options={areaOptions}
                   requiredMessage="Please select area"
-                  value={areaOptions.filter((area) =>
-                    areaIds.includes(area.value)
-                  )}
-                  onChange={(selectedOptions) => {
-                    handleAreaSelection(selectedOptions as OptionType[]);
+                  value={selectedAreaOptions}
+                  onChange={(selectedOptions, actionMeta) => {
+                    handleAreaSelection(
+                      selectedOptions as OptionType[],
+                      actionMeta
+                    );
                   }}
                   selectedChipsMaxHeight="100px"
                   asCol={false}

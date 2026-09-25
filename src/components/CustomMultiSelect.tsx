@@ -79,7 +79,10 @@ interface CustomMultiSelectProps {
   controlId: string;
   options: { value: string; label: string }[];
   value: { value: string; label: string }[];
-  onChange: (selectedOptions: { value: string; label: string }[]) => void;
+  onChange: (
+    selectedOptions: { value: string; label: string }[],
+    actionMeta?: ActionMeta<{ value: string; label: string }>
+  ) => void;
   error?: FieldError;
   register?: UseFormRegister<any>;
   fieldName?: string;
@@ -206,7 +209,7 @@ const CustomMultiSelect: React.FC<CustomMultiSelectProps> = ({
     if (setValue && fieldName) {
       setValue(fieldName, selectedOptions);
     }
-    onChange(selectedOptions);
+    onChange(selectedOptions, actionMeta);
 
     const selectedValues = new Set(selectedOptions.map((o) => String(o.value)));
     const ignoreLogic = new Set(logicIgnoreOptionValues ?? []);
