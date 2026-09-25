@@ -1104,7 +1104,7 @@ function EditPartnerCategoriesServicesDialogView({
                             }}
                             placeholder="Describe this offering"
                             value={row.description}
-                            ref={(el) => {
+                            ref={(el: HTMLElement | null) => {
                               if (el) adjustPartnerDescHeight(el);
                             }}
                             onChange={(e) => {
