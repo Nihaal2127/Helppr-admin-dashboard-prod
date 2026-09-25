@@ -317,7 +317,7 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
                 }
               />
               <DetailsRow
-                title="Schedule date and time"
+                title="Scheduled Date"
                 value={scheduleDisplay}
               />
             </Col>

@@ -24,10 +24,7 @@ import { fetchArea, deleteArea } from "../../services/areaService";
 import AddEditAreaDialog from "./AddEditAreaDialog";
 import CustomFormSelect from "../../components/CustomFormSelect";
 import { useForm, UseFormRegister } from "react-hook-form";
-import {
-  fetchFranchise,
-  fetchFranchiseDropDown,
-} from "../../services/franchiseService";
+import { fetchFranchiseDropDown } from "../../services/franchiseService";
 import type { ServerTableSortBy } from "../../lib/global/serverTableSort";
 
 type LocationFilters = {
@@ -59,9 +56,6 @@ const LocationManagement = () => {
   const [areaFranchiseOptions, setAreaFranchiseOptions] = useState<
     { value: string; label: string }[]
   >([]);
-  const [franchiseAreaIdsById, setFranchiseAreaIdsById] = useState<
-    Map<string, Set<string>>
-  >(new Map());
   const [selectedAreaFranchiseId, setSelectedAreaFranchiseId] = useState("");
   const [activeFilters, setActiveFilters] = useState<LocationFilters>({});
   const [searchDraft, setSearchDraft] = useState("");
@@ -143,54 +137,17 @@ const LocationManagement = () => {
             setTotalPages(0);
           }
         } else if (selected === "box-area") {
-          const areaFilters: LocationFilters = { ...filters };
           const { response, areas, totalPages } = await fetchArea(
             currentPage,
             pageSize,
-            areaFilters,
+            { ...filters },
             areaTableSortBy
           );
           if (response && Array.isArray(areas)) {
-            const selectedFranchiseId = String(
-              areaFilters.franchise_id ?? ""
-            ).trim();
-
-            if (isFranchiseAdmin) {
-              setAreaList(areas);
-              setTotalPages(totalPages);
-            } else if (selectedFranchiseId) {
-              const allowedAreaIds =
-                franchiseAreaIdsById.get(selectedFranchiseId);
-              if (allowedAreaIds && allowedAreaIds.size > 0) {
-                setAreaList(
-                  areas.filter((row: any) =>
-                    allowedAreaIds.has(String(row?._id ?? row?.id ?? "").trim())
-                  )
-                );
-                setTotalPages(1);
-              } else if (allowedAreaIds && allowedAreaIds.size === 0) {
-                setAreaList([]);
-                setTotalPages(0);
-              } else {
-                setAreaList(
-                  areas.filter((row: any) => {
-                    const rowFranchiseId = String(
-                      row?.franchise_id ??
-                        row?.franchiseId ??
-                        row?.franchise?._id ??
-                        ""
-                    ).trim();
-                    return rowFranchiseId
-                      ? rowFranchiseId === selectedFranchiseId
-                      : true;
-                  })
-                );
-                setTotalPages(1);
-              }
-            } else {
-              setAreaList(areas);
-              setTotalPages(totalPages);
-            }
+            // Trust server pagination (`totalPages` / `totalItems`) — franchise_id
+            // is already sent on GET /area/getAll; do not force totalPages to 1.
+            setAreaList(areas);
+            setTotalPages(totalPages);
           } else {
             setAreaList([]);
             setTotalPages(0);
@@ -204,10 +161,8 @@ const LocationManagement = () => {
       areaTableSortBy,
       cityTableSortBy,
       currentPage,
-      franchiseAreaIdsById,
       pageSize,
       stateTableSortBy,
-      isFranchiseAdmin,
     ]
   );
 
@@ -263,30 +218,6 @@ const LocationManagement = () => {
       if (isFranchiseAdmin) return;
       const franchises = await fetchFranchiseDropDown();
       setAreaFranchiseOptions(franchises);
-      // Fallback map: selected franchise -> assigned area ids.
-      const pageSize = 200;
-      const maxPages = 30;
-      const areaMap = new Map<string, Set<string>>();
-      for (let page = 1; page <= maxPages; page += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        const res = await fetchFranchise(page, pageSize, {}, []);
-        if (!res.response) break;
-        for (const row of res.franchises ?? []) {
-          const fid = String((row as any)?._id ?? "").trim();
-          if (!fid) continue;
-          const areaIdsRaw = Array.isArray((row as any)?.area_id)
-            ? (row as any).area_id
-            : (row as any)?.area_id
-            ? [(row as any).area_id]
-            : [];
-          const ids = new Set<string>(
-            areaIdsRaw.map((v: unknown) => String(v ?? "").trim()).filter(Boolean)
-          );
-          areaMap.set(fid, ids);
-        }
-        if (!res.totalPages || page >= res.totalPages) break;
-      }
-      setFranchiseAreaIdsById(areaMap);
     };
     loadAreaDropdowns();
   }, [selectedBox, isFranchiseAdmin]);

@@ -49,6 +49,26 @@ type ServiceLite = PartnerCatalogServiceLite & {
   category_name?: string;
 };
 
+/** Grow description textarea up to 5 lines, then scroll. */
+const PARTNER_DESC_MAX_LINES = 5;
+
+function adjustPartnerDescHeight(el: HTMLElement) {
+  el.style.height = "auto";
+  const style = window.getComputedStyle(el);
+  const lineHeight = parseFloat(style.lineHeight) || 21;
+  const paddingY =
+    (parseFloat(style.paddingTop) || 0) +
+    (parseFloat(style.paddingBottom) || 0);
+  const borderY =
+    (parseFloat(style.borderTopWidth) || 0) +
+    (parseFloat(style.borderBottomWidth) || 0);
+  const maxHeight =
+    lineHeight * PARTNER_DESC_MAX_LINES + paddingY + borderY;
+  const contentHeight = el.scrollHeight;
+  el.style.height = `${Math.min(contentHeight, maxHeight)}px`;
+  el.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+}
+
 function resolvePartnerCatalogFranchiseApiId(user: UserModel): string {
   const fromUser = String(
     (user as { franchise_id?: string }).franchise_id ?? ""
@@ -1078,15 +1098,21 @@ function EditPartnerCategoriesServicesDialogView({
                             className="custom-form-input"
                             style={{
                               ...partnerCatalogControlStyle,
-                              resize: "vertical",
+                              resize: "none",
+                              overflowY: "hidden",
+                              lineHeight: "1.5",
                             }}
                             placeholder="Describe this offering"
                             value={row.description}
-                            onChange={(e) =>
+                            ref={(el) => {
+                              if (el) adjustPartnerDescHeight(el);
+                            }}
+                            onChange={(e) => {
+                              adjustPartnerDescHeight(e.currentTarget);
                               updateServiceRow(block.id, row.id, {
                                 description: e.target.value,
-                              })
-                            }
+                              });
+                            }}
                           />
                         </Form.Group>
                       </div>

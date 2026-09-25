@@ -1808,6 +1808,7 @@ const QUOTE_SORTABLE_ACCESSORS = new Set([
   "requested_date",
   "scheduled_date",
   "from_date",
+  "created_at",
 ]);
 
 /** Table column accessor → `GET /quote/getAll` `sort_by` (Postman). */
@@ -1818,6 +1819,7 @@ const QUOTE_LIST_SORT_TO_API: Record<string, string> = {
   requested_date: "from_date",
   scheduled_date: "from_date",
   from_date: "from_date",
+  created_at: "created_at",
   requested_services: "created_at",
   services: "created_at",
   requested_partner: "created_at",
@@ -2423,6 +2425,7 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
     city,
     requested_date,
     requested_time,
+    created_at: str(r.created_at ?? r.createdAt) || undefined,
     from_date: fromD || undefined,
     to_date: toD || undefined,
     work_start_time: ws || undefined,

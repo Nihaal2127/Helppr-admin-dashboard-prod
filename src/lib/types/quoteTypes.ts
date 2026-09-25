@@ -41,6 +41,8 @@ export type QuoteRow = {
   city: string;
   requested_date: string;
   requested_time: string;
+  /** When the quote was created (`created_at` from API). */
+  created_at?: string;
   /** Raw schedule from API (`from_date` / `to_date` as YYYY-MM-DD). */
   from_date?: string;
   to_date?: string;

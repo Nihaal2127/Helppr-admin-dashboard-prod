@@ -1,7 +1,7 @@
 /**
- * Order tax-invoice PDF (html2pdf). UI layer — not part of lib/order API module.
+ * Order tax-invoice HTML helpers (legacy client PDF builder kept for reference).
+ * List “Download invoice” uses `GET /api/order/invoice/:id` via `downloadOrderInvoice` in lib/order.
  */
-import html2pdf from "html2pdf.js";
 import { formatDate } from "../../helper/utility";
 import logoDark from "../../assets/images/helper-logo.png";
 import { AppConstant } from "../../lib/global/AppConstant";
@@ -11,7 +11,6 @@ import {
   paymentRowEffectiveAmount,
 } from "../../lib/global/paymentAndCurrency";
 import {
-  fetchOrderById,
   formatServiceScheduleLine,
   getOrderServiceAddress,
   getPrimaryServiceItem,
@@ -19,7 +18,10 @@ import {
   OrderItemModel,
   OrderModel,
   OrderStatusEnum,
+  downloadOrderInvoice,
 } from "../../lib/order/orders";
+
+export { downloadOrderInvoice };
 
 /**
  * Prefer concrete cash/card/UPI/bank from payment rows over a generic
@@ -339,18 +341,4 @@ export function orderInvoiceHtml(invoiceData: OrderModel): string {
     </body>
   </html>
 `;
-}
-
-/** Fetches order detail and saves invoice PDF (used from order list actions). */
-export async function downloadOrderInvoice(orderId: string): Promise<void> {
-  const { response, order } = await fetchOrderById(orderId);
-  if (!response || !order) return;
-
-  const html2pdfOptions = {
-    margin: 0,
-    filename: `invoice_${order.unique_id}.pdf`,
-    html2canvas: { scale: 2 },
-    jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-  };
-  html2pdf().from(orderInvoiceHtml(order)).set(html2pdfOptions).save();
 }

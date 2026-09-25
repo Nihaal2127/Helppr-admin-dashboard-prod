@@ -1,7 +1,8 @@
 /**
- * Orders module — types, API calls, payload builders, UI helpers (no invoice PDF).
+ * Orders module — types, API calls, payload builders, UI helpers.
+ * Invoice file download: `GET /order/invoice/:id` (`downloadOrderInvoice`).
  */
-import { apiRequest } from "../global/remote/apiHelper";
+import { apiRequest, apiRequestFileDownload } from "../global/remote/apiHelper";
 import { ApiPaths } from "../global/remote/apiPaths";
 import { showLog } from "../../helper/logger";
 import { formatDate, todayLocalYmd } from "../../helper/dateFormat";
@@ -1233,6 +1234,19 @@ export const fetchOrderById = async (
     return { response: Boolean(order), order };
   }
   return { response: false, order: null };
+};
+
+/** `GET /order/invoice/:id` — downloads printable invoice attachment. */
+export const downloadOrderInvoice = async (
+  orderId: string
+): Promise<boolean> => {
+  const id = String(orderId ?? "").trim();
+  if (!id) return false;
+  const response = await apiRequestFileDownload(ApiPaths.GET_ORDER_INVOICE(id), {
+    accept: "text/html",
+    defaultFilename: `invoice-${id}.html`,
+  });
+  return Boolean(response.success);
 };
 
 /** `GET /order/getCustomerOrder` — optional `user_id` query. */

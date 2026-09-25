@@ -107,6 +107,8 @@ export const ApiPaths = {
   CREATE_ORDER: "/order/create",
   GET_ORDER: () => `/order/getAll`,
   GET_ORDER_BY_ID: () => `/order/get`,
+  /** Admin printable invoice HTML — `GET /api/order/invoice/:id`. */
+  GET_ORDER_INVOICE: (id: string) => `/order/invoice/${id}`,
   GET_CUSTOMER_ORDERS: "/order/getCustomerOrder",
   UPDATE_ORDER: (id: string) => `/order/update/${id}`,
   DELETE_ORDER: (id: string) => `/order/delete/${id}`,

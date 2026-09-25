@@ -67,13 +67,14 @@ import {
   buildFranchisePincodeSetFromRelatedCatalog,
   collectFranchiseAreaIds,
   computeQuotePriceBreakdown,
-  formatQuoteScheduleForTable,
+  formatQuoteScheduleForView,
   parseCatalogAddressRecord,
   QUOTE_MODAL_LAYOUT,
   SCHEDULE_TIME_PICKER_INTERVAL_MINUTES,
   setQuoteFranchiseCatalogSnapshot,
   toQuoteViewData,
 } from "../../lib/quote/quoteHelpers";
+import { formatDate } from "../../helper/utility";
 import QuotePriceBreakdownPanel from "../../components/quote/QuotePriceBreakdownPanel";
 import QuoteAddressOptionsLoader from "../../components/quote/QuoteAddressOptionsLoader";
 import {
@@ -1295,14 +1296,38 @@ const QuoteManagement = () => {
         },
       },
       {
-        Header: "Date",
+        Header: "Scheduled Date",
         accessor: dateSortAccessor,
         sort: true,
-        Cell: ({ row }: { row: any }) => (
-          <span style={{ whiteSpace: "pre-line" }}>
-            {formatQuoteScheduleForTable(row.original as QuoteRow, selectedTab)}
-          </span>
-        ),
+        Cell: ({ row }: { row: any }) => {
+          const q = row.original as QuoteRow;
+          return (
+            <span style={{ whiteSpace: "pre-line" }}>
+              {formatQuoteScheduleForView(
+                {
+                  status: q.status,
+                  requested_date: q.requested_date,
+                  requested_time: q.requested_time,
+                  from_date: q.from_date,
+                  to_date: q.to_date,
+                  work_start_time: q.work_start_time,
+                  work_end_time: q.work_end_time,
+                  scheduled_date: q.scheduled_date,
+                  scheduled_time_from: q.service_from_time,
+                  scheduled_time_to: q.service_to_time,
+                },
+                { paymentType: String(q.payment_type ?? "").trim() }
+              )}
+            </span>
+          );
+        },
+      },
+      {
+        Header: "Created Date",
+        accessor: "created_at",
+        sort: true,
+        Cell: ({ row }: { row: any }) =>
+          formatDate(String(row.original.created_at ?? "")),
       },
       {
         Header: "Status",

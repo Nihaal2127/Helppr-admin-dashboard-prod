@@ -186,3 +186,89 @@ export const apiRequestBlob = async (endpoint: string, payload?: any) => {
     return { success: false, error: error.message || "Network error" };
   }
 };
+
+function filenameFromContentDisposition(
+  header: string | null,
+  fallback: string
+): string {
+  if (!header) return fallback;
+  const utf8 = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header);
+  if (utf8?.[1]) {
+    try {
+      return decodeURIComponent(utf8[1].trim().replace(/['"]/g, ""));
+    } catch {
+      return utf8[1].trim().replace(/['"]/g, "");
+    }
+  }
+  const plain = /filename\s*=\s*([^;]+)/i.exec(header);
+  if (plain?.[1]) return plain[1].trim().replace(/['"]/g, "");
+  return fallback;
+}
+
+/** GET that returns a file (PDF/HTML/etc.) and triggers a browser download. */
+export const apiRequestFileDownload = async (
+  endpoint: string,
+  options?: {
+    accept?: string;
+    defaultFilename?: string;
+    skipLoader?: boolean;
+  }
+) => {
+  const skipLoader = options?.skipLoader ?? false;
+  try {
+    if (!skipLoader) showLoader();
+
+    const headers: HeadersInit = {
+      Authorization: `Bearer ${localStorage.getItem("authToken")}`,
+      Accept: options?.accept ?? "*/*",
+    };
+
+    const response = await fetch(`${AppConstant.BASE_URL}${endpoint}`, {
+      method: "GET",
+      headers,
+    });
+
+    if (!skipLoader) hideLoader();
+
+    if (!response.ok) {
+      const navigate = getNavigate();
+      if (response.status === 500) {
+        closeAllModals();
+      } else if (response.status === 401) {
+        clearLocalStorage();
+        navigate?.(ROUTES.LOGIN.path, { replace: true });
+      }
+
+      let message = "Failed to download the file";
+      try {
+        const data = await response.json();
+        if (data?.message) message = String(data.message);
+      } catch {
+        /* non-JSON error body */
+      }
+      showErrorAlert(message);
+      return { success: false, message };
+    }
+
+    const filename = filenameFromContentDisposition(
+      response.headers.get("Content-Disposition"),
+      options?.defaultFilename ?? "download"
+    );
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    showSuccessAlert("Download Successfully");
+    return { success: true, filename };
+  } catch (error: any) {
+    if (!skipLoader) hideLoader();
+    const message = error?.message || "Network error";
+    showErrorAlert(message);
+    return { success: false, error: message };
+  }
+};

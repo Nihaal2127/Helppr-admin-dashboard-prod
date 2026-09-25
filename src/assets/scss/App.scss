@@ -1084,6 +1084,11 @@ $partner-details-section-gap: 1rem;
     align-items: end;
   }
 
+  /* Keep service / price / status at top when description grows */
+  .add-partner-catalog-grid--service {
+    align-items: start;
+  }
+
   .add-partner-catalog-grid--category {
     padding-bottom: 0.75rem;
     border-bottom: 1px solid var(--lb1-border);
@@ -1140,6 +1145,8 @@ $partner-details-section-gap: 1rem;
 
     .add-partner-catalog-grid--service .add-partner-catalog-field--actions {
       grid-column: 4;
+      /* Align +/− with controls (below field labels) */
+      padding-top: 1.75rem;
     }
   }
 
@@ -1161,6 +1168,11 @@ $partner-details-section-gap: 1rem;
     .add-partner-catalog-grid--category .add-partner-catalog-field--actions,
     .add-partner-catalog-grid--service .add-partner-catalog-field--actions {
       grid-column: 5;
+    }
+
+    .add-partner-catalog-grid--service .add-partner-catalog-field--actions {
+      /* Align +/− with controls (below field labels) */
+      padding-top: 1.75rem;
     }
 
     .add-partner-catalog-grid--service .add-partner-catalog-field--service {

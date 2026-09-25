@@ -22,6 +22,7 @@ import { textUnderlineCell, formatDate, priceCell } from "../../helper/utility";
 import CustomTable from "../../components/CustomTable";
 import {
   deleteOrder,
+  downloadOrderInvoice,
   fetchOrder,
   mapOrderTabCountsFromRecord,
   ORDER_TAB_KEYS,
@@ -277,9 +278,7 @@ const OrderManagement = () => {
   );
 
   const handleOrderInvoiceDownload = useCallback((orderId: string) => {
-    void import("../../components/order/OrderInvoice").then(({ downloadOrderInvoice }) =>
-      downloadOrderInvoice(orderId)
-    );
+    void downloadOrderInvoice(orderId);
   }, []);
 
   const handleOrderVoid = useCallback(
