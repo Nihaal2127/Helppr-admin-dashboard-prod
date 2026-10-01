@@ -252,6 +252,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   const skipAutoPriceRef = useRef(true);
   /** When true, do not overwrite a manually edited service price. */
   const userEditedServicePriceRef = useRef(false);
+  /** Partner + service loaded from GET /quote — API price only applies to this pair. */
+  const originalSelectionRef = useRef({ partner: "", service: "" });
   const skipScheduleRevalidateRef = useRef(true);
   const [apiServiceFees, setApiServiceFees] = useState<
     ServiceDropDownOption | undefined
@@ -445,9 +447,14 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       apiServiceFees,
       quoteCatalogServices
     );
+    const seededServiceId = sid || seeded.requested_services;
+    originalSelectionRef.current = {
+      partner: String(seeded.requested_partner ?? "").trim(),
+      service: String(seededServiceId ?? "").trim(),
+    };
     reset({
       ...seeded,
-      requested_services: sid || seeded.requested_services,
+      requested_services: seededServiceId,
     });
     const t = window.setTimeout(() => {
       skipAutoPriceRef.current = false;
@@ -951,13 +958,25 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     if (skipAutoPriceRef.current) return;
     if (userEditedServicePriceRef.current) return;
     if (!isScheduleComplete || !partnerSelected) return;
-    // Prefer GET /quote amounts (including New) whenever the API returned a
-    // total — do not overwrite with partner catalog auto-calc (e.g. 1000 vs 1001).
-    if (quoteRow && quoteHasApiPriceBreakdown(quoteRow)) {
-      return;
-    }
     const sid = serviceId;
     if (!sid) return;
+    // Keep a non-zero GET /quote total (e.g. 1000 vs 1001 catalog calc) while
+    // the partner/service are unchanged and the field still holds a price.
+    const currentPrice = Number(String(form.service_price ?? "").trim());
+    const sameSelection =
+      String(form.requested_partner ?? "").trim() ===
+        originalSelectionRef.current.partner &&
+      sid === originalSelectionRef.current.service;
+    if (
+      quoteRow &&
+      quoteHasApiPriceBreakdown(quoteRow) &&
+      Number(quoteRow.total_price) > 0 &&
+      sameSelection &&
+      Number.isFinite(currentPrice) &&
+      currentPrice > 0
+    ) {
+      return;
+    }
     const row = getPartnerActiveServiceProvidingRow(
       selectedPartnerCatalogRecord,
       sid
@@ -977,6 +996,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     const n = row
       ? computeAutoQuotePriceFromPartner(row, metrics, catalogPaymentType)
       : 0;
+    if (String(form.service_price ?? "").trim() === String(n)) return;
     setValue("service_price", String(n), {
       shouldValidate: true,
       shouldDirty: true,
@@ -986,6 +1006,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     partnerSelected,
     isNewTabQuoteEdit,
     serviceId,
+    form.service_price,
+    form.requested_partner,
     activeScheduleMode,
     form.requested_date,
     form.requested_date_to,
@@ -1167,12 +1189,13 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       return;
     }
 
-    // New-tab Update: schedule / address / notes / service_price.
-    // Partner and status still go through Update & Send.
+    // New-tab Update: catalog / partner / schedule / address / notes / service_price.
+    // Status still goes through Update & Send.
     const patch: Record<string, unknown> = isNewTabQuoteEdit
       ? {
           category_id: String(formData.category_id ?? "").trim(),
           service_id: String(formData.requested_services ?? "").trim(),
+          partner_id: String(formData.requested_partner ?? "").trim() || undefined,
           employee_id: String(formData.employee_id ?? "").trim() || undefined,
           address_id: selectedAddressId.trim(),
           ...(priceRaw && Number.isFinite(price) && price >= 0
