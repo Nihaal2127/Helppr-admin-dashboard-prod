@@ -608,20 +608,37 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
   const editServiceOptions = useMemo(() => {
     if (isNewTabQuoteEdit || isCatalogLockedQuoteEdit) {
-      return buildQuotePrefilledServiceOptions(
+      const cid = String(form.category_id ?? quoteRow?.category_id ?? "").trim();
+      const prefilled = buildQuotePrefilledServiceOptions(
         quoteCatalogServices,
         String(
           form.requested_services ?? resolvedQuoteServiceId ?? quoteRow?.service_id ?? ""
         ),
         quoteRow?.service_name ?? quoteRow?.requested_services,
-        String(form.category_id ?? quoteRow?.category_id ?? ""),
+        cid,
         [quoteRow?.services, apiServiceFees?.label]
       );
+      const base =
+        partnerSelected && quoteServiceOptionsForCategory.length > 0
+          ? quoteServiceOptionsForCategory
+          : cid
+            ? quoteCatalogServices.filter(
+                (o) => String(o.category_id ?? "").trim() === cid
+              )
+            : [];
+      const merged = [...base];
+      for (const opt of prefilled) {
+        if (!merged.some((o) => String(o.value) === String(opt.value))) {
+          merged.unshift(opt);
+        }
+      }
+      return merged;
     }
     return quoteServiceOptionsForCategory;
   }, [
     isNewTabQuoteEdit,
     isCatalogLockedQuoteEdit,
+    partnerSelected,
     quoteServiceOptionsForCategory,
     quoteCatalogServices,
     form.requested_services,
@@ -1725,12 +1742,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                                 : "Search service name"
                         }
                         menuPortal
-                        isClearable={!isNewTabQuoteEdit && !isCatalogFieldsReadOnly}
-                        isDisabled={
-                          serviceFieldDisabled ||
-                          isNewTabQuoteEdit ||
-                          isCatalogFieldsReadOnly
-                        }
+                        isClearable={!serviceFieldDisabled}
+                        isDisabled={serviceFieldDisabled}
                       />
                     </Col>
                   </Row>
@@ -1863,12 +1876,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                               : "Search service name"
                       }
                       menuPortal
-                      isClearable={!isNewTabQuoteEdit && !isCatalogFieldsReadOnly}
-                      isDisabled={
-                        serviceFieldDisabled ||
-                        isNewTabQuoteEdit ||
-                        isCatalogFieldsReadOnly
-                      }
+                      isClearable={!serviceFieldDisabled}
+                      isDisabled={serviceFieldDisabled}
                     />
                   </Col>
                 </Row>
