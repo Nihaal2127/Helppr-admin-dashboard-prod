@@ -1085,6 +1085,96 @@ export function getPartnerActiveServiceProvidingRow(
   return null;
 }
 
+function isFalseFlag(v: unknown): boolean {
+  return v === false || v === 0 || String(v ?? "").trim().toLowerCase() === "false";
+}
+
+function isInactiveRow(row: Record<string, unknown>): boolean {
+  return (
+    isFalseFlag(row.is_active) ||
+    isFalseFlag(row.effective_active) ||
+    isFalseFlag(row.service_is_active) ||
+    String(row.status ?? "").trim().toLowerCase() === "inactive"
+  );
+}
+
+/** Partner has `serviceId` in their catalog but marked it inactive at partner level. */
+export function partnerServiceInactiveForQuote(
+  partner: Record<string, unknown> | null | undefined,
+  serviceId: string | undefined | null
+): boolean {
+  const sid = str(serviceId);
+  if (!partner || !sid) return false;
+
+  // related-catalog: an inactive service stays in `active_categories_providing[].services`
+  // but is dropped from `active_services_providing`.
+  if (partnerActiveServicesProvidingIsList(partner)) {
+    const hasActiveRow = Boolean(getPartnerActiveServiceProvidingRow(partner, sid));
+    if (!hasActiveRow) {
+      for (const cat of partnerCategoriesProvidingRows(partner)) {
+        if (!Array.isArray(cat.services)) continue;
+        if ((cat.services as unknown[]).some((x) => normalizeMongoRef(x) === sid)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  // `partner_services`: [{ category_id, is_active, services: [{ service_id, is_active }] }]
+  const grouped = partner.partner_services ?? partner.partnerServices;
+  if (Array.isArray(grouped)) {
+    for (const cat of asObjectRecords(grouped)) {
+      const services = Array.isArray(cat.services)
+        ? asObjectRecords(cat.services)
+        : [];
+      const nestedHit = services.find((s) => providingRowMatchesServiceId(s, sid));
+      if (nestedHit) {
+        if (isInactiveRow(cat) || isInactiveRow(nestedHit)) return true;
+        continue;
+      }
+      // Flat `partner_services` rows (one per service).
+      if (providingRowMatchesServiceId(cat, sid) && isInactiveRow(cat)) return true;
+    }
+  }
+
+  // Parallel `service_ids` + `service_is_active`.
+  const ids = partner.service_ids;
+  const flags = partner.service_is_active;
+  if (Array.isArray(ids) && Array.isArray(flags)) {
+    const idx = ids.findIndex((x) => normalizeMongoRef(x) === sid);
+    if (idx >= 0 && isFalseFlag(flags[idx])) return true;
+  }
+
+  const rawLists = [
+    partner.active_services_providing ?? partner.activeServicesProviding,
+    partner.services_providing ?? partner.servicesProviding,
+  ];
+  for (const list of rawLists) {
+    if (!Array.isArray(list)) continue;
+    for (const o of asObjectRecords(list)) {
+      if (providingRowMatchesServiceId(o, sid) && isInactiveRow(o)) return true;
+    }
+  }
+
+  // Category rows with `services: [{ _id|service_id, is_active }]`.
+  const catLists = [
+    partner.active_categories_providing ?? partner.activeCategoriesProviding,
+    partner.categories_providing ?? partner.categoriesProviding,
+  ];
+  for (const list of catLists) {
+    if (!Array.isArray(list)) continue;
+    for (const cat of asObjectRecords(list)) {
+      if (!Array.isArray(cat.services)) continue;
+      for (const s of asObjectRecords(cat.services)) {
+        if (providingRowMatchesServiceId(s, sid) && isInactiveRow(s)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+export const QUOTE_PARTNER_INACTIVE_SERVICE_SUFFIX = " (inactive service)";
+
 /** Whether a franchise partner offers `serviceId` (optional `categoryId` scope). */
 export function partnerProvidesQuoteService(
   partner: Record<string, unknown>,
@@ -1135,17 +1225,24 @@ export function buildQuotePartnerOptionsForPrefilledService(
   if (!sid) return [];
   const out: OptionType[] = [];
   for (const p of partnerRecords) {
-    if (!partnerProvidesQuoteService(p, quoteCatalogServices, sid, categoryId)) {
+    const inactive =
+      isPartnerRecordEligible(p) && partnerServiceInactiveForQuote(p, sid);
+    if (
+      !inactive &&
+      !partnerProvidesQuoteService(p, quoteCatalogServices, sid, categoryId)
+    ) {
       continue;
     }
     const value = String(
       p.partner_id ?? p._id ?? p.user_id ?? p.id ?? ""
     ).trim();
     if (!value) continue;
-    const label = String(
-      p.partner_name ?? p.name ?? p.user_name ?? value
-    ).trim();
-    out.push({ value, label: label || value });
+    const label =
+      String(p.partner_name ?? p.name ?? p.user_name ?? value).trim() || value;
+    out.push({
+      value,
+      label: inactive ? `${label}${QUOTE_PARTNER_INACTIVE_SERVICE_SUFFIX}` : label,
+    });
   }
   return out.sort((a, b) => a.label.localeCompare(b.label));
 }

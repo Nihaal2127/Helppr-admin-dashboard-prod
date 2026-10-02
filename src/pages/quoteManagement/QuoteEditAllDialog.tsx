@@ -25,6 +25,8 @@ import {
   buildQuotePartnerOptionsForPrefilledService,
   buildQuotePrefilledCategoryOptions,
   buildQuotePrefilledServiceOptions,
+  partnerServiceInactiveForQuote,
+  QUOTE_PARTNER_INACTIVE_SERVICE_SUFFIX,
   filterPartnerServicesForCategory,
   getPartnerActiveServiceProvidingRow,
   getQuoteScheduleModeForPartnerService,
@@ -549,6 +551,18 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     );
   }, [form.requested_partner, catalogPartnerRecords]);
 
+  const selectedPartnerServiceInactiveMessage = useMemo(() => {
+    const sid = String(form.requested_services ?? quoteRow?.service_id ?? "").trim();
+    if (!partnerServiceInactiveForQuote(selectedPartnerCatalogRecord, sid)) {
+      return "";
+    }
+    const rec = selectedPartnerCatalogRecord ?? {};
+    const name =
+      String(rec.partner_name ?? rec.name ?? rec.user_name ?? "").trim() ||
+      "This partner";
+    return `${name} has made this service inactive.`;
+  }, [selectedPartnerCatalogRecord, form.requested_services, quoteRow?.service_id]);
+
   const quoteCatalogServicesForPartner = useMemo(
     () =>
       buildQuoteCatalogServicesForPartner(
@@ -660,7 +674,20 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   ]);
 
   const editPartnerOptions = useMemo(() => {
-    if (!isNewTabQuoteEdit) return quotePartnerOptions;
+    if (!isNewTabQuoteEdit) {
+      const sid = String(form.requested_services ?? quoteRow?.service_id ?? "").trim();
+      if (!sid) return quotePartnerOptions;
+      return quotePartnerOptions.map((o) => {
+        const rec = catalogPartnerRecords.find(
+          (p) =>
+            String(p.partner_id ?? p._id ?? p.user_id ?? p.id ?? "").trim() ===
+            o.value
+        );
+        return partnerServiceInactiveForQuote(rec, sid)
+          ? { ...o, label: `${o.label}${QUOTE_PARTNER_INACTIVE_SERVICE_SUFFIX}` }
+          : o;
+      });
+    }
     const sid = String(form.requested_services ?? quoteRow?.service_id ?? "").trim();
     if (!sid) return quotePartnerOptions;
     return buildQuotePartnerOptionsForPrefilledService(
@@ -1639,44 +1666,6 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                     </Col>
                     <Col xs={12} md={6}>
                       <CustomTextFieldSelect
-                        label="Partner"
-                        controlId="edit-quote-partner"
-                        asCol={false}
-                        options={editPartnerOptions}
-                        register={register as unknown as UseFormRegister<AddQuoteFormValues>}
-                        fieldName="requested_partner"
-                        error={errors.requested_partner}
-                        requiredMessage={
-                          isNewTabQuoteEdit
-                            ? undefined
-                            : "Please select a partner"
-                        }
-                        showRequiredMark={isNewTabQuoteEdit}
-                        defaultValue={form.requested_partner}
-                        setValue={(name, value) => {
-                          if (name === "requested_partner") {
-                            handlePartnerSelectChange(value);
-                            return;
-                          }
-                          applySelectFieldValue(
-                            name as keyof EditQuoteFormValues,
-                            value
-                          );
-                        }}
-                        placeholder={
-                          isNewTabQuoteEdit
-                            ? "Select partner for this service"
-                            : "Search partner name"
-                        }
-                        menuPortal
-                        isClearable={!isCatalogFieldsReadOnly}
-                        isDisabled={lockedFields || isCatalogFieldsReadOnly}
-                      />
-                    </Col>
-                  </Row>
-                  <Row className="gy-4 gx-md-5 align-items-start">
-                    <Col xs={12} md={6}>
-                      <CustomTextFieldSelect
                         label="Category"
                         controlId="edit-quote-category"
                         asCol={false}
@@ -1722,7 +1711,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         }
                       />
                     </Col>
-                    <Col xs={12} md={6}>
+                  </Row>
+                  <Row className="gy-4 gx-md-5 align-items-start">
+                  <Col xs={12} md={6}>
                       <CustomTextFieldSelect
                         key={`edit-quote-svc-${form.category_id || "none"}-${quoteRow?.service_name || form.requested_services || ""}`}
                         label="Service"
@@ -1769,6 +1760,48 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         isDisabled={serviceFieldDisabled}
                       />
                     </Col>
+                    <Col xs={12} md={6}>
+                      <CustomTextFieldSelect
+                        label="Partner"
+                        controlId="edit-quote-partner"
+                        asCol={false}
+                        options={editPartnerOptions}
+                        register={register as unknown as UseFormRegister<AddQuoteFormValues>}
+                        fieldName="requested_partner"
+                        error={errors.requested_partner}
+                        requiredMessage={
+                          isNewTabQuoteEdit
+                            ? undefined
+                            : "Please select a partner"
+                        }
+                        showRequiredMark={isNewTabQuoteEdit}
+                        defaultValue={form.requested_partner}
+                        setValue={(name, value) => {
+                          if (name === "requested_partner") {
+                            handlePartnerSelectChange(value);
+                            return;
+                          }
+                          applySelectFieldValue(
+                            name as keyof EditQuoteFormValues,
+                            value
+                          );
+                        }}
+                        placeholder={
+                          isNewTabQuoteEdit
+                            ? "Select partner for this service"
+                            : "Search partner name"
+                        }
+                        menuPortal
+                        isClearable={!isCatalogFieldsReadOnly}
+                        isDisabled={lockedFields || isCatalogFieldsReadOnly}
+                      />
+                      {selectedPartnerServiceInactiveMessage ? (
+                        <div className="small text-danger mt-1">
+                          {selectedPartnerServiceInactiveMessage}
+                        </div>
+                      ) : null}
+                    </Col>
+                   
                   </Row>
                 </>
               ) : (
@@ -1808,6 +1841,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                       isClearable={!isCatalogFieldsReadOnly}
                       isDisabled={lockedFields || isCatalogFieldsReadOnly}
                     />
+                    {selectedPartnerServiceInactiveMessage ? (
+                      <div className="small text-danger mt-1">
+                        {selectedPartnerServiceInactiveMessage}
+                      </div>
+                    ) : null}
                   </Col>
                   <Col xs={12} md={6}>
                     <CustomTextFieldSelect
