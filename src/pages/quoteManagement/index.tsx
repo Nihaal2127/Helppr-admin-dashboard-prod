@@ -83,58 +83,86 @@ import {
 } from "../../lib/notifications/notificationNavigation";
 import { apiRequest } from "../../lib/global/remote/apiHelper";
 
-/** Unique subcategory options from `GET /quote/getAll` records. */
-function mapSubCategoryOptionsFromQuoteGetAll(data: unknown): OptionType[] {
-  const payload =
-    data && typeof data === "object" ? (data as Record<string, unknown>) : null;
-  const nested =
-    payload?.data &&
-    typeof payload.data === "object" &&
-    !Array.isArray(payload.data)
-      ? (payload.data as Record<string, unknown>)
-      : null;
-      const payloadRecords = payload?.records;
-const nestedRecords = nested?.records;
-const payloadSubcategories = payload?.subcategories;
-const dataRecords = Array.isArray(data) ? data : null;
+/** Sub Category options from related-catalog `partners[].active_subcategories_providing`. */
+function subCategoryOptionsFromPartnerCatalog(
+  partner: Record<string, unknown> | null | undefined,
+  categoryId: string
+): OptionType[] {
+  const cid = String(categoryId ?? "").trim();
+  if (!partner || !cid) return [];
 
-const rawRecords = Array.isArray(payloadRecords)
-  ? payloadRecords
-  : Array.isArray(nestedRecords)
-    ? nestedRecords
-    : Array.isArray(payloadSubcategories)
-      ? payloadSubcategories
-      : dataRecords ?? [];
+  const providing = partner.active_subcategories_providing;
+  const rows = Array.isArray(providing) ? providing : [];
   const seen = new Set<string>();
   const options: OptionType[] = [];
-  for (const item of rawRecords) {
-    const row =
-      item && typeof item === "object"
-        ? (item as Record<string, unknown>)
-        : {};
-    const nestedSub =
-      row.subcategory_id &&
-      typeof row.subcategory_id === "object" &&
-      !Array.isArray(row.subcategory_id)
-        ? (row.subcategory_id as Record<string, unknown>)
-        : null;
+
+  for (const item of rows) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, any>;
+    const subcategory = row.subcategory;
+    const rowCategoryId = String(
+      row.category_id ?? subcategory?.category_id ?? ""
+    ).trim();
+    if (rowCategoryId !== cid) continue;
+    if (
+      row.is_active === false ||
+      row.effective_active === false ||
+      row.partner_enabled === false ||
+      row.global_active === false ||
+      row.franchise_enabled === false ||
+      subcategory?.is_active === false
+    ) {
+      continue;
+    }
     const value = String(
-      nestedSub?._id ??
-        nestedSub?.id ??
-        (typeof row.subcategory_id === "string" ||
-        typeof row.subcategory_id === "number"
-          ? row.subcategory_id
-          : "") ??
-        ""
+      subcategory?._id ?? subcategory?.id ?? row.subcategory_id ?? ""
     ).trim();
-    if (!value || value === "[object Object]" || seen.has(value)) continue;
     const label = String(
-      row.subcategory_name ?? nestedSub?.name ?? nestedSub?.label ?? value
+      subcategory?.name ?? subcategory?.label ?? row.subcategory_name ?? ""
     ).trim();
+    if (!value || !label || seen.has(value)) continue;
     seen.add(value);
-    options.push({ value, label: label || value });
+    options.push({ value, label });
   }
-  return options;
+
+  return options.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function allowedServiceIdsForPartnerSubCategory(
+  partner: Record<string, unknown> | null | undefined,
+  subcategoryId: string
+): Set<string> | null {
+  const sid = String(subcategoryId ?? "").trim();
+  if (!partner || !sid) return null;
+  const providing = partner.active_subcategories_providing;
+  const rows = Array.isArray(providing) ? providing : [];
+  for (const item of rows) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, any>;
+    const subcategory = row.subcategory;
+    const value = String(
+      subcategory?._id ?? subcategory?.id ?? row.subcategory_id ?? ""
+    ).trim();
+    if (value !== sid) continue;
+    const out = new Set<string>();
+    const services = Array.isArray(row.services) ? row.services : [];
+    for (const x of services) {
+      const id =
+        typeof x === "string" || typeof x === "number"
+          ? String(x).trim()
+          : x && typeof x === "object"
+            ? String(
+                (x as Record<string, unknown>)._id ??
+                  (x as Record<string, unknown>).id ??
+                  (x as Record<string, unknown>).service_id ??
+                  ""
+              ).trim()
+            : "";
+      if (id) out.add(id);
+    }
+    return out;
+  }
+  return null;
 }
 
 /** Time-only value for `CustomTimePicker` / stored fields (same pattern as quote schedule edit). */
@@ -320,9 +348,6 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
   const [quoteCategoryOptions, setQuoteCategoryOptions] = useState<
     OptionType[]
   >([]);
-  const [quoteSubCategoryOptions, setQuoteSubCategoryOptions] = useState<
-    OptionType[]
-  >([]);
   const addQuoteServiceId = String(addQuote.requested_services ?? "").trim();
   const hasAddQuoteServiceSelected = Boolean(addQuoteServiceId);
   const currentUserRole = getLocalStorage(AppConstant.userRole);
@@ -363,7 +388,6 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
     setAddQuoteValue("service_price", "", { shouldValidate: false });
     setAddQuoteValue("user_description", "", { shouldValidate: false });
     setAddQuoteValue("admin_description", "", { shouldValidate: false });
-    setQuoteSubCategoryOptions([]);
     setCreateQuoteAddressId("");
     setAddQuoteAddressUi(emptyAddQuoteAddressUi());
   }, [setAddQuoteValue]);
@@ -498,15 +522,48 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
     [quoteCategoryOptions, quoteCatalogServices, selectedPartnerCatalogRecord]
   );
 
+  const quoteSubCategoryOptions = useMemo(
+    () =>
+      subCategoryOptionsFromPartnerCatalog(
+        selectedPartnerCatalogRecord,
+        String(addQuote.category_id ?? "").trim()
+      ),
+    [selectedPartnerCatalogRecord, addQuote.category_id]
+  );
+
+  useEffect(() => {
+    const current = String(getAddQuoteValues("subcategory_id") ?? "").trim();
+    if (
+      current &&
+      !quoteSubCategoryOptions.some((option) => option.value === current)
+    ) {
+      setAddQuoteValue("subcategory_id", "", { shouldValidate: false });
+    }
+  }, [quoteSubCategoryOptions, getAddQuoteValues, setAddQuoteValue]);
+
   const { quoteServiceOptionsForCategory, scheduleMode } = useMemo(() => {
     const cid = String(addQuote.category_id ?? "").trim();
-    const quoteServiceOptionsForCategory = !cid
+    let quoteServiceOptionsForCategory = !cid
       ? []
       : filterPartnerServicesForCategory(
           quoteCatalogServicesForPartner,
           selectedPartnerCatalogRecord,
           cid
         );
+    const subId = String(addQuote.subcategory_id ?? "").trim();
+    if (subId) {
+      const allowed = allowedServiceIdsForPartnerSubCategory(
+        selectedPartnerCatalogRecord,
+        subId
+      );
+      if (allowed != null) {
+        quoteServiceOptionsForCategory = allowed.size
+          ? quoteServiceOptionsForCategory.filter((o) =>
+              allowed.has(String(o.value))
+            )
+          : [];
+      }
+    }
     const sid = String(addQuote.requested_services ?? "").trim();
     const opt = quoteServiceOptionsForCategory.find((o) => o.value === sid);
     return {
@@ -519,63 +576,10 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
     };
   }, [
     addQuote.category_id,
+    addQuote.subcategory_id,
     addQuote.requested_services,
     quoteCatalogServicesForPartner,
     selectedPartnerCatalogRecord,
-  ]);
-
-  /**
-   * Add Quote Sub Category dropdown —
-   * `GET /quote/getAll?page=1&limit=10` (+ optional category_id / subcategory_id / franchise_id).
-   */
-  useEffect(() => {
-    const categoryId = String(addQuote.category_id ?? "").trim();
-    let cancelled = false;
-    if (!categoryId || !showAddQuote) {
-      setQuoteSubCategoryOptions([]);
-      return;
-    }
-    void (async () => {
-      const params = new URLSearchParams({
-        page: "1",
-        limit: "10",
-        category_id: categoryId,
-      });
-      const franchiseId = String(
-        isSuperAdminOrStaff
-          ? addQuote.franchise_id ?? ""
-          : sessionFranchiseIdForQuoteCatalog
-      ).trim();
-      if (franchiseId) params.set("franchise_id", franchiseId);
-      const response = await apiRequest(
-        `/quote/getAll?${params.toString()}`,
-        "GET"
-      );
-      if (cancelled) return;
-      if (!response.success) {
-        setQuoteSubCategoryOptions([]);
-        return;
-      }
-      const options = mapSubCategoryOptionsFromQuoteGetAll(response.data);
-      setQuoteSubCategoryOptions(options);
-      const selectedSub = String(
-        getAddQuoteValues("subcategory_id") ?? ""
-      ).trim();
-      if (selectedSub && !options.some((option) => option.value === selectedSub)) {
-        setAddQuoteValue("subcategory_id", "", { shouldValidate: false });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    addQuote.category_id,
-    addQuote.franchise_id,
-    showAddQuote,
-    isSuperAdminOrStaff,
-    sessionFranchiseIdForQuoteCatalog,
-    getAddQuoteValues,
-    setAddQuoteValue,
   ]);
 
   const selectedAddQuoteServiceOption = useMemo(() => {
@@ -1080,6 +1084,26 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
     addQuotePartnerSelected,
     addQuote.category_id,
     quoteCategoryOptionsForPartner,
+    setAddQuoteValue,
+  ]);
+
+  useEffect(() => {
+    const sid = String(addQuote.requested_services ?? "").trim();
+    if (!sid) return;
+    if (quoteServiceOptionsForCategory.some((o) => String(o.value) === sid)) {
+      return;
+    }
+    setAddQuoteValue("requested_services", "", { shouldValidate: false });
+    setAddQuoteValue("requested_date", "", { shouldValidate: false });
+    setAddQuoteValue("schedule_duration", "", { shouldValidate: false });
+    setAddQuoteValue("requested_date_to", "", { shouldValidate: false });
+    setAddQuoteValue("requested_time", "", { shouldValidate: false });
+    setAddQuoteValue("requested_time_from", "", { shouldValidate: false });
+    setAddQuoteValue("requested_time_to", "", { shouldValidate: false });
+    setAddQuoteValue("service_price", "", { shouldValidate: false });
+  }, [
+    addQuote.requested_services,
+    quoteServiceOptionsForCategory,
     setAddQuoteValue,
   ]);
 
@@ -1681,7 +1705,10 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
       return;
     }
 
-    if (!String(data.subcategory_id ?? "").trim()) {
+    if (
+      quoteSubCategoryOptions.length > 0 &&
+      !String(data.subcategory_id ?? "").trim()
+    ) {
       showErrorAlert("Please select a sub category.");
       return;
     }
@@ -2418,10 +2445,45 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
                           }
                           fieldName="subcategory_id"
                           error={addQuoteErrors.subcategory_id}
-                          defaultValue={addQuote.subcategory_id}
-                          setValue={
-                            setAddQuoteValue as (name: string, value: any) => void
+                          requiredMessage={
+                            quoteSubCategoryOptions.length
+                              ? "Please select a sub category"
+                              : undefined
                           }
+                          defaultValue={addQuote.subcategory_id}
+                          setValue={(name: string, value: any) => {
+                            setAddQuoteValue(
+                              name as keyof AddQuoteFormValues,
+                              value,
+                              { shouldValidate: addQuoteFormSubmitted }
+                            );
+                            if (name === "subcategory_id") {
+                              setAddQuoteValue("requested_services", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("requested_date", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("schedule_duration", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("requested_date_to", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("requested_time", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("requested_time_from", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("requested_time_to", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("service_price", "", {
+                                shouldValidate: false,
+                              });
+                            }
+                          }}
                           placeholder={
                             !addQuotePartnerSelected
                               ? "Select partner first"
@@ -2444,7 +2506,7 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
                     <Row className="gy-3 gx-md-4 align-items-start">
                       <Col xs={12} md={6}>
                         <CustomTextFieldSelect
-                          key={`add-quote-svc-${addQuote.category_id || "none"}`}
+                          key={`add-quote-svc-${addQuote.category_id || "none"}-${addQuote.subcategory_id || "none"}`}
                           label="Requested Services"
                           controlId="add-quote-service"
                           asCol={false}
@@ -2662,10 +2724,45 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
                           }
                           fieldName="subcategory_id"
                           error={addQuoteErrors.subcategory_id}
-                          defaultValue={addQuote.subcategory_id}
-                          setValue={
-                            setAddQuoteValue as (name: string, value: any) => void
+                          requiredMessage={
+                            quoteSubCategoryOptions.length
+                              ? "Please select a sub category"
+                              : undefined
                           }
+                          defaultValue={addQuote.subcategory_id}
+                          setValue={(name: string, value: any) => {
+                            setAddQuoteValue(
+                              name as keyof AddQuoteFormValues,
+                              value,
+                              { shouldValidate: addQuoteFormSubmitted }
+                            );
+                            if (name === "subcategory_id") {
+                              setAddQuoteValue("requested_services", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("requested_date", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("schedule_duration", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("requested_date_to", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("requested_time", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("requested_time_from", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("requested_time_to", "", {
+                                shouldValidate: false,
+                              });
+                              setAddQuoteValue("service_price", "", {
+                                shouldValidate: false,
+                              });
+                            }
+                          }}
                           placeholder={
                             !addQuotePartnerSelected
                               ? "Select partner first"
@@ -2688,7 +2785,7 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
                     <Row className="gy-3 gx-md-4 align-items-start">
                       <Col xs={12} md={6}>
                         <CustomTextFieldSelect
-                          key={`add-quote-svc-${addQuote.category_id || "none"}`}
+                          key={`add-quote-svc-${addQuote.category_id || "none"}-${addQuote.subcategory_id || "none"}`}
                           label="Requested Services"
                           controlId="add-quote-service"
                           asCol={false}
