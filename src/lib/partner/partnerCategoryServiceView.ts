@@ -273,49 +273,53 @@ function flattenPartnerServiceRows(
 
   for (const category of partnerServices) {
     const categoryActive = partnerServiceRowIsActive(category);
+    let pushedNested = false;
 
-    if (Array.isArray(category.subcategories)) {
-      for (const subcategory of category.subcategories) {
-        const subcategoryActive =
-          subcategory.is_active !== false &&
-          subcategory.is_active !== 0 &&
-          String(subcategory.is_active).toLowerCase() !== "false";
+    // Live GET `/user/get/:id` often sends `subcategories: []` and keeps
+    // services on the category. Empty subcategories must not skip those services.
+    const nestedSubcategories = Array.isArray(category.subcategories)
+      ? category.subcategories
+      : [];
+    for (const subcategory of nestedSubcategories) {
+      const subcategoryActive =
+        subcategory.is_active !== false &&
+        subcategory.is_active !== 0 &&
+        String(subcategory.is_active).toLowerCase() !== "false";
 
-        const nestedServices = Array.isArray(subcategory.services)
-          ? subcategory.services
-          : [];
+      const nestedServices = Array.isArray(subcategory.services)
+        ? subcategory.services
+        : [];
 
-        for (const service of nestedServices) {
-          flat.push({
-            ...service,
-            category_id: category.category_id,
-            category_is_active: categoryActive && subcategoryActive,
-            is_active:
-              categoryActive &&
-              subcategoryActive &&
-              partnerServiceRowIsActive(service),
-          });
-        }
-      }
-
-      continue;
-    }
-
-    if (Array.isArray(category.services)) {
-      for (const service of category.services) {
+      for (const service of nestedServices) {
+        pushedNested = true;
         flat.push({
           ...service,
-          category_id: service.category_id ?? category.category_id,
-          category_is_active: categoryActive,
+          category_id: category.category_id,
+          category_is_active: categoryActive && subcategoryActive,
           is_active:
-            categoryActive && partnerServiceRowIsActive(service),
+            categoryActive &&
+            subcategoryActive &&
+            partnerServiceRowIsActive(service),
         });
       }
-
-      continue;
     }
 
-    flat.push(category);
+    const categoryServices = Array.isArray(category.services)
+      ? category.services
+      : [];
+    for (const service of categoryServices) {
+      pushedNested = true;
+      flat.push({
+        ...service,
+        category_id: service.category_id ?? category.category_id,
+        category_is_active: categoryActive,
+        is_active: categoryActive && partnerServiceRowIsActive(service),
+      });
+    }
+
+    if (!pushedNested) {
+      flat.push(category);
+    }
   }
 
   return flat;

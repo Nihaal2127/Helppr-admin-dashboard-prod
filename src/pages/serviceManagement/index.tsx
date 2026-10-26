@@ -196,24 +196,16 @@ function serviceRowSubCategoryName(row: Record<string, unknown>): string {
 
 type SubCategoryLookup = {
   nameById: Map<string, string>;
-  namesByCategoryId: Map<string, string[]>;
 };
 
 async function fetchSubCategoryLookup(): Promise<SubCategoryLookup> {
   const nameById = new Map<string, string>();
-  const namesByCategoryId = new Map<string, string[]>();
   const addPayload = (data: unknown) => {
     const page = extractSubCategoryPage(data, 200);
     for (const row of page.records) {
       const id = String(row._id ?? "").trim();
       const name = String(row.name ?? "").trim();
       if (id && name) nameById.set(id, name);
-      const categoryId = String(row.category_id ?? "").trim();
-      if (categoryId && name) {
-        const list = namesByCategoryId.get(categoryId) ?? [];
-        if (!list.includes(name)) list.push(name);
-        namesByCategoryId.set(categoryId, list);
-      }
     }
   };
 
@@ -235,7 +227,7 @@ async function fetchSubCategoryLookup(): Promise<SubCategoryLookup> {
   );
   if (listRes.success) addPayload(listRes.data);
 
-  return { nameById, namesByCategoryId };
+  return { nameById };
 }
 
 function withServiceSubCategoryName(
@@ -253,14 +245,7 @@ function withServiceSubCategoryName(
   if (fromId) {
     return { ...service, subcategory_name: fromId } as ServiceModel;
   }
-  const categoryId = idField(row.category_id);
-  const fromCategory = categoryId
-    ? lookup.namesByCategoryId.get(categoryId) ?? []
-    : [];
-  if (fromCategory.length === 1) {
-    return { ...service, subcategory_name: fromCategory[0] } as ServiceModel;
-  }
-  return service;
+  return { ...service, subcategory_name: "" } as ServiceModel;
 }
 
 function extractRequestedCategoryPage(

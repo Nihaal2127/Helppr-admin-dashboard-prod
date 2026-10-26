@@ -588,9 +588,13 @@ function buildBlocksFromPartnerServices(
 ): PartnerCategoryBlockExt[] {
   const blocks: PartnerCategoryBlockExt[] = [];
   const first = partnerServices[0] as Record<string, unknown> | undefined;
+  const firstHasNestedSubs =
+    Array.isArray(first?.subcategories) &&
+    (first?.subcategories as unknown[]).length > 0;
 
   // Nested: category → subcategories → services
-  if (first && Array.isArray(first.subcategories)) {
+  // Empty `subcategories: []` is not nested — live GET keeps services on the category.
+  if (firstHasNestedSubs) {
     for (const cat of partnerServices as unknown as Record<string, unknown>[]) {
       const cid = partnerServiceRefId(
         cat.category_id as PartnerServiceApiRow["category_id"]
@@ -647,12 +651,45 @@ function buildBlocksFromPartnerServices(
           );
         }
       }
+      const categoryServices = Array.isArray(cat.services)
+        ? (cat.services as Record<string, unknown>[])
+        : [];
+      for (const svc of categoryServices) {
+        const sid = partnerServiceRefId(
+          svc.service_id as PartnerServiceApiRow["service_id"]
+        );
+        if (!sid) continue;
+        let subId = partnerServiceRefId(
+          (svc.subcategory_id ??
+            svc.sub_category_id) as PartnerServiceApiRow["service_id"]
+        );
+        if (!subId) {
+          const hit = allServices.find((s) => String(s._id) === String(sid));
+          subId = String(hit?.subcategory_id ?? "").trim();
+        }
+        pushServiceIntoBlocks(
+          blocks,
+          cid,
+          subId,
+          categoryActive,
+          categoryActive,
+          {
+            id: newPartnerCatalogRowId(),
+            serviceId: sid,
+            description: String(svc.description ?? "").trim(),
+            price:
+              svc.price != null && svc.price !== "" ? String(svc.price) : "",
+            is_active:
+              categoryActive && resolveActiveFlag(svc.is_active, true),
+          }
+        );
+      }
     }
-    return blocks.length > 0 ? blocks : [emptyPartnerCatalogBlockExt("")];
+    if (blocks.length > 0) return blocks;
   }
 
-  // Nested: category → services (legacy)
-  if (first && Array.isArray(first.services)) {
+  // Nested: category → services (legacy, including `subcategories: []`)
+  if (first && Array.isArray(first.services) && first.services.length > 0) {
     for (const cat of partnerServices as unknown as Record<string, unknown>[]) {
       const cid = partnerServiceRefId(
         cat.category_id as PartnerServiceApiRow["category_id"]
@@ -1006,10 +1043,22 @@ function EditPartnerCategoriesServicesDialogView({
 
   const partnerServiceLabelById = useMemo(() => {
     const map = new Map<string, string>();
-    for (const ps of user.partner_services ?? []) {
-      const sid = partnerServiceRefId(ps.service_id);
-      const name = partnerServiceRefName(ps.service_id, "");
+    const addServiceLabel = (row: PartnerServiceApiRow) => {
+      const sid = partnerServiceRefId(row.service_id);
+      const name = partnerServiceRefName(row.service_id, "");
       if (sid && name) map.set(sid, name);
+    };
+    for (const ps of user.partner_services ?? []) {
+      addServiceLabel(ps);
+      if (Array.isArray(ps.services)) {
+        for (const svc of ps.services) addServiceLabel(svc);
+      }
+      if (Array.isArray(ps.subcategories)) {
+        for (const sub of ps.subcategories) {
+          if (!Array.isArray(sub.services)) continue;
+          for (const svc of sub.services) addServiceLabel(svc);
+        }
+      }
     }
     const svcIds = (user.service_ids ?? []).map(String);
     const svcNames = user.service_names ?? [];

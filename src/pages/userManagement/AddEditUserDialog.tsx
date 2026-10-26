@@ -1698,11 +1698,20 @@ function AddEditUserDialogView({
     }
   }, [isPartnerEdit, isAddPartner, user, partnerEditFranchiseId]);
 
-  const selectedServiceCityOptions = useMemo(
-    () =>
-      franchiseCityOptions.filter((o) => serviceCityIds.includes(o.value)),
-    [franchiseCityOptions, serviceCityIds]
-  );
+  const partnerEditServiceCityOptions = useMemo(() => {
+    const source =
+      franchiseCityOptions.length > 0 ? franchiseCityOptions : cities ?? [];
+    const byId = new Map<string, CitySelectOption>();
+    for (const o of source) {
+      const id = String(o.value ?? "").trim();
+      if (!id) continue;
+      byId.set(id, { value: id, label: String(o.label ?? id) });
+    }
+    for (const o of citySelectOptionsFromRefs(user?.service_cities)) {
+      if (!byId.has(o.value)) byId.set(o.value, o);
+    }
+    return Array.from(byId.values());
+  }, [franchiseCityOptions, cities, user?.service_cities]);
 
   const handleServiceCitySelection = useCallback(
     (selectedOptions: CitySelectOption[]) => {
@@ -3498,6 +3507,27 @@ function AddEditUserDialogView({
                       />
                     )}
                     {isPartnerEdit ? (
+                      <>
+                      <Row className="align-items-center mt-2">
+                        <Col sm={4} className="d-flex align-items-center">
+                          <label className="custom-profile-lable mb-0">
+                            <FieldLabelText label="Service Cities" />
+                          </label>
+                        </Col>
+                        <Col>
+                          <CustomMultiSelect
+                            label=""
+                            controlId="partner-edit-service-cities"
+                            asCol={false}
+                            menuPortal
+                            options={partnerEditServiceCityOptions}
+                            value={partnerEditServiceCityOptions.filter((c) =>
+                              serviceCityIds.includes(String(c.value))
+                            )}
+                            onChange={handleServiceCitySelection}
+                          />
+                        </Col>
+                      </Row>
                       <Row className="align-items-center mt-2">
                         <Col sm={4} className="d-flex align-items-center">
                           <label
@@ -3519,6 +3549,7 @@ function AddEditUserDialogView({
                           />
                         </Col>
                       </Row>
+                      </>
                     ) : null}
                   </>
                 ) : null}

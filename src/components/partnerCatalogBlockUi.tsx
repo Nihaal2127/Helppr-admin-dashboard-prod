@@ -322,8 +322,12 @@ export function normalizePartnerServicesForUpdate(
 
   const first = raw[0] as Record<string, unknown>;
 
-  // Already nested: category → subcategories → services
-  if (Array.isArray(first?.subcategories)) {
+  // Already nested: category → subcategories → services.
+  // Empty `subcategories: []` is not nested — fall through to category.services.
+  if (
+    Array.isArray(first?.subcategories) &&
+    (first.subcategories as unknown[]).length > 0
+  ) {
     const grouped = (raw as Record<string, unknown>[])
       .map((cat) => {
         const cid = partnerServiceRefId(
@@ -362,11 +366,11 @@ export function normalizePartnerServicesForUpdate(
         };
       })
       .filter((x): x is PartnerServicesCategoryPayload => x != null);
-    return grouped.length > 0 ? grouped : undefined;
+    if (grouped.length > 0) return grouped;
   }
 
   // Legacy: category → services (wrap into one synthetic subcategory bucket)
-  if (Array.isArray(first?.services)) {
+  if (Array.isArray(first?.services) && first.services.length > 0) {
     const grouped = (raw as Record<string, unknown>[])
       .map((cat) => {
         const cid = partnerServiceRefId(
