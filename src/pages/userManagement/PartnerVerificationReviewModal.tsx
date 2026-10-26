@@ -61,9 +61,91 @@ type CatalogServiceLite = {
   name: string;
   category_id: string;
   category_name?: string;
+  subcategory_id?: string;
+  subcategory_name?: string;
   desc?: string;
   price?: number | null;
 };
+
+const PARTNER_SUB_CATEGORY_LABELS: Record<string, string> = {
+  "example-subcat-1": "Facial Care",
+  "example-subcat-2": "Hair Styling",
+  "example-subcat-3": "Pipe Repair",
+};
+
+const MONGO_OBJECT_ID = /^[a-f0-9]{24}$/i;
+
+function subCategoryDisplayName(raw: unknown): string {
+  if (typeof raw === "string" || typeof raw === "number") {
+    const text = String(raw).trim();
+    if (!text || MONGO_OBJECT_ID.test(text)) return "";
+    return PARTNER_SUB_CATEGORY_LABELS[text] ?? text;
+  }
+  if (!raw || typeof raw !== "object") return "";
+  const rec = raw as Record<string, unknown>;
+  const name = String(
+    rec.name ??
+      rec.label ??
+      rec.subcategory_name ??
+      rec.sub_category_name ??
+      ""
+  ).trim();
+  if (name && !MONGO_OBJECT_ID.test(name)) return name;
+  const id = String(
+    rec._id ?? rec.id ?? rec.subcategory_id ?? rec.sub_category_id ?? ""
+  ).trim();
+  if (!id) return "";
+  return PARTNER_SUB_CATEGORY_LABELS[id] ?? "";
+}
+
+function uniqueSubCategoryLabels(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out;
+}
+
+function labelsFromUnknownList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return uniqueSubCategoryLabels(raw.map((item) => subCategoryDisplayName(item)));
+}
+
+function pushSubCategoryFromRecord(
+  row: Record<string, unknown>,
+  into: string[]
+) {
+  const direct =
+    row.subcategory_name ??
+    row.sub_category_name ??
+    row.subcategory ??
+    row.sub_category ??
+    row.subcategory_id ??
+    row.sub_category_id;
+  const name = subCategoryDisplayName(direct);
+  if (name) into.push(name);
+  const nested = row.subcategories ?? row.sub_categories ?? row.subCategoryRows;
+  if (!Array.isArray(nested)) return;
+  for (const item of nested) {
+    const label = subCategoryDisplayName(item);
+    if (label) into.push(label);
+  }
+}
+
+function partnerLevelSubCategoryLabels(user?: UserModel | null): string[] {
+  if (!user) return [];
+  const rec = user as UserModel & Record<string, unknown>;
+  const fromNames = labelsFromUnknownList(
+    rec.subcategory_names ?? rec.sub_category_names
+  );
+  if (fromNames.length > 0) return fromNames;
+  return labelsFromUnknownList(rec.subcategory_ids ?? rec.sub_category_ids);
+}
 
 type PartnerVerificationDocSlot = {
   id: PartnerVerificationSlotId;
@@ -189,6 +271,16 @@ function PartnerVerificationReviewModalView({
             category_name: (s as { category_name?: string }).category_name
               ? String((s as { category_name?: string }).category_name)
               : undefined,
+            subcategory_id: String(
+              (s as { subcategory_id?: string }).subcategory_id ??
+                (s as { sub_category_id?: string }).sub_category_id ??
+                ""
+            ).trim(),
+            subcategory_name: String(
+              (s as { subcategory_name?: string }).subcategory_name ??
+                (s as { sub_category_name?: string }).sub_category_name ??
+                ""
+            ).trim(),
             desc: String((s as { desc?: string }).desc ?? ""),
             price:
               (s as { price?: number | null }).price !== undefined &&
@@ -229,6 +321,50 @@ function PartnerVerificationReviewModalView({
       catalogCategoryOptions
     );
   }, [userDetails, catalogServices, catalogCategoryOptions]);
+
+  const subCategoryLabelsByCategoryId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const partnerLevel = partnerLevelSubCategoryLabels(userDetails);
+    for (const group of viewCategoryServiceGroups) {
+      const labels: string[] = [];
+      const partnerServicesValue = userDetails?.partner_services;
+
+const partnerServices = Array.isArray(partnerServicesValue)
+  ? partnerServicesValue
+  : [];
+      for (const ps of partnerServices) {
+        const row = ps as Record<string, unknown>;
+        const categoryRef = row.category_id;
+        const cid =
+          categoryRef && typeof categoryRef === "object"
+            ? String((categoryRef as { _id?: string })._id ?? "").trim()
+            : String(categoryRef ?? "").trim();
+        if (cid && cid !== group.categoryId) continue;
+        pushSubCategoryFromRecord(row, labels);
+        if (!Array.isArray(row.services)) continue;
+        for (const svc of row.services) {
+          if (svc && typeof svc === "object") {
+            pushSubCategoryFromRecord(svc as Record<string, unknown>, labels);
+          }
+        }
+      }
+      for (const row of group.rows) {
+        const sid = String(row.serviceId ?? "").trim();
+        if (!sid) continue;
+        const svc = catalogServices.find((item) => item._id === sid);
+        const fromCatalog =
+          subCategoryDisplayName(svc?.subcategory_name) ||
+          subCategoryDisplayName(svc?.subcategory_id);
+        if (fromCatalog) labels.push(fromCatalog);
+      }
+      const resolved = uniqueSubCategoryLabels(labels);
+      map.set(
+        group.categoryId,
+        resolved.length > 0 ? resolved : partnerLevel
+      );
+    }
+    return map;
+  }, [viewCategoryServiceGroups, userDetails, catalogServices]);
 
   const partnerBankAccounts = useMemo(
     () => partnerBankAccountsFromUser(userDetails),
@@ -606,14 +742,16 @@ function PartnerVerificationReviewModalView({
                 }}
               >
                 <div>
-                  <h3 style={{ margin: 0 }}>Categories &amp; services</h3>
+                  <h3 style={{ margin: 0 }}>
+                    Categories &amp; sub categories &amp; services
+                  </h3>
                 </div>
                 <div>
                   {userDetails ? (
                     <img
                       src={editIcon}
-                      alt="Edit categories and services"
-                      title="Edit categories and services"
+                      alt="Edit categories & sub categories & services"
+                      title="Edit categories & sub categories & services"
                       className="position-absolute"
                       style={{
                         width: "15px",
@@ -655,7 +793,9 @@ function PartnerVerificationReviewModalView({
                 }}
               >
                 {viewCategoryServiceGroups.length === 0 ? (
-                  <div className="text-muted small py-1">-</div>
+                  <div className="text-muted small py-1">
+                    No categories, sub categories and services
+                  </div>
                 ) : (
                   <div className="table-responsive">
                     <table
@@ -678,6 +818,17 @@ function PartnerVerificationReviewModalView({
                             }}
                           >
                             Category
+                          </th>
+                          <th
+                            scope="col"
+                            className="fw-semibold py-1 ps-3 pe-0"
+                            style={{
+                              width: "22%",
+                              minWidth: "120px",
+                              color: "var(--primary-txt-color)",
+                            }}
+                          >
+                            Sub Category
                           </th>
                           <th
                             scope="col"
@@ -715,6 +866,9 @@ function PartnerVerificationReviewModalView({
                                   },
                                 ];
                           const rowSpan = rows.length;
+                          const subCategoryLabels =
+                            subCategoryLabelsByCategoryId.get(g.categoryId) ??
+                            [];
                           return rows.map((row, idx) => (
                             <tr
                               key={`${g.categoryId}-${
@@ -733,6 +887,29 @@ function PartnerVerificationReviewModalView({
                                   }}
                                 >
                                   {g.categoryLabel}
+                                </td>
+                              ) : null}
+                              {idx === 0 ? (
+                                <td
+                                  className="align-middle py-2 ps-3 text-wrap fw-medium fs-6"
+                                  rowSpan={rowSpan}
+                                  style={{
+                                    color: "#101010",
+                                    verticalAlign: "middle",
+                                    borderRight: "1px solid var(--lb1-border)",
+                                  }}
+                                >
+                                  {subCategoryLabels.length > 0 ? (
+                                    subCategoryLabels.map((name) => (
+                                      <div
+                                        key={`${g.categoryId}-sub-${name}`}
+                                      >
+                                        {name}
+                                      </div>
+                                    ))
+                                  ) : (
+                                    "—"
+                                  )}
                                 </td>
                               ) : null}
                               <td className="align-top py-2 ps-3 pe-2 text-wrap fs-6">

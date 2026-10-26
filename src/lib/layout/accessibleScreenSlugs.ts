@@ -22,6 +22,7 @@ const MENU_KEY_TO_ACCESSIBLE_SLUG: Record<string, string> = {
   notifications: "notifications",
   "content-management": "content",
   calendar: "calendar",
+  "audit-logs": "audit_logs",
 };
 
 /** Ordered slugs for selected menu keys (deduped, stable order follows `mainMenuItems`). */

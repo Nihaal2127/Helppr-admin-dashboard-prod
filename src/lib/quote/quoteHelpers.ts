@@ -441,6 +441,8 @@ export type QuoteViewData = {
   employee_profile_url?: string | null;
   category_id?: string;
   category_name?: string;
+  subcategory_id?: string;
+  subcategory_name?: string;
   service_name?: string;
   /** From quote/order service `payment_type` (e.g. `per_consultancy`). */
   payment_type?: string;
@@ -721,6 +723,10 @@ export function mergeQuoteViewData(
       keep.requested_partner
     ),
     category_name: coalesceText(fresh.category_name, keep.category_name) || undefined,
+    subcategory_id:
+      coalesceText(fresh.subcategory_id, keep.subcategory_id) || undefined,
+    subcategory_name:
+      coalesceText(fresh.subcategory_name, keep.subcategory_name) || undefined,
     service_name: coalesceText(fresh.service_name, keep.service_name) || undefined,
     description: coalesceText(fresh.description, keep.description) || undefined,
     admin_description:
@@ -847,6 +853,8 @@ export function toQuoteViewData(row: QuoteRow): QuoteViewData {
     employee_profile_url: row.employee_profile_url,
     category_id: row.category_id,
     category_name: row.category_name,
+    subcategory_id: row.subcategory_id,
+    subcategory_name: row.subcategory_name,
     service_name: row.service_name,
     payment_type: row.payment_type,
     requested_date: row.requested_date,
@@ -1657,6 +1665,7 @@ export function seedEditQuoteFormFromRow(row: QuoteRow): EditQuoteFormValues {
     requested_services: String(row.service_id ?? "").trim(),
     requested_partner: partnerVal,
     employee_id: String(row.employee_id ?? "").trim(),
+    subcategory_id: String(row.subcategory_id ?? "").trim(),
     category_id: String(row.category_id ?? "").trim(),
     requested_date,
     schedule_duration: "",

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useForm, UseFormRegister } from "react-hook-form";
-import { Modal, Button, Row, Col } from "react-bootstrap";
+import { Modal, Button, Row, Col, Form } from "react-bootstrap";
 import CustomCloseButton from "../../components/CustomCloseButton";
 import { ServiceModel } from "../../lib/models/ServiceModel";
 import { CustomFormInput } from "../../components/CustomFormInput";
@@ -28,6 +28,7 @@ import {
 import { openConfirmDialog } from "../../components/CustomConfirmDialog";
 import { openDialog } from "../../lib/global/DialogManager";
 import { AppConstant } from "../../lib/global/AppConstant";
+import { apiRequest } from "../../lib/global/remote/apiHelper";
 import {
   extractMinDepositTypeKey,
   getMinDepositViewParts,
@@ -46,6 +47,144 @@ function mapPaymentTypeToMinDepositType(s: ServiceModel | null): string {
   const any = s as any;
   const raw = String(any.min_deposit_type ?? any.payment_type ?? "").trim();
   return extractMinDepositTypeKey(raw);
+}
+
+/** Map backend subcategory list/dropdown body → select options (same fields as getAll). */
+function extractSubCategoryDropDownOptions(
+  data: unknown
+): { value: string; label: string }[] {
+  const buckets: unknown[] = [];
+  const push = (value: unknown) => {
+    if (Array.isArray(value)) buckets.push(...value);
+  };
+  const walk = (node: unknown, depth = 0) => {
+    if (depth > 4 || node == null) return;
+    if (Array.isArray(node)) {
+      push(node);
+      return;
+    }
+    if (typeof node !== "object") return;
+    const root = node as Record<string, unknown>;
+    push(root.records);
+    push(root.subcategories);
+    push(root.sub_categories);
+    push(root.list);
+    push(root.items);
+    push(root.result);
+    push(root.data);
+    if (root.data && typeof root.data === "object") {
+      walk(root.data, depth + 1);
+    }
+  };
+  walk(data);
+  const seen = new Set<string>();
+  const options: { value: string; label: string }[] = [];
+  for (const item of buckets) {
+    if (typeof item === "string" || typeof item === "number") {
+      const value = String(item).trim();
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      options.push({ value, label: value });
+      continue;
+    }
+    const row =
+      item && typeof item === "object"
+        ? (item as Record<string, unknown>)
+        : {};
+    const value = String(
+      row._id ?? row.id ?? row.subcategory_id ?? row.sub_category_id ?? row.value ?? ""
+    ).trim();
+    if (!value || seen.has(value)) continue;
+    const label =
+      String(row.name ?? row.label ?? row.subcategory_name ?? "").trim() ||
+      value;
+    seen.add(value);
+    options.push({ value, label });
+  }
+  return options;
+}
+
+function serviceSubCategoryIdFromRecord(service: unknown): string {
+  if (!service || typeof service !== "object") return "";
+  const rec = service as Record<string, unknown>;
+  return (
+    normalizeServiceCategoryRef(rec.subcategory_id) ||
+    normalizeServiceCategoryRef(rec.sub_category_id)
+  );
+}
+
+function serviceSubCategoryLabelFromRecord(service: unknown): string {
+  if (!service || typeof service !== "object") return "";
+  const rec = service as Record<string, unknown>;
+  const nestedName = (value: unknown): string => {
+    if (value == null) return "";
+    if (typeof value === "string" || typeof value === "number") {
+      const s = String(value).trim();
+      if (!s || /^[a-f0-9]{24}$/i.test(s)) return "";
+      return s;
+    }
+    if (typeof value === "object") {
+      const o = value as Record<string, unknown>;
+      return nestedName(
+        o.name ?? o.label ?? o.subcategory_name ?? o.title
+      );
+    }
+    return "";
+  };
+  return (
+    nestedName(rec.subcategory_name) ||
+    nestedName(rec.sub_category_name) ||
+    nestedName(rec.subcategory) ||
+    nestedName(rec.subcategory_id) ||
+    nestedName(rec.sub_category_id)
+  );
+}
+
+async function fetchSubCategoriesForCategoryFromApi(
+  categoryId: string
+): Promise<{ value: string; label: string }[]> {
+  const cid = String(categoryId ?? "").trim();
+  if (!cid) return [];
+
+  const byId = new Map<string, { value: string; label: string }>();
+  const merge = (rows: { value: string; label: string }[]) => {
+    for (const row of rows) {
+      if (!row.value || byId.has(row.value)) continue;
+      byId.set(row.value, row);
+    }
+  };
+
+  const dropParams = new URLSearchParams({ category_id: cid });
+  const dropRes = await apiRequest(
+    `/subcategory/getDropDown?${dropParams.toString()}`,
+    "GET",
+    undefined,
+    false,
+    true
+  );
+  if (dropRes.success) {
+    merge(extractSubCategoryDropDownOptions(dropRes.data));
+  }
+
+  // Same list as the Sub Category tab (`records` + `_id`), so a newly added
+  // subcategory still appears even when getDropDown omits it.
+  const listParams = new URLSearchParams({
+    page: "1",
+    limit: "200",
+    category_id: cid,
+  });
+  const listRes = await apiRequest(
+    `/subcategory/getAll?${listParams.toString()}`,
+    "GET",
+    undefined,
+    false,
+    true
+  );
+  if (listRes.success) {
+    merge(extractSubCategoryDropDownOptions(listRes.data));
+  }
+
+  return Array.from(byId.values());
 }
 
 function mapMinimumDepositValue(s: ServiceModel | null): string {
@@ -73,6 +212,14 @@ function isTruthyFormBool(v: unknown): boolean {
   );
 }
 
+function serviceDirectOrderOn(s: ServiceModel | null | undefined): boolean {
+  if (!s) return false;
+  const rec = s as ServiceModel & Record<string, unknown>;
+  return isTruthyFormBool(
+    rec.direct_order ?? rec.is_direct_order ?? rec.directOrder
+  );
+}
+
 const SERVICE_DETAIL_IMAGE_PX = 280;
 
 type AddEditServiceDialogProps = {
@@ -81,7 +228,12 @@ type AddEditServiceDialogProps = {
   onClose: () => void;
   onRefreshData: () => void;
   isViewMode?: boolean;
-  lockCategory?: { id?: string; label?: string };
+  lockCategory?: {
+    id?: string;
+    label?: string;
+    subcategoryId?: string;
+    subcategoryLabel?: string;
+  };
   /** When true (e.g. My Franchise catalog view), hide Active/Inactive and request-status rows. */
   hideStatusInView?: boolean;
 };
@@ -92,7 +244,12 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
     service: ServiceModel | null,
     onRefreshData: () => void,
     isViewMode?: boolean,
-    lockCategory?: { id?: string; label?: string },
+    lockCategory?: {
+      id?: string;
+      label?: string;
+      subcategoryId?: string;
+      subcategoryLabel?: string;
+    },
     hideStatusInView?: boolean
   ) => void;
 } = ({
@@ -122,6 +279,8 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
     ServiceModel & {
       approval_status?: "pending" | "approved" | "rejected";
       rejection_reason?: string;
+      subcategory_id?: string;
+      direct_order?: boolean;
     }
   >({
     defaultValues: {
@@ -133,6 +292,10 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
       min_deposit_value: mapMinimumDepositValue(service) as any,
       is_active: service?.is_active ?? true,
       category_id: normalizeServiceCategoryRef(service?.category_id),
+      subcategory_id:
+        serviceSubCategoryIdFromRecord(service) ||
+        String(lockCategory?.subcategoryId ?? "").trim(),
+      direct_order: serviceDirectOrderOn(service),
       approval_status: mapApprovalStatusFromService(service),
       rejection_reason: (service as any)?.rejection_reason ?? "",
     } as any,
@@ -150,12 +313,19 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
       category_id:
         normalizeServiceCategoryRef(service?.category_id) ||
         String(lockCategory?.id ?? "").trim(),
+      subcategory_id:
+        serviceSubCategoryIdFromRecord(service) ||
+        String(lockCategory?.subcategoryId ?? "").trim(),
+      direct_order: serviceDirectOrderOn(service),
       approval_status: mapApprovalStatusFromService(service),
       rejection_reason: (service as any)?.rejection_reason ?? "",
     } as any);
-  }, [service, lockCategory?.id, localViewMode, reset]);
+  }, [service, lockCategory?.id, lockCategory?.subcategoryId, localViewMode, reset]);
 
   const [categories, setCategory] = useState<
+    { value: string; label: string }[]
+  >([]);
+  const [subCategories, setSubCategories] = useState<
     { value: string; label: string }[]
   >([]);
   const [fileInputs, setFileInputs] = useState<File[]>([]);
@@ -245,6 +415,20 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
             shouldTouch: true,
           });
         }
+        const lockedSubId = String(lockCategory.subcategoryId ?? "").trim();
+        if (lockedSubId) {
+          setValue("subcategory_id" as any, lockedSubId, {
+            shouldValidate: false,
+            shouldDirty: false,
+          });
+          const lockedSubLabel =
+            String(lockCategory.subcategoryLabel ?? "").trim() || lockedSubId;
+          setSubCategories((prev) =>
+            prev.some((option) => option.value === lockedSubId)
+              ? prev
+              : [...prev, { value: lockedSubId, label: lockedSubLabel }]
+          );
+        }
         return;
       }
       let categoryOptions = await fetchCategoriesAsSelectOptions();
@@ -308,6 +492,84 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
   const approvalStatusDefaultForEdit =
     mapApprovalStatusFromService(service);
   const categoryIdWatch = watch("category_id");
+  const subcategoryIdWatch = watch("subcategory_id");
+  const directOrderOn = isTruthyFormBool(watch("direct_order"));
+
+  const applySubCategoryOptions = useCallback(
+    (loaded: { value: string; label: string }[]) => {
+      const lockedId = String(lockCategory?.subcategoryId ?? "").trim();
+      const lockedLabel = String(lockCategory?.subcategoryLabel ?? "").trim();
+      const current =
+        String(getValues("subcategory_id") ?? "").trim() || lockedId;
+      const extraLabel =
+        lockedLabel || serviceSubCategoryLabelFromRecord(service) || current;
+      const byId = new Map<string, { value: string; label: string }>();
+      for (const row of loaded) {
+        if (row.value) byId.set(row.value, row);
+      }
+      if (lockedId && !byId.has(lockedId)) {
+        byId.set(lockedId, {
+          value: lockedId,
+          label: extraLabel || lockedId,
+        });
+      }
+      if (current && !byId.has(current)) {
+        byId.set(current, { value: current, label: extraLabel || current });
+      }
+      const options = Array.from(byId.values());
+      setSubCategories(options);
+      if (current && options.some((option) => option.value === current)) {
+        if (String(getValues("subcategory_id") ?? "").trim() !== current) {
+          setValue("subcategory_id" as any, current, {
+            shouldValidate: false,
+            shouldDirty: false,
+          });
+        }
+        return;
+      }
+      if (!isEditable && options.length === 1) {
+        setValue("subcategory_id" as any, options[0].value, {
+          shouldValidate: true,
+          shouldDirty: true,
+        });
+      }
+    },
+    [
+      getValues,
+      isEditable,
+      lockCategory?.subcategoryId,
+      lockCategory?.subcategoryLabel,
+      service,
+      setValue,
+    ]
+  );
+
+  const loadSubCategoriesForSelectedCategory = useCallback(async () => {
+    const categoryId = String(getValues("category_id") ?? "").trim();
+    if (!categoryId) {
+      setSubCategories([]);
+      return;
+    }
+    const options = await fetchSubCategoriesForCategoryFromApi(categoryId);
+    applySubCategoryOptions(options);
+  }, [applySubCategoryOptions, getValues]);
+
+  useEffect(() => {
+    const categoryId = String(categoryIdWatch ?? "").trim();
+    let cancelled = false;
+    if (!categoryId) {
+      setSubCategories([]);
+      return;
+    }
+    void (async () => {
+      const options = await fetchSubCategoriesForCategoryFromApi(categoryId);
+      if (cancelled) return;
+      applySubCategoryOptions(options);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [applySubCategoryOptions, categoryIdWatch]);
 
   const serviceImagePath = useMemo(() => {
     if (!service) return "";
@@ -467,6 +729,25 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
             mapApprovalStatusFromService(service))
         : undefined;
 
+    const subcategoryId =
+      String(
+        (data as any).subcategory_id ??
+          getValues("subcategory_id" as any) ??
+          lockCategory?.subcategoryId ??
+          ""
+      ).trim() ||
+      (!isEditable && subCategories.length === 1
+        ? subCategories[0].value
+        : "");
+    if (!subcategoryId) {
+      showErrorAlert("Please select sub category");
+      return;
+    }
+    const subcategoryName =
+      subCategories.find((s) => s.value === subcategoryId)?.label ||
+      String(lockCategory?.subcategoryLabel ?? "").trim() ||
+      serviceSubCategoryLabelFromRecord(service);
+
     const payload = {
       name: data.name,
       desc: data.desc,
@@ -502,6 +783,9 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
               : "",
         }),
       category_id: resolvedCategoryId,
+      subcategory_id: subcategoryId,
+      subcategory_name: subcategoryName,
+      direct_order: directOrderOn,
       ...(image_url !== "" && { image_url }),
     };
 
@@ -590,6 +874,12 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
               </Col>
               <Col xs={12} md={6}>
                 <FullDetailsRow
+                  title="Sub Category"
+                  value={serviceSubCategoryLabelFromRecord(service) || "-"}
+                />
+              </Col>
+              <Col xs={12} md={6}>
+                <FullDetailsRow
                   title="Category"
                   value={
                     (service as any).category_name ??
@@ -622,6 +912,12 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
               </Col>
               <Col xs={12} md={6}>
                 <FullDetailsRow title="Payment type" value={paymentTypeForView} />
+              </Col>
+              <Col xs={12} md={6}>
+                <FullDetailsRow
+                  title="Direct order"
+                  value={serviceDirectOrderOn(service) ? "On" : "Off"}
+                />
               </Col>
               <Col xs={12} md={6}>
                 <FullDetailsRow title="Min deposit" value={minDepositForView} />
@@ -918,6 +1214,32 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
                 />
               </Col>
 
+              <Col md={6}>
+                <CustomFormSelect
+                  label="Sub Category"
+                  controlId="subcategory"
+                  options={subCategories}
+                  register={register as unknown as UseFormRegister<any>}
+                  fieldName="subcategory_id"
+                  error={(errors as any).subcategory_id}
+                  asCol={false}
+                  placeholder="Select"
+                  requiredMessage="Please select sub category"
+                  menuPortal
+                  defaultValue={String(subcategoryIdWatch ?? "").trim()}
+                  onMenuOpen={() => {
+                    void loadSubCategoriesForSelectedCategory();
+                  }}
+                  setValue={(name: string, value: any) => {
+                    setValue(name as any, value, {
+                      shouldValidate: true,
+                      shouldDirty: true,
+                      shouldTouch: true,
+                    });
+                  }}
+                />
+              </Col>
+
               {!lockCategory ? (
                 <Col md={6}>
                   <CustomFormSelect
@@ -931,11 +1253,21 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
                     requiredMessage="Please select category"
                     defaultValue={String(categoryIdWatch ?? "").trim()}
                     setValue={(name: string, value: any) => {
+                      const nextCategoryId = String(value ?? "").trim();
+                      const prevCategoryId = String(
+                        getValues("category_id") ?? ""
+                      ).trim();
                       setValue(name as any, value, {
                         shouldValidate: true,
                         shouldDirty: true,
                         shouldTouch: true,
                       });
+                      if (nextCategoryId !== prevCategoryId) {
+                        setValue("subcategory_id" as any, "", {
+                          shouldValidate: false,
+                          shouldDirty: true,
+                        });
+                      }
                     }}
                   />
                 </Col>
@@ -1110,6 +1442,52 @@ const AddEditServiceDialog: React.FC<AddEditServiceDialogProps> & {
                 </div>
               </Col>
 
+              <Col md={6} className="mt-3">
+                <style>{`
+                  .service-direct-order-switch.franchise-status-switch .form-check-input {
+                    width: 2.55em;
+                    height: 1.35em;
+                  }
+                `}</style>
+                <div
+                  aria-hidden="true"
+                  className="fw-medium mb-1"
+                  style={{ visibility: "hidden", lineHeight: "normal" }}
+                >
+                  Direct order
+                </div>
+                <div
+                  className="d-flex align-items-center"
+                  style={{ gap: 10, minHeight: 35 }}
+                >
+                  <label
+                    htmlFor="service-direct-order"
+                    className="fw-medium mb-0"
+                  >
+                    Direct order
+                  </label>
+                  <Form.Check
+                    type="switch"
+                    id="service-direct-order"
+                    className={`franchise-status-switch service-direct-order-switch mb-0${
+                      directOrderOn ? " franchise-status-switch--on" : ""
+                    }`}
+                    checked={directOrderOn}
+                    aria-label={
+                      directOrderOn
+                        ? "Direct order on"
+                        : "Direct order off"
+                    }
+                    onChange={(e) =>
+                      setValue("direct_order" as any, e.target.checked, {
+                        shouldDirty: true,
+                        shouldTouch: true,
+                      })
+                    }
+                  />
+                </div>
+              </Col>
+
               <Col md={8}>
                 <label className="form-label fw-medium mb-2 d-block">
                   <FieldLabelText label="Service image" required />
@@ -1219,7 +1597,12 @@ function showAddEditServiceDialog(
   service: ServiceModel | null,
   onRefreshData: () => void,
   isViewMode: boolean = false,
-  lockCategory?: { id?: string; label?: string },
+  lockCategory?: {
+    id?: string;
+    label?: string;
+    subcategoryId?: string;
+    subcategoryLabel?: string;
+  },
   hideStatusInView: boolean = false
 ) {
   openDialog("service-details-modal", (close) => (

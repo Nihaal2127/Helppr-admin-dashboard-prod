@@ -32,6 +32,7 @@ import {
 import { fetchCategory } from "../../services/categoryService";
 import { fetchService } from "../../services/servicesService";
 import { getCount } from "../../services/getCountService";
+import { apiRequest } from "../../lib/global/remote/apiHelper";
 import type { ServerTableSortBy } from "../../lib/global/serverTableSort";
 import CustomFormSelect from "../../components/CustomFormSelect";
 
@@ -77,6 +78,172 @@ function resolveNamedLabels(
       .filter(Boolean);
   }
   return ids.map((id) => idToLabel.get(id) ?? id);
+}
+
+function extractSubCategoryIdLabels(data: unknown): { id: string; name: string }[] {
+  const buckets: unknown[] = [];
+  const push = (value: unknown) => {
+    if (Array.isArray(value)) buckets.push(...value);
+  };
+  const walk = (node: unknown, depth = 0) => {
+    if (depth > 4 || node == null) return;
+    if (Array.isArray(node)) {
+      push(node);
+      return;
+    }
+    if (typeof node !== "object") return;
+    const root = node as Record<string, unknown>;
+    push(root.records);
+    push(root.subcategories);
+    push(root.sub_categories);
+    push(root.list);
+    push(root.items);
+    push(root.data);
+    if (root.data && typeof root.data === "object") walk(root.data, depth + 1);
+  };
+  walk(data);
+  const seen = new Set<string>();
+  const out: { id: string; name: string }[] = [];
+  for (const item of buckets) {
+    const row =
+      item && typeof item === "object"
+        ? (item as Record<string, unknown>)
+        : {};
+    const id = String(
+      row._id ??
+        row.id ??
+        row.subcategory_id ??
+        row.sub_category_id ??
+        row.value ??
+        ""
+    ).trim();
+    if (!id || id === "select-all" || seen.has(id)) continue;
+    const name = String(
+      row.name ?? row.label ?? row.subcategory_name ?? ""
+    ).trim();
+    seen.add(id);
+    out.push({ id, name: name || id });
+  }
+  return out;
+}
+
+function subCategoryGetAllTotalPages(
+  data: unknown,
+  pageSize: number,
+  fetchedCount: number
+): number {
+  const root =
+    data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const nested =
+    root.data && typeof root.data === "object" && !Array.isArray(root.data)
+      ? (root.data as Record<string, unknown>)
+      : null;
+  const source = nested ?? root;
+  const reported = Number(source.totalPages ?? root.totalPages ?? 0);
+  if (Number.isFinite(reported) && reported > 0) return reported;
+  const totalRecords = Number(
+    source.totalRecords ?? source.total ?? source.totalItems ?? source.count ?? 0
+  );
+  if (Number.isFinite(totalRecords) && totalRecords > 0 && pageSize > 0) {
+    return Math.ceil(totalRecords / pageSize);
+  }
+  return fetchedCount < pageSize ? 1 : 0;
+}
+
+function subCategoryLabel(
+  value: unknown,
+  idToLabel?: Map<string, string>
+): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    const text = String(value).trim();
+    if (!text || text === "select-all") return "";
+    const mapped = String(idToLabel?.get(text) ?? "").trim();
+    if (mapped) return mapped;
+    if (/^[a-f\d]{24}$/i.test(text)) return "";
+    return text;
+  }
+  if (typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    const name = String(
+      rec.name ??
+        rec.label ??
+        rec.subcategory_name ??
+        rec.sub_category_name ??
+        ""
+    ).trim();
+    if (name && name !== "select-all") return subCategoryLabel(name, idToLabel);
+    const id = String(
+      rec._id ?? rec.id ?? rec.subcategory_id ?? rec.sub_category_id ?? ""
+    ).trim();
+    return subCategoryLabel(id, idToLabel);
+  }
+  return "";
+}
+
+function franchiseSubCategoryLabels(
+  row: Record<string, unknown>,
+  idToLabel?: Map<string, string>
+): string[] {
+  const buckets = [
+    row.subcategory_names,
+    row.sub_category_names,
+    row.subcategory_ids,
+    row.sub_category_ids,
+    row.subcategories,
+    row.sub_categories,
+  ];
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const bucket of buckets) {
+    const list = Array.isArray(bucket) ? bucket : normalizeLabelList(bucket);
+    for (const item of list) {
+      const label = subCategoryLabel(item, idToLabel);
+      const key = label.toLowerCase();
+      if (!label || seen.has(key)) continue;
+      seen.add(key);
+      labels.push(label);
+    }
+  }
+  return labels;
+}
+
+function subCategoriesTableCell(idToLabel: Map<string, string>) {
+  return function SubCategoriesCell({ row }: { row: any }) {
+  const items = franchiseSubCategoryLabels(row.original ?? {}, idToLabel);
+  if (items.length === 0) return <>-</>;
+  if (items.length === 1) {
+    return (
+      <span
+        className="d-inline-block text-truncate"
+        style={{ maxWidth: 180 }}
+        title={items[0]}
+      >
+        {items[0]}
+      </span>
+    );
+  }
+  const more = items.length - 1;
+  return (
+    <PinCodeHoverPortal items={items} listStyle="ul">
+      <span className="pin-code-hover-trigger d-flex align-items-center flex-nowrap gap-1 w-100 min-w-0">
+        <span
+          className="text-truncate min-w-0"
+          style={{ flex: "1 1 0%" }}
+          title={items[0]}
+        >
+          {items[0]}
+        </span>
+        <span
+          className="flex-shrink-0"
+          style={{ color: "red", fontWeight: 600 }}
+        >
+          +{more}
+        </span>
+      </span>
+    </PinCodeHoverPortal>
+  );
+  };
 }
 
 /** Categories: ellipsis + red +n; hover shows bullet list */
@@ -269,6 +436,9 @@ const FranchiseManagement = () => {
   const [serviceById, setServiceById] = useState<Map<string, string>>(
     () => new Map()
   );
+  const [subCategoryById, setSubCategoryById] = useState<Map<string, string>>(
+    () => new Map()
+  );
 
   /** One-time catalog hydrate — deferred + parallel so first paint is not blocked by many getAll pages. */
   useEffect(() => {
@@ -279,6 +449,7 @@ const FranchiseManagement = () => {
       void (async () => {
         const catMap = new Map<string, string>();
         const svcMap = new Map<string, string>();
+        const subMap = new Map<string, string>();
         const limit = 200;
         const loadCategories = async () => {
           let page = 1;
@@ -328,10 +499,39 @@ const FranchiseManagement = () => {
             if (page > 50) break;
           }
         };
-        await Promise.all([loadCategories(), loadServices()]);
+        const loadSubCategories = async () => {
+          for (let page = 1; page <= 50; page += 1) {
+            const params = new URLSearchParams({
+              page: String(page),
+              limit: String(limit),
+            });
+            const res = await apiRequest(
+              `/subcategory/getAll?${params.toString()}`,
+              "GET",
+              undefined,
+              false,
+              true
+            );
+            if (cancelled) return;
+            if (!res.success) break;
+            const rows = extractSubCategoryIdLabels(res.data);
+            for (const row of rows) {
+              if (row.id) subMap.set(row.id, row.name || row.id);
+            }
+            const totalPages = subCategoryGetAllTotalPages(
+              res.data,
+              limit,
+              rows.length
+            );
+            if (rows.length < limit) break;
+            if (totalPages > 0 && page >= totalPages) break;
+          }
+        };
+        await Promise.all([loadCategories(), loadServices(), loadSubCategories()]);
         if (!cancelled && isMountedRef.current) {
           setCategoryById(catMap);
           setServiceById(svcMap);
+          setSubCategoryById(subMap);
         }
       })();
     };
@@ -658,6 +858,11 @@ const FranchiseManagement = () => {
         Cell: categoriesTableCell(categoryById),
       },
       {
+        Header: "Sub Category",
+        accessor: "subcategory_names",
+        Cell: subCategoriesTableCell(subCategoryById),
+      },
+      {
         Header: "Services",
         accessor: "service_names",
 
@@ -701,7 +906,7 @@ const FranchiseManagement = () => {
         ),
       },
     ],
-    [currentPage, pageSize, refreshData, categoryById, serviceById]
+    [currentPage, pageSize, refreshData, categoryById, serviceById, subCategoryById]
   );
 
   return (

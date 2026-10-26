@@ -93,6 +93,7 @@ const PartnerTermsConditions = lazyPage(
   () => import("../pages/public/PartnerTermsConditions")
 );
 const CalendarPage = lazyPage(() => import("../pages/calendar"));
+const AuditLogs = lazyPage(() => import("../pages/auditLogs"));
 const QuoteManagement = lazyPage(() => import("../pages/quoteManagement"));
 const Reports = lazyPage(() => import("../pages/reports"));
 const NotificationsPage = lazyPage(() => import("../pages/notifications"));
@@ -337,6 +338,11 @@ export const ROUTES = {
   CALENDAR_PAGE: {
     path: "/calendar",
     element: <CalendarPage />,
+    isProtected: true,
+  },
+  AUDIT_LOGS: {
+    path: "/audit-logs",
+    element: <AuditLogs />,
     isProtected: true,
   },
   QUOTE_MANAGEMENT: {

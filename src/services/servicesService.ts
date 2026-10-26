@@ -214,54 +214,110 @@ function toDropDownOption(
   return { value: r.value, label: r.label, price: r.price };
 }
 
+function extractServiceListRecords(data: unknown): Record<string, unknown>[] {
+  if (!data || typeof data !== "object") return [];
+  const root = data as Record<string, unknown>;
+  const nested =
+    root.data && typeof root.data === "object" && !Array.isArray(root.data)
+      ? (root.data as Record<string, unknown>)
+      : null;
+  const source =
+    Array.isArray(root.records) || Array.isArray(root.services)
+      ? root
+      : nested &&
+        (Array.isArray(nested.records) || Array.isArray(nested.services))
+      ? nested
+      : root;
+  const raw = Array.isArray(source.records)
+    ? source.records
+    : Array.isArray(source.services)
+    ? source.services
+    : Array.isArray(root.data)
+    ? (root.data as unknown[])
+    : [];
+  return raw.filter(
+    (row): row is Record<string, unknown> =>
+      Boolean(row) && typeof row === "object" && !Array.isArray(row)
+  );
+}
+
+function pushServiceDropDownRow(
+  byId: Map<string, ServiceDropDownRowWithCat>,
+  item: Record<string, unknown>
+) {
+  const value = String(item._id ?? item.id ?? item.service_id ?? "").trim();
+  if (!value) return;
+  byId.set(value, {
+    value,
+    label: String(item.name ?? item.label ?? "").trim() || value,
+    price: item.price as number | undefined,
+    cat: normalizeServiceCategoryRef(item.category_id),
+  });
+}
+
 export const fetchServicesForCategoryDialog = async (opts: {
   mode: "add" | "edit";
   /** Draft or saved category id for add-with-draft; required for edit (via `mode`). */
   categoryId?: string;
 }): Promise<{ value: string; label: string; price?: number }[]> => {
-  const response = await apiRequest(`${ApiPaths.GET_SERVICE_DROP_DOWN()}`, "GET");
+  const byId = new Map<string, ServiceDropDownRowWithCat>();
+  const categoryId = normalizeServiceCategoryRef(opts.categoryId);
 
-  if (!response.success) {
-    showLog(response.message || "Failed to fetch service");
+  const dropRes = await apiRequest(
+    `${ApiPaths.GET_SERVICE_DROP_DOWN()}`,
+    "GET",
+    undefined,
+    false,
+    true
+  );
+  if (dropRes.success) {
+    for (const item of extractServiceListRecords(dropRes.data)) {
+      pushServiceDropDownRow(byId, item);
+    }
+  }
+
+  const allParams = new URLSearchParams({
+    page: "1",
+    limit: "200",
+    is_active: "true",
+  });
+  if (categoryId) allParams.set("category_id", categoryId);
+  const allRes = await apiRequest(
+    `${ApiPaths.GET_SERVICE()}?${allParams.toString()}`,
+    "GET",
+    undefined,
+    false,
+    true
+  );
+  if (allRes.success) {
+    for (const item of extractServiceListRecords(allRes.data)) {
+      pushServiceDropDownRow(byId, item);
+    }
+  }
+
+  if (!dropRes.success && !allRes.success) {
+    showLog(dropRes.message || allRes.message || "Failed to fetch service");
     return [];
   }
 
-  const rawRecords = response.data?.records;
-  const records: unknown[] = Array.isArray(rawRecords) ? rawRecords : [];
-
-  const rows: ServiceDropDownRowWithCat[] = [];
-  for (const item of records) {
-    const service = item as Record<string, unknown>;
-    const value = String(service._id ?? "");
-    if (!value) continue;
-    rows.push({
-      value,
-      label: String(service.name ?? ""),
-      price: service.price as number | undefined,
-      cat: normalizeServiceCategoryRef(service.category_id),
-    });
-  }
+  const rows = Array.from(byId.values());
 
   if (opts.mode === "edit") {
-    const id = normalizeServiceCategoryRef(opts.categoryId);
-    if (!id) return [];
-    const out: { value: string; label: string; price?: number }[] = [];
-    for (const r of rows) {
-      if (r.cat === id) out.push(toDropDownOption(r));
-    }
-    return out;
+    if (!categoryId) return [];
+    return rows
+      .filter((r) => r.cat === categoryId)
+      .map(toDropDownOption);
   }
 
-  const allow = normalizeServiceCategoryRef(opts.categoryId);
-  const out: { value: string; label: string; price?: number }[] = [];
-  for (const r of rows) {
-    if (allow) {
-      if (!r.cat || r.cat === allow) out.push(toDropDownOption(r));
-    } else if (!r.cat) {
-      out.push(toDropDownOption(r));
-    }
+  // Add Category has no id yet — show the same full list as Sub Category getDropDown.
+  // Do not keep only uncategorized rows (`!r.cat`); those are almost never present.
+  if (!categoryId) {
+    return rows.map(toDropDownOption);
   }
-  return out;
+
+  return rows
+    .filter((r) => !r.cat || r.cat === categoryId)
+    .map(toDropDownOption);
 };
 
 export const fetchService = async (

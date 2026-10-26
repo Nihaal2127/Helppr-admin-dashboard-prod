@@ -96,4 +96,9 @@ export const mainMenuItems = [
     label: "Calendar",
     path: ROUTES.CALENDAR_PAGE.path,
   },
+  {
+    key: "audit-logs",
+    label: "Audit Logs",
+    path: ROUTES.AUDIT_LOGS.path,
+  },
 ];

@@ -110,6 +110,7 @@ export type QuoteListFilters = {
   keyword?: string;
   from_date?: string | null;
   to_date?: string | null;
+  service_id?: string;
   /** When set, appended to `GET /quote/getAll` (franchise-scoped list). */
   franchise_id?: string | null;
 };
@@ -2640,6 +2641,23 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
     })(),
     category_id: refId(r.category_id) || refId(categoryRef) || undefined,
     category_name: str(r.category_name ?? categoryRef?.name) || undefined,
+    subcategory_id:
+      refId(r.subcategory_id) ||
+      refId(r.sub_category_id) ||
+      refId(nestedObj(r.subcategory_id)) ||
+      refId(nestedObj(r.sub_category_id)) ||
+      refId(servicePackageRef?.subcategory_id) ||
+      refId(servicePackageRef?.sub_category_id) ||
+      undefined,
+    subcategory_name:
+      str(
+        r.subcategory_name ??
+          r.sub_category_name ??
+          nestedObj(r.subcategory_id)?.name ??
+          nestedObj(r.sub_category_id)?.name ??
+          servicePackageRef?.subcategory_name ??
+          servicePackageRef?.sub_category_name
+      ) || undefined,
     service_name: service_name || undefined,
     payment_type:
       firstNonEmptyPaymentType(
@@ -2717,6 +2735,11 @@ export async function fetchQuotes(
     ...(fid ? { franchise_id: fid } : {}),
   });
 
+  const serviceId = String(filters.service_id ?? "").trim();
+
+if (serviceId) {
+  params.set("service_id", serviceId);
+}
   const apiSort = quoteListSortToApi(sort);
   if (apiSort) {
     params.set("sort_by", apiSort.sort_by);
@@ -3108,6 +3131,8 @@ export async function fetchCustomerQuotes(
 export type CreateQuoteBody = {
   user_id: string;
   category_id: string;
+  subcategory_id?: string;
+  subcategory_name?: string;
   service_id: string;
   partner_id?: string;
   employee_id?: string;

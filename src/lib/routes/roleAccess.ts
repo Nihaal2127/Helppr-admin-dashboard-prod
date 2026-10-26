@@ -96,6 +96,7 @@ const MENU_KEY_ENTRY: Record<string, string> = {
   notifications: "/notifications",
   "content-management": "/content-management",
   calendar: "/calendar",
+  "audit-logs": "/audit-logs",
 };
 
 /**

@@ -68,6 +68,22 @@ import {
 } from "../../lib/form/missingRequiredFields";
 import type { MissingRequiredField } from "../../lib/form/missingRequiredFields";
 
+/** Interim options until a subcategory catalogue API exists. */
+const QUOTE_SUB_CATEGORY_OPTIONS: OptionType[] = [
+  { value: "example-subcat-1", label: "Facial Care" },
+  { value: "example-subcat-2", label: "Hair Styling" },
+  { value: "example-subcat-3", label: "Pipe Repair" },
+];
+
+function quoteSubCategoryName(id: string): string {
+  const value = String(id ?? "").trim();
+  if (!value) return "";
+  return (
+    QUOTE_SUB_CATEGORY_OPTIONS.find((option) => option.value === value)?.label ??
+    value
+  );
+}
+
 const toTimeStorageFromDate = (date: Date | null): string =>
   date
     ? `2000-01-01T${String(date.getHours()).padStart(2, "0")}:${String(
@@ -279,6 +295,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       requested_partner: "",
       employee_id: "",
       category_id: "",
+      subcategory_id: "",
       requested_date: "",
       schedule_duration: "",
       requested_date_to: "",
@@ -293,6 +310,23 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   });
 
   const form = watch();
+  const editSubCategoryOptions = useMemo(() => {
+    const id = String(
+      form.subcategory_id ?? quoteRow?.subcategory_id ?? ""
+    ).trim();
+    if (!id || QUOTE_SUB_CATEGORY_OPTIONS.some((option) => option.value === id)) {
+      return QUOTE_SUB_CATEGORY_OPTIONS;
+    }
+    const savedName = String(quoteRow?.subcategory_name ?? "").trim();
+    return [
+      ...QUOTE_SUB_CATEGORY_OPTIONS,
+      { value: id, label: savedName || quoteSubCategoryName(id) },
+    ];
+  }, [
+    form.subcategory_id,
+    quoteRow?.subcategory_id,
+    quoteRow?.subcategory_name,
+  ]);
   const isNewTabQuoteEdit = useMemo(
     () => normalizeQuoteApiStatus(quoteRow?.status) === "new",
     [quoteRow?.status]
@@ -1086,6 +1120,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       if (String(value ?? "") === String(prev ?? "")) return;
       if (!isNewTabQuoteEdit) {
         setValue("category_id", "", { shouldValidate: false });
+        setValue("subcategory_id", "", { shouldValidate: false });
         setValue("requested_services", "", { shouldValidate: false });
         setValue("service_price", "", { shouldValidate: false });
       }
@@ -1221,6 +1256,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     const patch: Record<string, unknown> = isNewTabQuoteEdit
       ? {
           category_id: String(formData.category_id ?? "").trim(),
+          subcategory_id:
+            String(formData.subcategory_id ?? "").trim() || undefined,
+          subcategory_name:
+            quoteSubCategoryName(String(formData.subcategory_id ?? "")) ||
+            undefined,
           service_id: String(formData.requested_services ?? "").trim(),
           partner_id: String(formData.requested_partner ?? "").trim() || undefined,
           employee_id: String(formData.employee_id ?? "").trim() || undefined,
@@ -1241,6 +1281,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
         }
       : {
           category_id: String(formData.category_id ?? "").trim(),
+          subcategory_id:
+            String(formData.subcategory_id ?? "").trim() || undefined,
+          subcategory_name:
+            quoteSubCategoryName(String(formData.subcategory_id ?? "")) ||
+            undefined,
           service_id: String(formData.requested_services ?? "").trim(),
           partner_id: String(formData.requested_partner ?? "").trim() || undefined,
           employee_id: String(formData.employee_id ?? "").trim() || undefined,
@@ -1664,6 +1709,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         isDisabled={lockedFields}
                       />
                     </Col>
+                  </Row>
+                  <Row className="gy-4 gx-md-5 align-items-start">
                     <Col xs={12} md={6}>
                       <CustomTextFieldSelect
                         label="Category"
@@ -1684,6 +1731,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                               !isNewTabQuoteEdit &&
                               String(value ?? "") !== String(prev ?? "")
                             ) {
+                              setValue("subcategory_id", "", {
+                                shouldValidate: false,
+                              });
                               setValue("requested_services", "", {
                                 shouldValidate: false,
                               });
@@ -1708,6 +1758,31 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                           categoryFieldDisabled ||
                           isNewTabQuoteEdit ||
                           isCatalogFieldsReadOnly
+                        }
+                      />
+                    </Col>
+                    <Col xs={12} md={6}>
+                      <CustomTextFieldSelect
+                        key={`edit-quote-sub-${form.category_id || "none"}`}
+                        label="Sub Category"
+                        controlId="edit-quote-subcategory"
+                        asCol={false}
+                        options={editSubCategoryOptions}
+                        register={register as unknown as UseFormRegister<AddQuoteFormValues>}
+                        fieldName="subcategory_id"
+                        error={errors.subcategory_id}
+                        defaultValue={form.subcategory_id}
+                        setValue={setValue as (name: string, value: unknown) => void}
+                        placeholder={
+                          !partnerSelected || !String(form.category_id ?? "").trim()
+                            ? "Select category first"
+                            : "Select sub category"
+                        }
+                        menuPortal
+                        isClearable={!isCatalogFieldsReadOnly}
+                        isDisabled={
+                          isCatalogFieldsReadOnly ||
+                          !String(form.category_id ?? "").trim()
                         }
                       />
                     </Col>
@@ -1805,6 +1880,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                   </Row>
                 </>
               ) : (
+                <>
                 <Row className="gy-4 gx-md-5 align-items-start mt-2">
                   <Col xs={12} md={6}>
                     <CustomTextFieldSelect
@@ -1847,6 +1923,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                       </div>
                     ) : null}
                   </Col>
+                </Row>
+                <Row className="gy-4 gx-md-5 align-items-start">
                   <Col xs={12} md={6}>
                     <CustomTextFieldSelect
                       label="Category"
@@ -1867,6 +1945,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                             !isNewTabQuoteEdit &&
                             String(value ?? "") !== String(prev ?? "")
                           ) {
+                            setValue("subcategory_id", "", {
+                              shouldValidate: false,
+                            });
                             setValue("requested_services", "", {
                               shouldValidate: false,
                             });
@@ -1894,6 +1975,33 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                       }
                     />
                   </Col>
+                  <Col xs={12} md={6}>
+                    <CustomTextFieldSelect
+                      key={`edit-quote-sub-${form.category_id || "none"}-franchise`}
+                      label="Sub Category"
+                      controlId="edit-quote-subcategory-franchise"
+                      asCol={false}
+                      options={editSubCategoryOptions}
+                      register={register as unknown as UseFormRegister<AddQuoteFormValues>}
+                      fieldName="subcategory_id"
+                      error={errors.subcategory_id}
+                      defaultValue={form.subcategory_id}
+                      setValue={setValue as (name: string, value: unknown) => void}
+                      placeholder={
+                        !partnerSelected || !String(form.category_id ?? "").trim()
+                          ? "Select category first"
+                          : "Select sub category"
+                      }
+                      menuPortal
+                      isClearable={!isCatalogFieldsReadOnly}
+                      isDisabled={
+                        isCatalogFieldsReadOnly ||
+                        !String(form.category_id ?? "").trim()
+                      }
+                    />
+                  </Col>
+                </Row>
+                <Row className="gy-4 gx-md-5 align-items-start">
                   <Col xs={12} md={6}>
                     <CustomTextFieldSelect
                       key={`edit-quote-svc-${form.category_id || "none"}-${quoteRow?.service_name || form.requested_services || ""}`}
@@ -1942,6 +2050,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                     />
                   </Col>
                 </Row>
+                </>
               )}
 
               {showQuoteScheduleSection ? (

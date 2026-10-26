@@ -235,6 +235,8 @@ export function PersonalAccountDetailsGrid({
   isActive,
   address,
   franchiseName,
+  serviceCities,
+  directOrder,
   accountStatusMode = "active",
   partnerVerificationStatus,
 }: {
@@ -257,6 +259,10 @@ export function PersonalAccountDetailsGrid({
   address?: string | null;
   franchiseName?: string | null;
   franchiseEmail?: string | null;
+  /** Partner service cities display (comma-separated names). */
+  serviceCities?: string | null;
+  /** When set, Service Cities and Direct order sit on one row. */
+  directOrder?: boolean;
   /** Partner verification dialog: Status shows pending / rejected / approved. */
   accountStatusMode?: "active" | "verification";
   partnerVerificationStatus?: boolean | string | null;
@@ -328,9 +334,33 @@ export function PersonalAccountDetailsGrid({
               title="Franchise Name"
               value={franchiseName ?? "—"}
             />
-           
+            {directOrder === undefined ? (
+              <DetailsRow
+                compact
+                title="Service Cities"
+                value={String(serviceCities ?? "").trim() || "—"}
+              />
+            ) : null}
           </Col>
         </Row>
+        {directOrder !== undefined ? (
+          <Row className="g-3 mx-0 align-items-center">
+            <Col xs={12} md={6} className="partner-personal-col">
+              <DetailsRow
+                compact
+                title="Service Cities"
+                value={String(serviceCities ?? "").trim() || "—"}
+              />
+            </Col>
+            <Col xs={12} md={6} className="partner-personal-col">
+              <DetailsRow
+                compact
+                title="Direct order"
+                value={directOrder ? "ON" : "OFF"}
+              />
+            </Col>
+          </Row>
+        ) : null}
       </div>
     );
   }

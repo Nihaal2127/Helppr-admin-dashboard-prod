@@ -29,10 +29,12 @@ import {
   fetchService,
   normalizeServiceCategoryRef,
 } from "../../services/servicesService";
+import { apiRequest } from "../../lib/global/remote/apiHelper";
 import CustomTextField from "../../components/CustomTextField";
 import CustomTextFieldIndiaMobile from "../../components/CustomTextFieldIndiaMobile";
 import CustomTextFieldSelect from "../../components/CustomTextFieldSelect";
 import CustomTextFieldRadio from "../../components/CustomTextFieldRadio";
+import CustomMultiSelect from "../../components/CustomMultiSelect";
 import {
   genderForApiPayload,
   normalizeGenderValue,
@@ -118,29 +120,265 @@ function sanitizeLettersAndSpaces(value: string): string {
   return value.replace(/[^A-Za-z\s]/g, "");
 }
 
+type PartnerSubCategoryRow = {
+  id: string;
+  subcategoryId: string;
+  is_active: boolean;
+  /** Services nested under this sub category (Category → Sub → Service). */
+  serviceRows: PartnerServiceRow[];
+};
+
+type PartnerCategoryBlockExt = PartnerCategoryBlock & {
+  subCategoryRows: PartnerSubCategoryRow[];
+};
+
+function normalizePartnerServiceRow(r: PartnerServiceRow): PartnerServiceRow {
+  return {
+    ...r,
+    id: String(r?.id ?? "").trim() || newPartnerCatalogRowId(),
+    serviceId: String(r?.serviceId ?? ""),
+    description: String(r?.description ?? ""),
+    price: String(r?.price ?? ""),
+    is_active: r?.is_active !== false,
+  };
+}
+
+function emptyPartnerSubCategoryRow(): PartnerSubCategoryRow {
+  return {
+    id: newPartnerCatalogRowId(),
+    subcategoryId: "",
+    is_active: true,
+    serviceRows: [emptyPartnerServiceRow()],
+  };
+}
+
+function syncBlockServiceRowsFromSubs(
+  block: PartnerCategoryBlockExt
+): PartnerCategoryBlockExt {
+  const subCategoryRows = (block.subCategoryRows ?? []).map((sub) => {
+    const serviceRows = (
+      Array.isArray(sub.serviceRows) && sub.serviceRows.length > 0
+        ? sub.serviceRows
+        : [emptyPartnerServiceRow()]
+    ).map(normalizePartnerServiceRow);
+    return {
+      id: String(sub?.id ?? "").trim() || newPartnerCatalogRowId(),
+      subcategoryId: String(sub?.subcategoryId ?? ""),
+      is_active: sub?.is_active !== false,
+      serviceRows,
+    };
+  });
+  return {
+    ...block,
+    subCategoryRows:
+      subCategoryRows.length > 0
+        ? subCategoryRows
+        : [emptyPartnerSubCategoryRow()],
+    serviceRows: (
+      subCategoryRows.length > 0
+        ? subCategoryRows
+        : [emptyPartnerSubCategoryRow()]
+    ).flatMap((s) => s.serviceRows),
+  };
+}
+
+function emptyPartnerCatalogBlockExt(
+  initialCategoryId: string
+): PartnerCategoryBlockExt {
+  return syncBlockServiceRowsFromSubs({
+    ...emptyPartnerCatalogBlock(initialCategoryId),
+    subCategoryRows: [emptyPartnerSubCategoryRow()],
+  });
+}
+
 /** Local guard — keeps catalog UI safe without an extra module export (avoids dev HMR load issues). */
 function ensurePartnerCatalogBlocks(
   blocks: PartnerCategoryBlock[] | null | undefined
-): PartnerCategoryBlock[] {
+): PartnerCategoryBlockExt[] {
   if (!Array.isArray(blocks) || blocks.length === 0) {
-    return [emptyPartnerCatalogBlock("")];
+    return [emptyPartnerCatalogBlockExt("")];
   }
-  return blocks.map((b) => ({
-    id: String(b?.id ?? "").trim() || newPartnerCatalogRowId(),
-    categoryId: String(b?.categoryId ?? ""),
-    is_active: b?.is_active !== false,
-    serviceRows: (
+  return blocks.map((b) => {
+    const ext = b as PartnerCategoryBlockExt;
+    const rawSubs = Array.isArray(ext?.subCategoryRows)
+      ? ext.subCategoryRows
+      : [];
+    const topServices = (
       Array.isArray(b?.serviceRows) && b.serviceRows.length > 0
         ? b.serviceRows
-        : [emptyPartnerServiceRow()]
-    ).map((r) => ({
-      ...r,
-      is_active: r?.is_active !== false,
-    })),
-  }));
+        : []
+    ).map(normalizePartnerServiceRow);
+    const hasNestedServices = rawSubs.some(
+      (s) => Array.isArray(s?.serviceRows) && s.serviceRows.length > 0
+    );
+    const subCategoryRows = (
+      rawSubs.length > 0 ? rawSubs : [emptyPartnerSubCategoryRow()]
+    ).map((r, index) => {
+      const nested = Array.isArray(r?.serviceRows) ? r.serviceRows : [];
+      const serviceRows =
+        nested.length > 0
+          ? nested.map(normalizePartnerServiceRow)
+          : !hasNestedServices && index === 0 && topServices.length > 0
+            ? topServices
+            : [emptyPartnerServiceRow()];
+      return {
+        id: String(r?.id ?? "").trim() || newPartnerCatalogRowId(),
+        subcategoryId: String(r?.subcategoryId ?? ""),
+        is_active: r?.is_active !== false,
+        serviceRows,
+      };
+    });
+    return syncBlockServiceRowsFromSubs({
+      id: String(b?.id ?? "").trim() || newPartnerCatalogRowId(),
+      categoryId: String(b?.categoryId ?? ""),
+      is_active: b?.is_active !== false,
+      subCategoryRows,
+      serviceRows: [],
+    });
+  });
 }
 
-type OptionType = { value: string; label: string };
+type OptionType = { value: string; label: string; service_ids?: string[] };
+
+type AddPartnerServiceLite = PartnerCatalogServiceLite & {
+  subcategory_id?: string;
+};
+
+function catalogRefIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    let id = "";
+    if (item && typeof item === "object") {
+      const rec = item as Record<string, unknown>;
+      id = String(
+        rec._id ?? rec.id ?? rec.service_id ?? rec.value ?? ""
+      ).trim();
+    } else {
+      id = String(item ?? "").trim();
+    }
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function serviceSubCategoryIdFromRow(row: Record<string, unknown>): string {
+  return (
+    normalizeServiceCategoryRef(row.subcategory_id) ||
+    normalizeServiceCategoryRef(row.sub_category_id) ||
+    normalizeServiceCategoryRef(row.subcategory)
+  );
+}
+
+function extractSubCategoryOptionsFromGetAll(
+  data: unknown
+): OptionType[] {
+  const buckets: unknown[] = [];
+  const push = (value: unknown) => {
+    if (Array.isArray(value)) buckets.push(...value);
+  };
+  const walk = (node: unknown, depth = 0) => {
+    if (depth > 4 || node == null) return;
+    if (Array.isArray(node)) {
+      push(node);
+      return;
+    }
+    if (typeof node !== "object") return;
+    const root = node as Record<string, unknown>;
+    push(root.records);
+    push(root.subcategories);
+    push(root.sub_categories);
+    push(root.list);
+    push(root.items);
+    push(root.data);
+    if (root.data && typeof root.data === "object") walk(root.data, depth + 1);
+  };
+  walk(data);
+  const seen = new Set<string>();
+  const options: OptionType[] = [];
+  for (const item of buckets) {
+    const row =
+      item && typeof item === "object"
+        ? (item as Record<string, unknown>)
+        : {};
+    const value = String(
+      row._id ??
+        row.id ??
+        row.subcategory_id ??
+        row.sub_category_id ??
+        row.value ??
+        ""
+    ).trim();
+    if (!value || seen.has(value)) continue;
+    const label =
+      String(row.name ?? row.label ?? row.subcategory_name ?? "").trim() ||
+      value;
+    seen.add(value);
+    const serviceIds = [
+      ...catalogRefIds(row.service_ids),
+      ...catalogRefIds(row.services),
+    ];
+    options.push({
+      value,
+      label,
+      ...(serviceIds.length > 0 ? { service_ids: serviceIds } : {}),
+    });
+  }
+  return options;
+}
+
+function extractServicesFromGetAll(data: unknown): AddPartnerServiceLite[] {
+  const buckets: unknown[] = [];
+  const push = (value: unknown) => {
+    if (Array.isArray(value)) buckets.push(...value);
+  };
+  const walk = (node: unknown, depth = 0) => {
+    if (depth > 4 || node == null) return;
+    if (Array.isArray(node)) {
+      push(node);
+      return;
+    }
+    if (typeof node !== "object") return;
+    const root = node as Record<string, unknown>;
+    push(root.records);
+    push(root.services);
+    push(root.list);
+    push(root.items);
+    push(root.data);
+    if (root.data && typeof root.data === "object") walk(root.data, depth + 1);
+  };
+  walk(data);
+  const seen = new Set<string>();
+  const out: AddPartnerServiceLite[] = [];
+  for (const item of buckets) {
+    const row =
+      item && typeof item === "object"
+        ? (item as Record<string, unknown>)
+        : {};
+    const value = String(
+      row._id ?? row.id ?? row.service_id ?? row.value ?? ""
+    ).trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    const priceRaw = row.price ?? row.minimum_deposit;
+    const priceNum =
+      priceRaw !== undefined && priceRaw !== null ? Number(priceRaw) : NaN;
+    out.push({
+      _id: value,
+      name: String(row.name ?? row.label ?? "").trim() || value,
+      category_id: normalizeServiceCategoryRef(row.category_id),
+      subcategory_id: serviceSubCategoryIdFromRow(row),
+      price: Number.isFinite(priceNum) ? priceNum : undefined,
+      payment_type: String(
+        row.payment_type ?? row.min_deposit_type ?? ""
+      ).trim(),
+    });
+  }
+  return out;
+}
 
 function ensureSelectOption(
   options: OptionType[],
@@ -222,7 +460,29 @@ type AddPartnerFormFields = {
   add_partner_franchise_id?: string;
 };
 
-type AddEditUserFormValues = Partial<UserModel> & AddPartnerFormFields;
+/**
+ * Do not spread full `UserModel` into RHF values: nested `partner_services.services`
+ * (recursive) and index-signature `services` make `FieldPath` circular.
+ */
+type UserModelFormOmit =
+  | "services"
+  | "partner_services"
+  | "partner_subscriptions"
+  | "documents"
+  | "bank_account"
+  | "bank_accounts"
+  | "extra_addresses"
+  | "franchise_cities"
+  | "service_cities"
+  | "service_city_ids"
+  | "service_city_names"
+  | "franchise_id";
+
+type AddEditUserFormValues = Partial<Omit<UserModel, UserModelFormOmit>> &
+  AddPartnerFormFields & {
+    /** Form stores franchise as an id string only. */
+    franchise_id?: string | null;
+  };
 
 type AddEditUserDialogProps = {
   role: number;
@@ -295,6 +555,109 @@ const normalizePincodeValue = (value: unknown): string => {
   }
   return "";
 };
+
+type CitySelectOption = { value: string; label: string };
+
+/** Normalize `franchise_cities` / `service_cities` API arrays into select options. */
+function citySelectOptionsFromRefs(raw: unknown): CitySelectOption[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CitySelectOption[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (item && typeof item === "object") {
+      const obj = item as Record<string, unknown>;
+      const id = String(obj._id ?? obj.id ?? obj.value ?? "").trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push({
+        value: id,
+        label: String(obj.name ?? obj.label ?? id).trim() || id,
+      });
+      continue;
+    }
+    const id = String(item ?? "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ value: id, label: id });
+  }
+  return out;
+}
+
+/** Build options from franchise `city_id` + `city_name` (string or array). */
+function citySelectOptionsFromFranchiseFields(
+  cityId: unknown,
+  cityName: unknown
+): CitySelectOption[] {
+  const ids: string[] = [];
+  if (Array.isArray(cityId)) {
+    for (const x of cityId) {
+      if (x && typeof x === "object") {
+        const id = String(
+          (x as Record<string, unknown>)._id ??
+            (x as Record<string, unknown>).id ??
+            ""
+        ).trim();
+        if (id) ids.push(id);
+      } else {
+        const id = String(x ?? "").trim();
+        if (id) ids.push(id);
+      }
+    }
+  } else if (cityId && typeof cityId === "object") {
+    const id = String(
+      (cityId as Record<string, unknown>)._id ??
+        (cityId as Record<string, unknown>).id ??
+        ""
+    ).trim();
+    if (id) ids.push(id);
+  } else {
+    const s = String(cityId ?? "").trim();
+    if (s.includes(",")) {
+      ids.push(
+        ...s
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean)
+      );
+    } else if (s) {
+      ids.push(s);
+    }
+  }
+
+  const names: string[] = [];
+  if (Array.isArray(cityName)) {
+    for (const x of cityName) {
+      names.push(String(x ?? "").trim());
+    }
+  } else {
+    const s = String(cityName ?? "").trim();
+    if (s.includes(",")) {
+      names.push(
+        ...s
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean)
+      );
+    } else if (s) {
+      names.push(s);
+    }
+  }
+
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+  return uniqueIds.map((id, index) => ({
+    value: id,
+    label: names[index] || id,
+  }));
+}
+
+function cityIdsFromRefs(raw: unknown): string[] {
+  return citySelectOptionsFromRefs(raw).map((o) => o.value);
+}
+
+/** `direct_order` from `POST /user/create`, `GET /user/getAll`, and `PUT /user/update`. */
+function isPartnerDirectOrderOn(value: unknown): boolean {
+  return value === true || value === "true" || value === 1 || value === "1";
+}
 
 function AddEditUserDialogView({
   role,
@@ -373,15 +736,23 @@ function AddEditUserDialogView({
   const [categoryOptions, setCategoryOptions] = useState<OptionType[]>([]);
   /** Partner edit: bulk-loaded services for legacy category/service sync. Add Partner: filled lazily per category. */
   const [allServices, setAllServices] = useState<ServiceLite[]>([]);
-  /** Add Partner: services loaded per category from franchise-scoped catalog. */
+  /** Add Partner: services loaded per category from franchise-scoped catalog (legacy). */
   const [servicesByCategoryId, setServicesByCategoryId] = useState<
     Record<string, PartnerCatalogServiceLite[]>
+  >({});
+  /** Add Partner: sub categories from `GET /subcategory/getAll?category_id=`. */
+  const [subCategoriesByCategoryId, setSubCategoriesByCategoryId] = useState<
+    Record<string, OptionType[]>
+  >({});
+  /** Add Partner: services from `GET /service/getAll?subcategory_id=`. */
+  const [servicesBySubCategoryId, setServicesBySubCategoryId] = useState<
+    Record<string, AddPartnerServiceLite[]>
   >({});
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [serviceIds, setServiceIds] = useState<string[]>([]);
   const [partnerCatalogBlocks, setPartnerCatalogBlocks] = useState<
-    PartnerCategoryBlock[]
-  >(() => [emptyPartnerCatalogBlock("")]);
+    PartnerCategoryBlockExt[]
+  >(() => [emptyPartnerCatalogBlockExt("")]);
 
   const safePartnerCatalogBlocks = useMemo(
     () => ensurePartnerCatalogBlocks(partnerCatalogBlocks),
@@ -417,6 +788,7 @@ function AddEditUserDialogView({
   const addPartnerStatesLoadedRef = useRef(false);
   const addPartnerCategoryLoadingRef = useRef(false);
   const addPartnerServicesLoadingRef = useRef<Set<string>>(new Set());
+  const addPartnerSubCategoriesLoadingRef = useRef<Set<string>>(new Set());
 
   const loadPartnerPlanOptions = useCallback(async () => {
     if (partnerPlansLoadingRef.current) return;
@@ -438,6 +810,16 @@ function AddEditUserDialogView({
   const [partnerEditFranchiseName, setPartnerEditFranchiseName] = useState("");
   const [partnerEditFranchiseResolving, setPartnerEditFranchiseResolving] =
     useState(false);
+  /** Franchise cities → options for Service Cities multi-select (Add/Update Partner). */
+  const [franchiseCityOptions, setFranchiseCityOptions] = useState<
+    CitySelectOption[]
+  >([]);
+  const [serviceCityIds, setServiceCityIds] = useState<string[]>([]);
+  const [directOrder, setDirectOrder] = useState<boolean>(
+    isPartnerDirectOrderOn((user as any)?.direct_order)
+  );
+
+  const serviceCitiesHydratedForUserRef = useRef<string>("");
 
   const currentUserRole = String(
     getLocalStorage(AppConstant.userRole) ?? ""
@@ -756,72 +1138,124 @@ function AddEditUserDialogView({
     categoryOptions,
   ]);
 
-  const loadAddPartnerServicesOnOpen = useCallback(
+  const loadAddPartnerSubCategoriesOnOpen = useCallback(
     async (categoryId: string) => {
       const cid = String(categoryId ?? "").trim();
       if (!cid || !isAddPartner) return;
-      if ((servicesByCategoryId[cid] ?? []).length > 0) return;
-      const apiFranchiseId = catalogFranchiseApiId;
-      if (isSuperAdminOrStaff && !apiFranchiseId) {
-        setServicesByCategoryId((prev) => ({ ...prev, [cid]: [] }));
-        return;
-      }
-      if (addPartnerServicesLoadingRef.current.has(cid)) return;
-      addPartnerServicesLoadingRef.current.add(cid);
-      const cityId = String(watchedCityId ?? "").trim();
-      const stateId = String(watchedStateId ?? "").trim();
+      if ((subCategoriesByCategoryId[cid] ?? []).length > 0) return;
+      if (addPartnerSubCategoriesLoadingRef.current.has(cid)) return;
+      addPartnerSubCategoriesLoadingRef.current.add(cid);
       try {
-        const svcRes = await fetchService(
-          1,
-          5000,
-          {
-            status: "true",
-            ...(cityId ? { city_id: cityId } : {}),
-            ...(stateId ? { state_id: stateId } : {}),
-          },
-          [],
-          apiFranchiseId || undefined
+        // GET /subcategory/getAll?category_id=… (Postman: category_id only)
+        const params = new URLSearchParams({ category_id: cid });
+        const res = await apiRequest(
+          `/subcategory/getAll?${params.toString()}`,
+          "GET",
+          undefined,
+          false,
+          true
         );
-        const list =
-          svcRes.response && Array.isArray(svcRes.services)
-            ? svcRes.services
-            : [];
-        const filtered = list.filter(
-          (s) => normalizeServiceCategoryRef(s.category_id) === cid
-        );
-        const mapped: PartnerCatalogServiceLite[] = filtered.map((s) => ({
-          _id: String((s as { _id?: string })._id ?? ""),
-          name: String((s as { name?: string }).name ?? ""),
-          category_id: cid,
-          price:
-            (s as { price?: number | null }).price !== undefined &&
-            (s as { price?: number | null }).price !== null
-              ? Number((s as { price?: number }).price)
-              : undefined,
-          payment_type: String(
-            (s as { payment_type?: string }).payment_type ??
-              (s as { min_deposit_type?: string }).min_deposit_type ??
-              ""
-          ).trim(),
-        }));
-        setServicesByCategoryId((prev) => ({
+        const options = res.success
+          ? extractSubCategoryOptionsFromGetAll(res.data)
+          : [];
+        setSubCategoriesByCategoryId((prev) => ({
           ...prev,
-          [cid]: mapped,
+          [cid]: options,
         }));
       } catch {
-        setServicesByCategoryId((prev) => ({ ...prev, [cid]: [] }));
+        setSubCategoriesByCategoryId((prev) => ({ ...prev, [cid]: [] }));
       } finally {
-        addPartnerServicesLoadingRef.current.delete(cid);
+        addPartnerSubCategoriesLoadingRef.current.delete(cid);
       }
     },
-    [
-      isAddPartner,
-      isSuperAdminOrStaff,
-      catalogFranchiseApiId,
-      watchedCityId,
-      watchedStateId,
-      servicesByCategoryId,
-    ]
+    [isAddPartner, subCategoriesByCategoryId]
+  );
+
+  const loadAddPartnerServicesOnOpen = useCallback(
+    async (subcategoryId: string, categoryId?: string) => {
+      const sid = String(subcategoryId ?? "").trim();
+      if (!sid || !isAddPartner) return;
+      const cid = String(categoryId ?? "").trim();
+      const allowedIds = new Set<string>();
+      const subRows = cid
+        ? subCategoriesByCategoryId[cid] ?? []
+        : Object.values(subCategoriesByCategoryId).flat();
+      const subHit = subRows.find((option) => option.value === sid);
+      for (const id of subHit?.service_ids ?? []) {
+        if (id) allowedIds.add(id);
+      }
+      const cached = servicesBySubCategoryId[sid] ?? [];
+      if (
+        cached.length > 0 &&
+        cached.every((s) => {
+          const recSub = String(s.subcategory_id ?? "").trim();
+          return recSub === sid || allowedIds.has(s._id);
+        })
+      ) {
+        return;
+      }
+      if (addPartnerServicesLoadingRef.current.has(sid)) return;
+      addPartnerServicesLoadingRef.current.add(sid);
+      try {
+
+        const byId = new Map<string, AddPartnerServiceLite>();
+        const ingest = (data: unknown) => {
+          for (const row of extractServicesFromGetAll(data)) {
+            const matchesSub = row.subcategory_id === sid;
+            const matchesAllowed = allowedIds.has(row._id);
+            const matchesCat =
+              !cid || !row.category_id || row.category_id === cid;
+            if ((matchesSub || matchesAllowed) && matchesCat) {
+              byId.set(row._id, {
+                ...row,
+                category_id: cid || row.category_id,
+                subcategory_id: sid,
+              });
+            }
+          }
+        };
+
+        const subParams = new URLSearchParams({
+          page: "1",
+          limit: "200",
+          subcategory_id: sid,
+        });
+        const subRes = await apiRequest(
+          `/service/getAll?${subParams.toString()}`,
+          "GET",
+          undefined,
+          false,
+          true
+        );
+        if (subRes.success) ingest(subRes.data);
+
+        if (cid) {
+          const catParams = new URLSearchParams({
+            page: "1",
+            limit: "200",
+            category_id: cid,
+          });
+          const catRes = await apiRequest(
+            `/service/getAll?${catParams.toString()}`,
+            "GET",
+            undefined,
+            false,
+            true
+          );
+          if (catRes.success) ingest(catRes.data);
+        }
+
+        setServicesBySubCategoryId((prev) => ({
+          ...prev,
+          [sid]: Array.from(byId.values()),
+        }));
+      } catch {
+        setServicesBySubCategoryId((prev) => ({ ...prev, [sid]: [] }));
+      } finally {
+        addPartnerServicesLoadingRef.current.delete(sid);
+      }
+    },
+    [isAddPartner, servicesBySubCategoryId, subCategoriesByCategoryId]
   );
 
   useEffect(() => {
@@ -843,8 +1277,10 @@ function AddEditUserDialogView({
       if (isAddPartner) {
         setCategoryIds([]);
         setServiceIds([]);
-        setPartnerCatalogBlocks([emptyPartnerCatalogBlock("")]);
+        setPartnerCatalogBlocks([emptyPartnerCatalogBlockExt("")]);
         setServicesByCategoryId({});
+        setSubCategoriesByCategoryId({});
+        setServicesBySubCategoryId({});
       }
       return;
     }
@@ -852,8 +1288,10 @@ function AddEditUserDialogView({
     if (isAddPartner) {
       setCategoryIds([]);
       setServiceIds([]);
-      setPartnerCatalogBlocks([emptyPartnerCatalogBlock("")]);
+      setPartnerCatalogBlocks([emptyPartnerCatalogBlockExt("")]);
       setServicesByCategoryId({});
+      setSubCategoriesByCategoryId({});
+      setServicesBySubCategoryId({});
       return;
     }
 
@@ -936,8 +1374,10 @@ function AddEditUserDialogView({
     const fid = effectiveAddPartnerFranchiseId;
     if (prevAddPartnerFranchiseRef.current === fid) return;
     prevAddPartnerFranchiseRef.current = fid;
-    setPartnerCatalogBlocks([emptyPartnerCatalogBlock("")]);
+    setPartnerCatalogBlocks([emptyPartnerCatalogBlockExt("")]);
     setServicesByCategoryId({});
+    setSubCategoriesByCategoryId({});
+    setServicesBySubCategoryId({});
     setCategoryIds([]);
     setServiceIds([]);
     if (fid) {
@@ -1175,6 +1615,102 @@ function AddEditUserDialogView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate partner selections when user record identity changes
   }, [isPartnerEdit, user?._id]);
 
+  /** Add Partner: load franchise cities as Service Cities options when franchise is chosen. */
+  useEffect(() => {
+    if (!isAddPartner) return;
+    const fid = effectiveAddPartnerFranchiseId;
+    if (!fid) {
+      setFranchiseCityOptions([]);
+      setServiceCityIds([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const fromDropdown = franchiseDropdownOptions.find(
+        (o) => String(o.value) === fid
+      );
+      let options = citySelectOptionsFromFranchiseFields(
+        fromDropdown?.city_id,
+        fromDropdown?.city_name
+      );
+      if (options.length <= 1) {
+        const franchise = await fetchFranchiseById(fid);
+        if (franchise) {
+          const fromFranchise = citySelectOptionsFromFranchiseFields(
+            franchise.city_id,
+            franchise.city_name
+          );
+          if (fromFranchise.length > 0) options = fromFranchise;
+        }
+      }
+      if (cancelled) return;
+      setFranchiseCityOptions(options);
+      setServiceCityIds((prev) =>
+        prev.filter((id) => options.some((o) => o.value === id))
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isAddPartner,
+    effectiveAddPartnerFranchiseId,
+    franchiseDropdownOptions,
+  ]);
+
+  /** Update Partner: options from `franchise_cities`, selection from `service_cities`. */
+  useEffect(() => {
+    if (!isPartnerEdit || !user) {
+      if (!isAddPartner) {
+        setFranchiseCityOptions([]);
+        setServiceCityIds([]);
+        serviceCitiesHydratedForUserRef.current = "";
+      }
+      return;
+    }
+    const userKey = String(user._id ?? "");
+    const fromFranchiseCities = citySelectOptionsFromRefs(user.franchise_cities);
+    if (fromFranchiseCities.length > 0) {
+      setFranchiseCityOptions(fromFranchiseCities);
+    } else {
+      const fid =
+        String(partnerEditFranchiseId ?? "").trim() ||
+        partnerFranchiseIdFromUser(user);
+      if (fid) {
+        void (async () => {
+          const franchise = await fetchFranchiseById(fid);
+          if (!franchise) return;
+          const options = citySelectOptionsFromFranchiseFields(
+            franchise.city_id,
+            franchise.city_name
+          );
+          if (options.length > 0) setFranchiseCityOptions(options);
+        })();
+      }
+    }
+    if (serviceCitiesHydratedForUserRef.current !== userKey) {
+      serviceCitiesHydratedForUserRef.current = userKey;
+      const selected =
+        cityIdsFromRefs(user.service_cities).length > 0
+          ? cityIdsFromRefs(user.service_cities)
+          : cityIdsFromRefs(user.service_city_ids);
+      setServiceCityIds(selected);
+    }
+  }, [isPartnerEdit, isAddPartner, user, partnerEditFranchiseId]);
+
+  const selectedServiceCityOptions = useMemo(
+    () =>
+      franchiseCityOptions.filter((o) => serviceCityIds.includes(o.value)),
+    [franchiseCityOptions, serviceCityIds]
+  );
+
+  const handleServiceCitySelection = useCallback(
+    (selectedOptions: CitySelectOption[]) => {
+      setServiceCityIds(selectedOptions.map((o) => o.value));
+    },
+    []
+  );
+
   const categorySelectOptionsForBlock = useCallback(
     (blockId: string): OptionType[] => {
       const rest = (categoryOptions ?? []).filter(
@@ -1194,6 +1730,29 @@ function AddEditUserDialogView({
     [categoryOptions, safePartnerCatalogBlocks]
   );
 
+  const subCategorySelectOptionsForRow = useCallback(
+    (blockId: string, rowId: string): OptionType[] => {
+      const block = safePartnerCatalogBlocks.find((b) => b.id === blockId);
+      const categoryId = String(block?.categoryId ?? "").trim();
+      const taken = new Set(
+        (block?.subCategoryRows ?? [])
+          .filter(
+            (r) =>
+              r.id !== rowId && String(r.subcategoryId ?? "").trim() !== ""
+          )
+          .map((r) => String(r.subcategoryId))
+      );
+      const loaded = categoryId
+        ? subCategoriesByCategoryId[categoryId] ?? []
+        : [];
+      const rest = loaded.filter(
+        (o) => o.value && !taken.has(String(o.value))
+      );
+      return [{ value: "", label: "Select sub category" }, ...rest];
+    },
+    [safePartnerCatalogBlocks, subCategoriesByCategoryId]
+  );
+
   const catalogServicesForBlocks = useMemo((): PartnerCatalogServiceLite[] => {
     if (!isAddPartner) {
       return allServices.map((s) => ({
@@ -1203,21 +1762,32 @@ function AddEditUserDialogView({
       }));
     }
     const out: PartnerCatalogServiceLite[] = [];
+    for (const list of Object.values(servicesBySubCategoryId)) {
+      out.push(...list);
+    }
     for (const list of Object.values(servicesByCategoryId)) {
       out.push(...list);
     }
     return out;
-  }, [isAddPartner, allServices, servicesByCategoryId]);
+  }, [isAddPartner, allServices, servicesBySubCategoryId, servicesByCategoryId]);
 
-  /** Per row: hide services already chosen on sibling rows in this block; keep this row’s selection visible. */
+  /** Per row: hide services already chosen on sibling rows; keep this row’s selection visible. */
   const serviceOptionsForPartnerBlockRow = useCallback(
-    (block: PartnerCategoryBlock, rowId: string): OptionType[] => {
+    (
+      block: PartnerCategoryBlock,
+      subRow: PartnerSubCategoryRow,
+      rowId: string
+    ): OptionType[] => {
       const categoryId = String(block.categoryId ?? "").trim();
+      const subcategoryId = String(subRow.subcategoryId ?? "").trim();
       if (!categoryId) {
         return [{ value: "", label: "Select category first" }];
       }
+      if (isAddPartner && !subcategoryId) {
+        return [{ value: "", label: "Select sub category first" }];
+      }
 
-      const rows = block.serviceRows ?? [];
+      const rows = (isAddPartner ? subRow.serviceRows : block.serviceRows) ?? [];
       const currentRow = rows.find((r) => r.id === rowId);
       const currentSid = String(currentRow?.serviceId ?? "").trim();
 
@@ -1235,10 +1805,23 @@ function AddEditUserDialogView({
           .filter((svc) => String(svc.category_id) === String(categoryId))
           .map((s) => ({ _id: s._id, name: s.name }));
       } else {
-        baseList = (servicesByCategoryId[categoryId] ?? []).map((s) => ({
-          _id: String(s._id),
-          name: String(s.name),
-        }));
+        const allowedIds = new Set(
+          (subCategoriesByCategoryId[categoryId] ?? []).find(
+            (option) => option.value === subcategoryId
+          )?.service_ids ?? []
+        );
+        baseList = (servicesBySubCategoryId[subcategoryId] ?? [])
+          .filter((s) => {
+            const recSub = String(s.subcategory_id ?? "").trim();
+            const recCat = String(s.category_id ?? "").trim();
+            if (recCat && recCat !== categoryId) return false;
+            if (recSub) return recSub === subcategoryId;
+            return allowedIds.has(String(s._id));
+          })
+          .map((s) => ({
+            _id: String(s._id),
+            name: String(s.name),
+          }));
       }
 
       const ordered: OptionType[] = [];
@@ -1269,7 +1852,13 @@ function AddEditUserDialogView({
 
       return [{ value: "", label: "Select service" }, ...filtered];
     },
-    [isAddPartner, allServices, servicesByCategoryId, catalogServicesForBlocks]
+    [
+      isAddPartner,
+      allServices,
+      servicesBySubCategoryId,
+      subCategoriesByCategoryId,
+      catalogServicesForBlocks,
+    ]
   );
 
   const partnerServiceRowComplete = (row: PartnerServiceRow) =>
@@ -1279,18 +1868,36 @@ function AddEditUserDialogView({
         String(row.price ?? "").trim()
     );
 
+  const partnerSubCategoryRowComplete = (row: PartnerSubCategoryRow) =>
+    Boolean(String(row.subcategoryId ?? "").trim());
+
+  /** Plus stays enabled once category (+ its sub categories) are chosen; services are validated on save. */
   const canAddPartnerCategoryBlock = useMemo(() => {
     if (!isAddPartner) return true;
     return safePartnerCatalogBlocks.every((b) => {
       if (!String(b.categoryId ?? "").trim()) return false;
-      return (b.serviceRows ?? []).every(partnerServiceRowComplete);
+      return (b.subCategoryRows ?? []).every(partnerSubCategoryRowComplete);
     });
   }, [isAddPartner, safePartnerCatalogBlocks]);
 
-  const canAddPartnerServiceRow = useCallback(
-    (block: PartnerCategoryBlock, row: PartnerServiceRow) =>
+  const canAddPartnerSubCategoryRow = useCallback(
+    (block: PartnerCategoryBlockExt, row: PartnerSubCategoryRow) =>
       Boolean(
         String(block.categoryId ?? "").trim() &&
+          partnerSubCategoryRowComplete(row)
+      ),
+    []
+  );
+
+  const canAddPartnerServiceRow = useCallback(
+    (
+      block: PartnerCategoryBlock,
+      subRow: PartnerSubCategoryRow,
+      row: PartnerServiceRow
+    ) =>
+      Boolean(
+        String(block.categoryId ?? "").trim() &&
+          partnerSubCategoryRowComplete(subRow) &&
           partnerServiceRowComplete(row)
       ),
     []
@@ -1299,7 +1906,7 @@ function AddEditUserDialogView({
   const addCategoryBlock = useCallback(() => {
     setPartnerCatalogBlocks((prev) => [
       ...ensurePartnerCatalogBlocks(prev),
-      emptyPartnerCatalogBlock(""),
+      emptyPartnerCatalogBlockExt(""),
     ]);
   }, []);
 
@@ -1316,14 +1923,18 @@ function AddEditUserDialogView({
     setPartnerCatalogBlocks((prev) =>
       ensurePartnerCatalogBlocks(prev).map((b) =>
         b.id === blockId
-          ? {
+          ? syncBlockServiceRowsFromSubs({
               ...b,
               is_active,
-              serviceRows: (b.serviceRows ?? []).map((r) => ({
+              subCategoryRows: (b.subCategoryRows ?? []).map((r) => ({
                 ...r,
                 is_active: is_active ? r.is_active !== false : false,
+                serviceRows: (r.serviceRows ?? []).map((svc) => ({
+                  ...svc,
+                  is_active: is_active ? svc.is_active !== false : false,
+                })),
               })),
-            }
+            })
           : b
       )
     );
@@ -1334,15 +1945,11 @@ function AddEditUserDialogView({
       setPartnerCatalogBlocks((prev) =>
         ensurePartnerCatalogBlocks(prev).map((b) =>
           b.id === blockId
-            ? {
+            ? syncBlockServiceRowsFromSubs({
                 ...b,
                 categoryId,
-                serviceRows: (b.serviceRows ?? []).map((r) => ({
-                  ...r,
-                  serviceId: "",
-                  price: "",
-                })),
-              }
+                subCategoryRows: [emptyPartnerSubCategoryRow()],
+              })
             : b
         )
       );
@@ -1350,15 +1957,93 @@ function AddEditUserDialogView({
     []
   );
 
-  const addServiceRow = useCallback((blockId: string) => {
+  const addSubCategoryRow = useCallback((blockId: string) => {
     setPartnerCatalogBlocks((prev) =>
       ensurePartnerCatalogBlocks(prev).map((b) =>
         b.id === blockId
-          ? {
+          ? syncBlockServiceRowsFromSubs({
               ...b,
-              serviceRows: [...(b.serviceRows ?? []), emptyPartnerServiceRow()],
-            }
+              subCategoryRows: [
+                ...(b.subCategoryRows ?? []),
+                emptyPartnerSubCategoryRow(),
+              ],
+            })
           : b
+      )
+    );
+  }, []);
+
+  const updateSubCategoryRow = useCallback(
+    (
+      blockId: string,
+      rowId: string,
+      patch: Partial<Omit<PartnerSubCategoryRow, "id" | "serviceRows">>
+    ) => {
+      setPartnerCatalogBlocks((prev) =>
+        ensurePartnerCatalogBlocks(prev).map((b) =>
+          b.id !== blockId
+            ? b
+            : syncBlockServiceRowsFromSubs({
+                ...b,
+                subCategoryRows: (b.subCategoryRows ?? []).map((r) => {
+                  if (r.id !== rowId) return r;
+                  const next = { ...r, ...patch };
+                  if (
+                    patch.subcategoryId !== undefined &&
+                    String(patch.subcategoryId) !== String(r.subcategoryId)
+                  ) {
+                    next.serviceRows = [emptyPartnerServiceRow()];
+                  }
+                  if (patch.is_active === false) {
+                    next.serviceRows = (next.serviceRows ?? []).map((svc) => ({
+                      ...svc,
+                      is_active: false,
+                    }));
+                  }
+                  return next;
+                }),
+              })
+        )
+      );
+    },
+    []
+  );
+
+  const removeSubCategoryRow = useCallback((blockId: string, rowId: string) => {
+    setPartnerCatalogBlocks((prev) =>
+      ensurePartnerCatalogBlocks(prev).map((b) => {
+        if (b.id !== blockId) return b;
+        const rows = b.subCategoryRows ?? [];
+        if (rows.length <= 1) {
+          return b;
+        }
+        return syncBlockServiceRowsFromSubs({
+          ...b,
+          subCategoryRows: rows.filter((r) => r.id !== rowId),
+        });
+      })
+    );
+  }, []);
+
+  const addServiceRow = useCallback((blockId: string, subRowId: string) => {
+    setPartnerCatalogBlocks((prev) =>
+      ensurePartnerCatalogBlocks(prev).map((b) =>
+        b.id !== blockId
+          ? b
+          : syncBlockServiceRowsFromSubs({
+              ...b,
+              subCategoryRows: (b.subCategoryRows ?? []).map((sub) =>
+                sub.id === subRowId
+                  ? {
+                      ...sub,
+                      serviceRows: [
+                        ...(sub.serviceRows ?? []),
+                        emptyPartnerServiceRow(),
+                      ],
+                    }
+                  : sub
+              ),
+            })
       )
     );
   }, []);
@@ -1366,6 +2051,7 @@ function AddEditUserDialogView({
   const updateServiceRow = useCallback(
     (
       blockId: string,
+      subRowId: string,
       rowId: string,
       patch: Partial<Omit<PartnerServiceRow, "id">>
     ) => {
@@ -1373,33 +2059,47 @@ function AddEditUserDialogView({
         ensurePartnerCatalogBlocks(prev).map((b) =>
           b.id !== blockId
             ? b
-            : {
+            : syncBlockServiceRowsFromSubs({
                 ...b,
-                serviceRows: (b.serviceRows ?? []).map((r) =>
-                  r.id === rowId ? { ...r, ...patch } : r
+                subCategoryRows: (b.subCategoryRows ?? []).map((sub) =>
+                  sub.id !== subRowId
+                    ? sub
+                    : {
+                        ...sub,
+                        serviceRows: (sub.serviceRows ?? []).map((r) =>
+                          r.id === rowId ? { ...r, ...patch } : r
+                        ),
+                      }
                 ),
-              }
+              })
         )
       );
     },
     []
   );
 
-  const removeServiceRow = useCallback((blockId: string, rowId: string) => {
-    setPartnerCatalogBlocks((prev) =>
-      ensurePartnerCatalogBlocks(prev).map((b) => {
-        if (b.id !== blockId) return b;
-        const rows = b.serviceRows ?? [];
-        if (rows.length <= 1) {
-          return b;
-        }
-        return {
-          ...b,
-          serviceRows: rows.filter((r) => r.id !== rowId),
-        };
-      })
-    );
-  }, []);
+  const removeServiceRow = useCallback(
+    (blockId: string, subRowId: string, rowId: string) => {
+      setPartnerCatalogBlocks((prev) =>
+        ensurePartnerCatalogBlocks(prev).map((b) => {
+          if (b.id !== blockId) return b;
+          return syncBlockServiceRowsFromSubs({
+            ...b,
+            subCategoryRows: (b.subCategoryRows ?? []).map((sub) => {
+              if (sub.id !== subRowId) return sub;
+              const rows = sub.serviceRows ?? [];
+              if (rows.length <= 1) return sub;
+              return {
+                ...sub,
+                serviceRows: rows.filter((r) => r.id !== rowId),
+              };
+            }),
+          });
+        })
+      );
+    },
+    []
+  );
 
   const hoverIconBtn = (
     e: React.MouseEvent<HTMLButtonElement>,
@@ -1640,6 +2340,9 @@ function AddEditUserDialogView({
         : (data as any).area_id,
       is_active: resolvedIsActivePayload,
       is_blocked: isBlockedPayload,
+      ...(role === PARTNER_ROLE && {
+        direct_order: directOrder === true,
+      }),
       pincode: isUserUpdate
         ? sanitizeIndianPincodeInput(
             String(normalizePincodeValue(user?.pincode) ?? "")
@@ -1667,7 +2370,7 @@ function AddEditUserDialogView({
               service_prices: partnerCatalogFlat.service_prices,
               category_is_active: partnerCatalogFlat.category_is_active,
               service_is_active: partnerCatalogFlat.service_is_active,
-              "partner-services": partnerCatalogFlat.partner_services,
+              partner_services: partnerCatalogFlat.partner_services,
             }
           : isPartnerEdit
           ? {
@@ -1688,6 +2391,7 @@ function AddEditUserDialogView({
         is_verified: PARTNER_VERIFICATION.PENDING,
       }),
       ...((isAddPartner || isPartnerEdit) && {
+        service_cities: serviceCityIds,
         subscription_plan_id: subscriptionPlanId,
         subscription_plan: String(data.subscription_plan ?? "").trim(),
         subscription_start_date: subscriptionStartDate,
@@ -1858,6 +2562,10 @@ function AddEditUserDialogView({
   }, [isEditable, user, isAddPartner, isPartnerEdit, reset]);
 
   useEffect(() => {
+    setDirectOrder(isPartnerDirectOrderOn((user as any)?.direct_order));
+  }, [user, isAddPartner, isPartnerEdit]);
+
+  useEffect(() => {
     if (!usePartnerVerificationStatus || !user) return;
     const norm = normalizePartnerVerification(user.is_verified);
     if (norm === PARTNER_VERIFICATION.REJECTED) {
@@ -1936,6 +2644,21 @@ function AddEditUserDialogView({
           </Modal.Title>
           <CustomCloseButton onClose={onClose} inline={isAddPartner} />
         </Modal.Header>
+        <style>{`
+          .direct-order-switch .form-check-input {
+            width: 2.55em;
+            height: 1.35em;
+            cursor: pointer;
+          }
+          .direct-order-switch .form-check-input:checked {
+            background-color: #198754 !important;
+            border-color: #146c43 !important;
+          }
+          .direct-order-switch .form-check-input:focus {
+            box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.28);
+            border-color: #198754;
+          }
+        `}</style>
         <Modal.Body className="px-4 pb-4 pt-0">
           <form
             noValidate
@@ -2237,6 +2960,56 @@ function AddEditUserDialogView({
                         labelSize={3}
                         isDisabled={!String(watch("area_id") ?? "").trim()}
                       />
+                    </Col>
+                    
+                  </Row>
+                  <Row className="g-3 add-partner-form-row align-items-center">
+                    <Col xs={12} md={6}>
+                      <Row className="align-items-center">
+                        <Col sm={3} className="d-flex align-items-center">
+                          <label className="custom-profile-lable mb-0">
+                            <FieldLabelText label="Service Cities" />
+                          </label>
+                        </Col>
+                        <Col>
+                          <CustomMultiSelect
+                            label=""
+                            controlId="Cities"
+                            asCol={false}
+                            menuPortal
+                            options={cities ?? []}
+                            value={(cities ?? []).filter((c) =>
+                              serviceCityIds.includes(String(c.value))
+                            )}
+                            onChange={(opts) =>
+                              setServiceCityIds(
+                                opts.map((o) => String(o.value))
+                              )
+                            }
+                          />
+                        </Col>
+                      </Row>
+                    </Col>
+                    <Col xs={12} md={6}>
+                      <Row className="align-items-center">
+                        <Col sm={3} className="d-flex align-items-center">
+                          <label
+                            htmlFor="direct-order-toggle"
+                            className="custom-profile-lable mb-0"
+                          >
+                            Direct order
+                          </label>
+                        </Col>
+                        <Col className="d-flex align-items-center">
+                          <Form.Check
+                            type="switch"
+                            id="direct-order-toggle"
+                            className="mb-0 direct-order-switch"
+                            checked={directOrder}
+                            onChange={(e) => setDirectOrder(e.target.checked)}
+                          />
+                        </Col>
+                      </Row>
                     </Col>
                   </Row>
                   <Row className="g-3 add-partner-form-row add-partner-address-photo-row align-items-stretch">
@@ -2724,6 +3497,29 @@ function AddEditUserDialogView({
                         setValue={setValue}
                       />
                     )}
+                    {isPartnerEdit ? (
+                      <Row className="align-items-center mt-2">
+                        <Col sm={4} className="d-flex align-items-center">
+                          <label
+                            htmlFor="direct-order-edit-toggle"
+                            className="custom-profile-lable mb-0"
+                          >
+                            Direct order
+                          </label>
+                        </Col>
+                        <Col className="d-flex align-items-center">
+                          <Form.Check
+                            type="switch"
+                            id="direct-order-edit-toggle"
+                            className="mb-0 direct-order-switch"
+                            checked={directOrder}
+                            onChange={(e) =>
+                              setDirectOrder(e.target.checked)
+                            }
+                          />
+                        </Col>
+                      </Row>
+                    ) : null}
                   </>
                 ) : null}
                 <div className="mt-2">
@@ -2751,7 +3547,9 @@ function AddEditUserDialogView({
                   className="custom-other-details mt-4"
                   style={{ padding: "10px" }}
                 >
-                  <h3 className="mb-2">Categories and services</h3>
+                  <h3 className="mb-2">
+                    Categories and sub categories and services
+                  </h3>
                   {addPartnerCatalogLocked ? (
                     <p className="text-muted small mb-3">
                       {isSuperAdminOrStaff
@@ -2780,6 +3578,7 @@ function AddEditUserDialogView({
                             placeholder="Select category"
                             isDisabled={addPartnerCatalogLocked}
                             onMenuOpen={() => {
+                              // Previous category API only: fetchCategory → GET /category/getAll
                               void loadAddPartnerCategoriesOnOpen();
                             }}
                             onChange={(cid: string) =>
@@ -2834,183 +3633,364 @@ function AddEditUserDialogView({
                         </div>
                       </div>
 
-                      {(block.serviceRows ?? []).map((row) => {
+                      {(block.subCategoryRows ?? []).map((subRow) => {
                         const categoryActive = block.is_active !== false;
-                        const serviceActive =
-                          categoryActive && row.is_active !== false;
+                        const subActive =
+                          categoryActive && subRow.is_active !== false;
                         return (
-                        <div
-                          key={row.id}
-                          className="add-partner-catalog-grid add-partner-catalog-grid--service mb-2"
-                        >
-                          <div className="add-partner-catalog-field add-partner-catalog-field--service">
-                            <PartnerSingleSelect
-                              instanceId={`${block.id}-${row.id}-service`}
-                              label="Service"
-                              requiredMark
-                              options={serviceOptionsForPartnerBlockRow(
-                                block,
-                                row.id
-                              )}
-                              value={row.serviceId}
-                              placeholder="Select service"
-                              isDisabled={
-                                addPartnerCatalogLocked ||
-                                !String(block.categoryId ?? "").trim()
-                              }
-                              onMenuOpen={() => {
-                                void loadAddPartnerServicesOnOpen(
-                                  block.categoryId
-                                );
-                              }}
-                              onChange={(sid: string) => {
-                                const categoryId = String(
-                                  block.categoryId ?? ""
-                                ).trim();
-                                const list =
-                                  servicesByCategoryId[categoryId] ?? [];
-                                const hit = list.find(
-                                  (s) => String(s._id) === String(sid)
-                                );
-                                const priceNum =
-                                  hit?.price !== undefined &&
-                                  hit?.price !== null
-                                    ? Number(hit.price)
-                                    : NaN;
-                                const priceStr = Number.isFinite(priceNum)
-                                  ? String(priceNum)
-                                  : "";
-                                updateServiceRow(block.id, row.id, {
-                                  serviceId: sid,
-                                  price: priceStr,
-                                });
-                              }}
-                            />
-                          </div>
-                          <div className="add-partner-catalog-field add-partner-catalog-field--description">
-                            <Form.Group
-                              controlId={`desc-${block.id}-${row.id}`}
-                            >
-                              <Form.Label className="fw-medium mb-1">
-                                <FieldLabelText label="Description" required />
-                              </Form.Label>
-                              <Form.Control
-                                as="textarea"
-                                rows={1}
-                                className="custom-form-input"
-                                style={{
-                                  ...partnerCatalogControlStyle,
-                                  resize: "vertical",
-                                }}
-                                placeholder="Describe this offering"
-                                value={row.description}
-                                onChange={(
-                                  e: React.ChangeEvent<HTMLTextAreaElement>
-                                ) =>
-                                  updateServiceRow(block.id, row.id, {
-                                    description: e.target.value,
-                                  })
-                                }
-                              />
-                            </Form.Group>
-                          </div>
-                          <div className="add-partner-catalog-field add-partner-catalog-field--price">
-                            <Form.Group
-                              controlId={`price-${block.id}-${row.id}`}
-                            >
-                              <Form.Label className="fw-medium mb-1">
-                                <FieldLabelText label="Price" required />
-                              </Form.Label>
-                              <InputGroup>
-                                <InputGroup.Text
-                                  className="custom-form-input text-muted"
-                                  style={{
-                                    ...partnerCatalogControlStyle,
-                                    borderTopRightRadius: 0,
-                                    borderBottomRightRadius: 0,
-                                    fontWeight: 600,
-                                  }}
-                                >
-                                  {AppConstant.currencySymbol}
-                                </InputGroup.Text>
-                                <Form.Control
-                                  type="text"
-                                  inputMode="decimal"
-                                  className="custom-form-input border-start-0"
-                                  style={{
-                                    ...partnerCatalogControlStyle,
-                                    borderLeft: 0,
-                                    borderTopLeftRadius: 0,
-                                    borderBottomLeftRadius: 0,
-                                  }}
-                                  placeholder="e.g. 499"
-                                  value={row.price}
-                                  onChange={(
-                                    e: React.ChangeEvent<HTMLInputElement>
-                                  ) =>
-                                    updateServiceRow(block.id, row.id, {
-                                      price: e.target.value,
-                                    })
+                          <React.Fragment key={subRow.id}>
+                            <div className="add-partner-catalog-grid add-partner-catalog-grid--category mb-3">
+                              <div className="add-partner-catalog-field add-partner-catalog-field--category">
+                                <PartnerSingleSelect
+                                  instanceId={`${block.id}-${subRow.id}-subcategory`}
+                                  label="Sub Category"
+                                  requiredMark
+                                  options={subCategorySelectOptionsForRow(
+                                    block.id,
+                                    subRow.id
+                                  )}
+                                  value={subRow.subcategoryId}
+                                  placeholder={
+                                    String(block.categoryId ?? "").trim()
+                                      ? "Select sub category"
+                                      : "Select category first"
                                   }
+                                  isDisabled={
+                                    addPartnerCatalogLocked ||
+                                    !String(block.categoryId ?? "").trim()
+                                  }
+                                  onMenuOpen={() => {
+                                    // GET /subcategory/getAll?category_id=… only
+                                    void loadAddPartnerSubCategoriesOnOpen(
+                                      block.categoryId
+                                    );
+                                  }}
+                                  onChange={(sid: string) => {
+                                    updateSubCategoryRow(block.id, subRow.id, {
+                                      subcategoryId: sid,
+                                    });
+                                  }}
                                 />
-                              </InputGroup>
-                            </Form.Group>
-                          </div>
-                          <div className="add-partner-catalog-field add-partner-catalog-field--status">
-                            <PartnerCatalogStatusToggle
-                              inline
-                              instanceId={`${block.id}-${row.id}-service-status`}
-                              label="Status"
-                              value={serviceActive}
-                              disabled={
-                                addPartnerCatalogLocked || !categoryActive
-                              }
-                              onChange={(active) => {
-                                if (!categoryActive) return;
-                                updateServiceRow(block.id, row.id, {
-                                  is_active: active,
-                                });
-                              }}
-                            />
-                          </div>
-                          <div className="add-partner-catalog-field add-partner-catalog-field--actions">
-                            <div className="add-partner-catalog-actions">
-                              <button
-                                type="button"
-                                title="Add another service in this category"
-                                aria-label="Add another service in this category"
-                                style={partnerCatalogOutlineAddBtn}
-                                disabled={!canAddPartnerServiceRow(block, row)}
-                                onClick={() => addServiceRow(block.id)}
-                                onMouseDown={(e) => e.preventDefault()}
-                                onMouseEnter={(e) => hoverIconBtn(e, true)}
-                                onMouseLeave={(e) => hoverIconBtn(e, false)}
-                              >
-                                <i className="bi bi-plus fs-6" aria-hidden />
-                              </button>
-                              {(block.serviceRows ?? []).length > 1 ? (
-                                <button
-                                  type="button"
-                                  title="Remove this service row"
-                                  aria-label="Remove this service row"
-                                  style={partnerCatalogOutlineDeleteBtn}
-                                  onClick={() =>
-                                    removeServiceRow(block.id, row.id)
+                              </div>
+                              <div className="add-partner-catalog-field add-partner-catalog-field--status">
+                                <PartnerCatalogStatusToggle
+                                  inline
+                                  instanceId={`${block.id}-${subRow.id}-subcategory-status`}
+                                  value={subActive}
+                                  disabled={
+                                    addPartnerCatalogLocked || !categoryActive
                                   }
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onMouseEnter={(e) => hoverIconBtn(e, true)}
-                                  onMouseLeave={(e) => hoverIconBtn(e, false)}
-                                >
-                                  <i
-                                    className="bi bi-trash fs-6"
-                                    aria-hidden
-                                  />
-                                </button>
-                              ) : null}
+                                  onChange={(active) => {
+                                    if (!categoryActive) return;
+                                    updateSubCategoryRow(block.id, subRow.id, {
+                                      is_active: active,
+                                    });
+                                  }}
+                                />
+                              </div>
+                              <div className="add-partner-catalog-field add-partner-catalog-field--actions">
+                                <div className="add-partner-catalog-actions">
+                                  <button
+                                    type="button"
+                                    title="Add another sub category with service"
+                                    aria-label="Add another sub category with service"
+                                    style={partnerCatalogOutlineAddBtn}
+                                    disabled={
+                                      !canAddPartnerSubCategoryRow(
+                                        block,
+                                        subRow
+                                      )
+                                    }
+                                    onClick={() => addSubCategoryRow(block.id)}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onMouseEnter={(e) => hoverIconBtn(e, true)}
+                                    onMouseLeave={(e) =>
+                                      hoverIconBtn(e, false)
+                                    }
+                                  >
+                                    <i
+                                      className="bi bi-plus fs-6"
+                                      aria-hidden
+                                    />
+                                  </button>
+                                  {(block.subCategoryRows ?? []).length > 1 ? (
+                                    <button
+                                      type="button"
+                                      title="Remove this sub category"
+                                      aria-label="Remove this sub category"
+                                      style={partnerCatalogOutlineDeleteBtn}
+                                      onClick={() =>
+                                        removeSubCategoryRow(
+                                          block.id,
+                                          subRow.id
+                                        )
+                                      }
+                                      onMouseDown={(e) => e.preventDefault()}
+                                      onMouseEnter={(e) =>
+                                        hoverIconBtn(e, true)
+                                      }
+                                      onMouseLeave={(e) =>
+                                        hoverIconBtn(e, false)
+                                      }
+                                    >
+                                      <i
+                                        className="bi bi-trash fs-6"
+                                        aria-hidden
+                                      />
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                      );
+
+                            {(subRow.serviceRows ?? []).map((row) => {
+                              const serviceActive =
+                                subActive && row.is_active !== false;
+                              return (
+                                <div
+                                  key={row.id}
+                                  className="add-partner-catalog-grid add-partner-catalog-grid--service mb-2"
+                                >
+                                  <div className="add-partner-catalog-field add-partner-catalog-field--service">
+                                    <PartnerSingleSelect
+                                      instanceId={`${block.id}-${subRow.id}-${row.id}-service`}
+                                      label="Service"
+                                      requiredMark
+                                      options={serviceOptionsForPartnerBlockRow(
+                                        block,
+                                        subRow,
+                                        row.id
+                                      )}
+                                      value={row.serviceId}
+                                      placeholder={
+                                        String(subRow.subcategoryId ?? "").trim()
+                                          ? "Select service"
+                                          : "Select sub category first"
+                                      }
+                                      isDisabled={
+                                        addPartnerCatalogLocked ||
+                                        !String(block.categoryId ?? "").trim() ||
+                                        !String(subRow.subcategoryId ?? "").trim()
+                                      }
+                                      onMenuOpen={() => {
+                                        // Same as category: load list when menu opens
+                                        // GET /service/getAll?subcategory_id=…
+                                        const subcategoryId = String(
+                                          subRow.subcategoryId ?? ""
+                                        ).trim();
+                                        if (!subcategoryId) return;
+                                        void loadAddPartnerServicesOnOpen(
+                                          subcategoryId,
+                                          block.categoryId
+                                        );
+                                      }}
+                                      onChange={(sid: string) => {
+                                        const subcategoryId = String(
+                                          subRow.subcategoryId ?? ""
+                                        ).trim();
+                                        const list =
+                                          servicesBySubCategoryId[
+                                            subcategoryId
+                                          ] ?? [];
+                                        const hit = list.find(
+                                          (s) => String(s._id) === String(sid)
+                                        );
+                                        const priceNum =
+                                          hit?.price !== undefined &&
+                                          hit?.price !== null
+                                            ? Number(hit.price)
+                                            : NaN;
+                                        const priceStr = Number.isFinite(
+                                          priceNum
+                                        )
+                                          ? String(priceNum)
+                                          : "";
+                                        updateServiceRow(
+                                          block.id,
+                                          subRow.id,
+                                          row.id,
+                                          {
+                                            serviceId: sid,
+                                            price: priceStr,
+                                          }
+                                        );
+                                      }}
+                                    />
+                                  </div>
+                                  <div className="add-partner-catalog-field add-partner-catalog-field--description">
+                                    <Form.Group
+                                      controlId={`desc-${block.id}-${subRow.id}-${row.id}`}
+                                    >
+                                      <Form.Label className="fw-medium mb-1">
+                                        <FieldLabelText
+                                          label="Description"
+                                          required
+                                        />
+                                      </Form.Label>
+                                      <Form.Control
+                                        as="textarea"
+                                        rows={1}
+                                        className="custom-form-input"
+                                        style={{
+                                          ...partnerCatalogControlStyle,
+                                          resize: "vertical",
+                                        }}
+                                        placeholder="Describe this offering"
+                                        value={row.description}
+                                        onChange={(
+                                          e: React.ChangeEvent<HTMLTextAreaElement>
+                                        ) =>
+                                          updateServiceRow(
+                                            block.id,
+                                            subRow.id,
+                                            row.id,
+                                            {
+                                              description: e.target.value,
+                                            }
+                                          )
+                                        }
+                                      />
+                                    </Form.Group>
+                                  </div>
+                                  <div className="add-partner-catalog-field add-partner-catalog-field--price">
+                                    <Form.Group
+                                      controlId={`price-${block.id}-${subRow.id}-${row.id}`}
+                                    >
+                                      <Form.Label className="fw-medium mb-1">
+                                        <FieldLabelText
+                                          label="Price"
+                                          required
+                                        />
+                                      </Form.Label>
+                                      <InputGroup>
+                                        <InputGroup.Text
+                                          className="custom-form-input text-muted"
+                                          style={{
+                                            ...partnerCatalogControlStyle,
+                                            borderTopRightRadius: 0,
+                                            borderBottomRightRadius: 0,
+                                            fontWeight: 600,
+                                          }}
+                                        >
+                                          {AppConstant.currencySymbol}
+                                        </InputGroup.Text>
+                                        <Form.Control
+                                          type="text"
+                                          inputMode="decimal"
+                                          className="custom-form-input border-start-0"
+                                          style={{
+                                            ...partnerCatalogControlStyle,
+                                            borderLeft: 0,
+                                            borderTopLeftRadius: 0,
+                                            borderBottomLeftRadius: 0,
+                                          }}
+                                          placeholder="e.g. 499"
+                                          value={row.price}
+                                          onChange={(
+                                            e: React.ChangeEvent<HTMLInputElement>
+                                          ) =>
+                                            updateServiceRow(
+                                              block.id,
+                                              subRow.id,
+                                              row.id,
+                                              {
+                                                price: e.target.value,
+                                              }
+                                            )
+                                          }
+                                        />
+                                      </InputGroup>
+                                    </Form.Group>
+                                  </div>
+                                  <div className="add-partner-catalog-field add-partner-catalog-field--status">
+                                    <PartnerCatalogStatusToggle
+                                      inline
+                                      instanceId={`${block.id}-${subRow.id}-${row.id}-service-status`}
+                                      label="Status"
+                                      value={serviceActive}
+                                      disabled={
+                                        addPartnerCatalogLocked || !subActive
+                                      }
+                                      onChange={(active) => {
+                                        if (!subActive) return;
+                                        updateServiceRow(
+                                          block.id,
+                                          subRow.id,
+                                          row.id,
+                                          {
+                                            is_active: active,
+                                          }
+                                        );
+                                      }}
+                                    />
+                                  </div>
+                                  <div className="add-partner-catalog-field add-partner-catalog-field--actions">
+                                    <div className="add-partner-catalog-actions">
+                                      <button
+                                        type="button"
+                                        title="Add another service under this sub category"
+                                        aria-label="Add another service under this sub category"
+                                        style={partnerCatalogOutlineAddBtn}
+                                        disabled={
+                                          !canAddPartnerServiceRow(
+                                            block,
+                                            subRow,
+                                            row
+                                          )
+                                        }
+                                        onClick={() =>
+                                          addServiceRow(block.id, subRow.id)
+                                        }
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onMouseEnter={(e) =>
+                                          hoverIconBtn(e, true)
+                                        }
+                                        onMouseLeave={(e) =>
+                                          hoverIconBtn(e, false)
+                                        }
+                                      >
+                                        <i
+                                          className="bi bi-plus fs-6"
+                                          aria-hidden
+                                        />
+                                      </button>
+                                      {(subRow.serviceRows ?? []).length >
+                                      1 ? (
+                                        <button
+                                          type="button"
+                                          title="Remove this service row"
+                                          aria-label="Remove this service row"
+                                          style={partnerCatalogOutlineDeleteBtn}
+                                          onClick={() =>
+                                            removeServiceRow(
+                                              block.id,
+                                              subRow.id,
+                                              row.id
+                                            )
+                                          }
+                                          onMouseDown={(e) =>
+                                            e.preventDefault()
+                                          }
+                                          onMouseEnter={(e) =>
+                                            hoverIconBtn(e, true)
+                                          }
+                                          onMouseLeave={(e) =>
+                                            hoverIconBtn(e, false)
+                                          }
+                                        >
+                                          <i
+                                            className="bi bi-trash fs-6"
+                                            aria-hidden
+                                          />
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </React.Fragment>
+                        );
                       })}
                     </div>
                   ))}

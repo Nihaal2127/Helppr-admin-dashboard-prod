@@ -59,14 +59,183 @@ type ServiceLite = {
 type ViewCategoryServicesGroup = {
   categoryId: string;
   categoryLabel: string;
+  subCategories: string[];
   services: string[];
 };
 
 const UNCATEGORIZED_KEY = "__uncategorized__";
 /** Services with no resolvable category_id — single row, never labeled "Other". */
 const FLAT_SERVICES_KEY = "__services_flat__";
+const SELECT_ALL_SUB_CATEGORY: OptionType = {
+  value: "select-all",
+  label: "Select All",
+};
 const isMongoObjectId = (value: string) =>
   /^[a-f\d]{24}$/i.test(String(value ?? "").trim());
+
+function extractSubCategoryDropDownOptions(data: unknown): OptionType[] {
+  const buckets: unknown[] = [];
+  const push = (value: unknown) => {
+    if (Array.isArray(value)) buckets.push(...value);
+  };
+  const walk = (node: unknown, depth = 0) => {
+    if (depth > 4 || node == null) return;
+    if (Array.isArray(node)) {
+      push(node);
+      return;
+    }
+    if (typeof node !== "object") return;
+    const root = node as Record<string, unknown>;
+    push(root.records);
+    push(root.subcategories);
+    push(root.sub_categories);
+    push(root.list);
+    push(root.items);
+    push(root.data);
+    if (root.data && typeof root.data === "object") walk(root.data, depth + 1);
+  };
+  walk(data);
+  const seen = new Set<string>();
+  const options: OptionType[] = [];
+  for (const item of buckets) {
+    const row =
+      item && typeof item === "object"
+        ? (item as Record<string, unknown>)
+        : {};
+    const value = String(
+      row._id ??
+        row.id ??
+        row.subcategory_id ??
+        row.sub_category_id ??
+        row.value ??
+        ""
+    ).trim();
+    if (!value || value === "select-all" || seen.has(value)) continue;
+    const label =
+      String(row.name ?? row.label ?? row.subcategory_name ?? "").trim() ||
+      value;
+    seen.add(value);
+    options.push({ value, label });
+  }
+  return options;
+}
+
+function subCategoryGetAllTotalPages(
+  data: unknown,
+  pageSize: number,
+  fetchedCount: number
+): number {
+  const root =
+    data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const nested =
+    root.data && typeof root.data === "object" && !Array.isArray(root.data)
+      ? (root.data as Record<string, unknown>)
+      : null;
+  const source = nested ?? root;
+  const reported = Number(source.totalPages ?? root.totalPages ?? 0);
+  if (Number.isFinite(reported) && reported > 0) return reported;
+  const totalRecords = Number(
+    source.totalRecords ?? source.total ?? source.totalItems ?? source.count ?? 0
+  );
+  if (Number.isFinite(totalRecords) && totalRecords > 0 && pageSize > 0) {
+    return Math.ceil(totalRecords / pageSize);
+  }
+  return fetchedCount < pageSize ? 1 : 0;
+}
+
+/** GET /subcategory/getDropDown + paginated GET /subcategory/getAll (Service Management catalogue). */
+async function fetchFranchiseSubCategoryOptions(): Promise<OptionType[]> {
+  const byId = new Map<string, OptionType>();
+  const addAll = (list: OptionType[]) => {
+    for (const o of list) {
+      if (o.value && o.value !== "select-all") byId.set(o.value, o);
+    }
+  };
+
+  try {
+    const dropRes = await apiRequest(
+      "/subcategory/getDropDown",
+      "GET",
+      undefined,
+      false,
+      true
+    );
+    if (dropRes.success) addAll(extractSubCategoryDropDownOptions(dropRes.data));
+  } catch {
+    /* fall through to getAll */
+  }
+
+  const limit = 200;
+  for (let page = 1; page <= 50; page += 1) {
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(limit),
+    });
+    const listRes = await apiRequest(
+      `/subcategory/getAll?${params.toString()}`,
+      "GET",
+      undefined,
+      false,
+      true
+    );
+    if (!listRes.success) break;
+    const pageOptions = extractSubCategoryDropDownOptions(listRes.data);
+    addAll(pageOptions);
+    const totalPages = subCategoryGetAllTotalPages(
+      listRes.data,
+      limit,
+      pageOptions.length
+    );
+    if (pageOptions.length < limit) break;
+    if (totalPages > 0 && page >= totalPages) break;
+  }
+
+  return Array.from(byId.values()).sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+  );
+}
+
+function mergeSubCategoryOptions(
+  catalog: OptionType[],
+  extraIds: string[],
+  extraNames: string[]
+): OptionType[] {
+  const merged: OptionType[] = [SELECT_ALL_SUB_CATEGORY];
+  const seen = new Set<string>(["select-all"]);
+  for (const o of catalog) {
+    const value = String(o.value ?? "").trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    merged.push({
+      value,
+      label: String(o.label ?? "").trim() || value,
+    });
+  }
+  for (let i = 0; i < extraIds.length; i++) {
+    const id = String(extraIds[i] ?? "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    merged.push({
+      value: id,
+      label: String(extraNames[i] ?? id).trim() || id,
+    });
+  }
+  for (const name of extraNames) {
+    const n = String(name ?? "").trim();
+    if (!n) continue;
+    const already = merged.some(
+      (o) =>
+        o.value !== "select-all" &&
+        String(o.label).trim().toLowerCase() === n.toLowerCase()
+    );
+    if (already) continue;
+    if (!seen.has(n)) {
+      seen.add(n);
+      merged.push({ value: n, label: n });
+    }
+  }
+  return merged;
+}
 
 function sameIdList(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
@@ -552,9 +721,17 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   const [allServices, setAllServices] = useState<ServiceLite[]>([]);
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [serviceIds, setServiceIds] = useState<string[]>([]);
+  const [catalogSubCategoryOptions, setCatalogSubCategoryOptions] = useState<
+    OptionType[]
+  >([]);
+  const [subCategoryOptions, setSubCategoryOptions] = useState<OptionType[]>([
+    SELECT_ALL_SUB_CATEGORY,
+  ]);
+  const [subCategoryIds, setSubCategoryIds] = useState<string[]>([]);
   /** Avoid re-applying API category/service ids after the user edits the multi-selects. */
   const catalogSelectionSeedKeyRef = useRef("");
   const catalogSelectionTouchedRef = useRef(false);
+  const subCategorySelectionTouchedRef = useRef(false);
   /** Avoid re-applying franchise area_ids after the user edits the Area multi-select. */
   const areaSelectionTouchedRef = useRef(false);
   const [fetchedAreaOptions, setFetchedAreaOptions] = useState<
@@ -788,6 +965,14 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     [serviceOptions, serviceIds]
   );
 
+  const selectedSubCategoryOptions = useMemo(
+    () =>
+      subCategoryOptions.filter(
+        (o) => o.value !== "select-all" && subCategoryIds.includes(o.value)
+      ),
+    [subCategoryOptions, subCategoryIds]
+  );
+
   /** Keep chip order aligned with `areaIds` (not alphabetical options order). */
   const selectedAreaOptions = useMemo(() => {
     const byId = new Map(
@@ -810,11 +995,38 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     const src = viewFranchiseSource as FranchiseModel & {
       categories?: unknown;
       services?: unknown;
+      subcategory_names?: unknown;
+      sub_category_names?: unknown;
+      subcategory_ids?: unknown;
+      sub_category_ids?: unknown;
+      subcategories?: unknown;
     };
     const svcIds = toStringArray(src.service_ids ?? src.services);
     const svcNames = src.service_names;
     const catIdsOrder = toStringArray(src.category_ids ?? src.categories);
     const catNames = src.category_names;
+    const subCatNames = toStringArray(
+      src.subcategory_names ?? src.sub_category_names ?? []
+    );
+    const subCatIds = toStringArray(
+      src.subcategory_ids ?? src.sub_category_ids ?? src.subcategories ?? []
+    );
+    const franchiseSubCategories =
+      subCatNames.length > 0
+        ? subCatNames
+        : subCatIds.map((id) => {
+            const opt = subCategoryOptions.find(
+              (o) => String(o.value) === String(id) && o.value !== "select-all"
+            );
+            return opt?.label ?? id;
+          });
+    const withSubCategories = (
+      groups: Omit<ViewCategoryServicesGroup, "subCategories">[]
+    ): ViewCategoryServicesGroup[] =>
+      groups.map((g) => ({
+        ...g,
+        subCategories: franchiseSubCategories,
+      }));
 
     const serviceLabel = (sid: string, index: number): string => {
       const fromAll = allServices.find((x) => String(x._id) === sid);
@@ -909,7 +1121,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       }
     }
 
-    const built: ViewCategoryServicesGroup[] = [];
+    const built: Omit<ViewCategoryServicesGroup, "subCategories">[] = [];
     const seen = new Set<string>();
 
     for (const cid of catIdsOrder) {
@@ -938,11 +1150,13 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       catNames.length > 0 &&
       svcIds.length === 0
     ) {
-      return catNames.map((label, i) => ({
-        categoryId: `cat-name-${i}`,
-        categoryLabel: String(label),
-        services: [],
-      }));
+      return withSubCategories(
+        catNames.map((label, i) => ({
+          categoryId: `cat-name-${i}`,
+          categoryLabel: String(label),
+          services: [],
+        }))
+      );
     }
 
     /**
@@ -957,22 +1171,21 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
         ? svcNames.map((n) => String(n ?? "").trim()).filter(Boolean)
         : [];
       if (nameCats.length === 1) {
-        return [
+        return withSubCategories([
           {
             categoryId: catIdsOrder[0] || "cat-name-0",
             categoryLabel: nameCats[0],
             services: nameSvcs,
           },
-        ];
+        ]);
       }
       if (nameCats.length > 0 || nameSvcs.length > 0) {
-        const groups: ViewCategoryServicesGroup[] = nameCats.map(
-          (label, i) => ({
+        const groups: Omit<ViewCategoryServicesGroup, "subCategories">[] =
+          nameCats.map((label, i) => ({
             categoryId: catIdsOrder[i] || `cat-name-${i}`,
             categoryLabel: label,
             services: [] as string[],
-          })
-        );
+          }));
         if (nameSvcs.length > 0) {
           if (groups.length === 1) {
             groups[0].services = nameSvcs;
@@ -984,12 +1197,12 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
             });
           }
         }
-        return groups;
+        return withSubCategories(groups);
       }
     }
 
-    return built;
-  }, [viewFranchiseSource, allServices, categoryOptions]);
+    return withSubCategories(built);
+  }, [viewFranchiseSource, allServices, categoryOptions, subCategoryOptions]);
 
   /**
    * Categories/services catalog — needed in view (grouping + labels) and edit.
@@ -1065,13 +1278,14 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
           }));
         };
 
-        const [catListRaw, services, dropCats] = await Promise.all([
+        const [catListRaw, services, dropCats, subCats] = await Promise.all([
           loadCategories(),
           loadServices(),
           // Always merge global dropdown so Edit can add categories not yet assigned.
           fetchCategoryDropDown().catch(
             () => [] as { value: string; label: string }[]
           ),
+          fetchFranchiseSubCategoryOptions().catch(() => [] as OptionType[]),
         ]);
         if (cancelled) return;
 
@@ -1090,10 +1304,12 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
           ...catList,
         ]);
         setAllServices(services);
+        setCatalogSubCategoryOptions(subCats);
       } catch {
         if (!cancelled) {
           setCategoryOptions([{ value: "select-all", label: "Select All" }]);
           setAllServices([]);
+          setCatalogSubCategoryOptions([]);
         }
       }
     })();
@@ -1254,7 +1470,55 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     catalogSelectionTouchedRef.current = false;
     catalogSelectionSeedKeyRef.current = "";
     areaSelectionTouchedRef.current = false;
+    subCategorySelectionTouchedRef.current = false;
   }, [franchise?._id, isEditable]);
+
+  /** Sub Category list from GET /subcategory/getAll; seed selection from franchise row. */
+  useEffect(() => {
+    const source = (franchiseRecord ?? franchise) as unknown as Record<
+      string,
+      unknown
+    > | null;
+    const rawIds = toStringArray(
+      source?.subcategory_ids ??
+        source?.sub_category_ids ??
+        source?.subcategories ??
+        []
+    );
+    const rawNames = toStringArray(
+      source?.subcategory_names ?? source?.sub_category_names ?? []
+    );
+    const mergedOptions = mergeSubCategoryOptions(
+      catalogSubCategoryOptions,
+      rawIds,
+      rawNames
+    );
+    setSubCategoryOptions(mergedOptions);
+    if (!isEditable || !franchise) return;
+    if (subCategorySelectionTouchedRef.current) return;
+    const idsFromApi =
+      rawIds.length > 0
+        ? rawIds
+        : mergedOptions
+            .filter(
+              (o) =>
+                o.value !== "select-all" &&
+                rawNames.some(
+                  (n) =>
+                    n.toLowerCase() ===
+                    String(o.label ?? "")
+                      .trim()
+                      .toLowerCase()
+                )
+            )
+            .map((o) => String(o.value));
+    setSubCategoryIds(Array.from(new Set(idsFromApi.map(String))));
+  }, [
+    isEditable,
+    franchise,
+    franchiseRecord,
+    catalogSubCategoryOptions,
+  ]);
 
   const handleCitySelection = (selectedOptions: OptionType[]) => {
     const selectedIds = selectedOptions
@@ -1323,6 +1587,15 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     });
   };
 
+  const handleSubCategorySelection = (selectedOptions: OptionType[]) => {
+    subCategorySelectionTouchedRef.current = true;
+    const selectedIds = parseMultiSelectIds(
+      selectedOptions,
+      subCategoryOptions
+    );
+    setSubCategoryIds(selectedIds);
+  };
+
   const handleServiceSelection = (selectedOptions: OptionType[]) => {
     catalogSelectionTouchedRef.current = true;
     const selectedIds = parseMultiSelectIds(selectedOptions, serviceOptions);
@@ -1384,6 +1657,12 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     const selectedServiceLabels = allServices
       .filter((s) => serviceIds.includes(String(s._id)))
       .map((s) => s.name);
+    const subCategoryOpts = subCategoryOptions.filter(
+      (c) => c.value !== "select-all"
+    );
+    const selectedSubCategoryLabels = subCategoryOpts
+      .filter((c) => subCategoryIds.includes(c.value))
+      .map((c) => c.label);
 
     const contactValue = String((franchise as any)?.contact ?? "").trim();
 
@@ -1404,6 +1683,9 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       categories: categoryIds,
       category_ids: categoryIds,
       category_names: selectedCategoryLabels,
+      subcategories: subCategoryIds,
+      subcategory_ids: subCategoryIds,
+      subcategory_names: selectedSubCategoryLabels,
       services: serviceIds,
       service_ids: serviceIds,
       service_names: selectedServiceLabels,
@@ -1537,7 +1819,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                   }}
                 >
                   <div className="custom-personal-row-title mb-2">
-                    Categories &amp; services
+                    Categories &amp; sub categories &amp; services
                   </div>
                   {viewCategoryServiceGroups.length === 0 ? (
                     <div className="text-muted small py-1">-</div>
@@ -1570,6 +1852,17 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                             <th
                               scope="col"
                               className="fw-semibold  py-2 ps-3 pe-0"
+                              style={{
+                                width: "22%",
+                                minWidth: "120px",
+                                color: "var(--primary-txt-color)",
+                              }}
+                            >
+                              Sub Category
+                            </th>
+                            <th
+                              scope="col"
+                              className="fw-semibold  py-2 ps-3 pe-0"
                               style={{ color: "var(--primary-txt-color)" }}
                             >
                               Services offered
@@ -1586,6 +1879,23 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                                 <span style={{ color: "#101010" }}>
                                   {g.categoryLabel}
                                 </span>
+                              </td>
+                              <td className="align-top py-2 ps-3 text-wrap">
+                                <div className="text-wrap">
+                                  {g.subCategories.length > 0 ? (
+                                    <ul className="mb-0 ps-3">
+                                      {g.subCategories.map((subName, si) => (
+                                        <li
+                                          key={`${g.categoryId}-sub-${si}`}
+                                        >
+                                          {subName}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  ) : (
+                                    <span className="text-muted">—</span>
+                                  )}
+                                </div>
                               </td>
                               <td className="align-top py-2 ps-3 pe-0">
                                 <div className="text-wrap">
@@ -1776,9 +2086,23 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                   selectedChipsMaxHeight="100px"
                 />
               </Col>
-            </Row>
-            <Row>
-              <Col md={12}>
+
+              <Col md={6}>
+                <CustomMultiSelect
+                  label="Sub Category"
+                  controlId="Sub Category"
+                  options={subCategoryOptions}
+                  value={selectedSubCategoryOptions}
+                  onChange={(opts) =>
+                    handleSubCategorySelection(opts as OptionType[])
+                  }
+                  asCol={false}
+                  menuPortal
+                  selectedChipsMaxHeight="100px"
+                />
+              </Col>
+
+              <Col md={6}>
                 <CustomMultiSelect
                   label="Services"
                   controlId="Services"
@@ -1789,7 +2113,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                   }
                   asCol={false}
                   menuPortal
-                  selectedChipsMaxHeight="180px"
+                  selectedChipsMaxHeight="100px"
                 />
               </Col>
             </Row>

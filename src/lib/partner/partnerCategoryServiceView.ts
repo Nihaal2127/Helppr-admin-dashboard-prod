@@ -209,24 +209,36 @@ export function buildViewCategoryServiceGroups(
   return built;
 }
 
+
 export type PartnerServiceApiRow = {
   _id?: string;
   category_id?:
     | string
     | null
     | { _id?: string; name?: string; is_active?: boolean };
+  subcategory_id?:
+    | string
+    | null
+    | { _id?: string; name?: string; subcategory_id?: string; is_active?: boolean };
   service_id?:
     | string
     | null
     | { _id?: string; name?: string; is_active?: boolean };
   description?: string | null;
   price?: number | string | null;
-  /** Partner-level on/off for this service assignment. */
   is_active?: boolean | string | number | null;
   category_is_active?: boolean | string | number | null;
-  /** Grouped save/GET shape: `{ category_id, is_active, services: [...] }`. */
   services?: PartnerServiceApiRow[] | null;
+  subcategories?: Array<{
+    subcategory_id?:
+      | string
+      | null
+      | { _id?: string; name?: string; subcategory_id?: string };
+    is_active?: boolean | string | number | null;
+    services?: PartnerServiceApiRow[] | null;
+  }> | null;
 };
+
 
 function partnerServiceRowIsActive(row: PartnerServiceApiRow): boolean {
   const asInactive = (value: unknown): boolean =>
@@ -248,32 +260,67 @@ function partnerServiceRowIsActive(row: PartnerServiceApiRow): boolean {
   return true;
 }
 
+
+
 function flattenPartnerServiceRows(
   partnerServices: PartnerServiceApiRow[] | null | undefined
 ): PartnerServiceApiRow[] {
   if (!Array.isArray(partnerServices) || partnerServices.length === 0) {
     return [];
   }
-  const first = partnerServices[0] as PartnerServiceApiRow;
-  if (Array.isArray(first?.services)) {
-    const flat: PartnerServiceApiRow[] = [];
-    for (const cat of partnerServices) {
-      const catActive = partnerServiceRowIsActive(cat);
-      const nested = Array.isArray(cat.services) ? cat.services : [];
-      for (const svc of nested) {
+
+  const flat: PartnerServiceApiRow[] = [];
+
+  for (const category of partnerServices) {
+    const categoryActive = partnerServiceRowIsActive(category);
+
+    if (Array.isArray(category.subcategories)) {
+      for (const subcategory of category.subcategories) {
+        const subcategoryActive =
+          subcategory.is_active !== false &&
+          subcategory.is_active !== 0 &&
+          String(subcategory.is_active).toLowerCase() !== "false";
+
+        const nestedServices = Array.isArray(subcategory.services)
+          ? subcategory.services
+          : [];
+
+        for (const service of nestedServices) {
+          flat.push({
+            ...service,
+            category_id: category.category_id,
+            category_is_active: categoryActive && subcategoryActive,
+            is_active:
+              categoryActive &&
+              subcategoryActive &&
+              partnerServiceRowIsActive(service),
+          });
+        }
+      }
+
+      continue;
+    }
+
+    if (Array.isArray(category.services)) {
+      for (const service of category.services) {
         flat.push({
-          ...svc,
-          category_id: svc.category_id ?? cat.category_id,
-          category_is_active: catActive,
+          ...service,
+          category_id: service.category_id ?? category.category_id,
+          category_is_active: categoryActive,
           is_active:
-            catActive && partnerServiceRowIsActive(svc) ? true : false,
+            categoryActive && partnerServiceRowIsActive(service),
         });
       }
+
+      continue;
     }
-    return flat;
+
+    flat.push(category);
   }
-  return partnerServices;
+
+  return flat;
 }
+
 
 function nestedRefId(
   ref: string | { _id?: string; name?: string } | null | undefined

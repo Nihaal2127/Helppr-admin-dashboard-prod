@@ -72,7 +72,11 @@ const CustomSummaryBox: React.FC<CustomSummaryBoxProps> = ({
             onClick={(e) => {
               e.stopPropagation();
 
-              if (key === "requested_category" || key === "requested_service") {
+              if (
+                key === "requested_category" ||
+                key === "requested_service" ||
+                key === "requested_subcategory"
+              ) {
                 onItemClick && onItemClick(key);
                 return;
               }
@@ -109,6 +113,8 @@ const CustomSummaryBox: React.FC<CustomSummaryBoxProps> = ({
               ? "Requested Categories"
               : key === "requested_service"
               ? "Requested Services"
+              : key === "requested_subcategory"
+              ? "Requested Subcategories"
               : key}
           </div>
           <div className="box-column box-right-column">{value}</div>

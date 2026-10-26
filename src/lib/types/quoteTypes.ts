@@ -10,6 +10,7 @@ export type AddQuoteFormValues = {
   requested_partner: string;
   employee_id: string;
   category_id: string;
+  subcategory_id?: string;
   requested_date: string;
   /** Hours, days, or months (label depends on service billing type). */
   schedule_duration: string;
@@ -93,6 +94,8 @@ export type QuoteRow = {
   employee_profile_url?: string | null;
   category_id?: string;
   category_name?: string;
+  subcategory_id?: string;
+  subcategory_name?: string;
   /** Resolved catalog service display name (parallel to `category_name`). */
   service_name?: string;
   /** Billing cadence from populated `service_id.payment_type` (e.g. `per_consultancy`). */

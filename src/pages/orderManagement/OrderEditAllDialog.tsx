@@ -80,6 +80,40 @@ import {
 } from "../../lib/form/missingRequiredFields";
 import type { MissingRequiredField } from "../../lib/form/missingRequiredFields";
 
+/** Interim options until a subcategory catalogue API exists. */
+const ORDER_SUB_CATEGORY_OPTIONS: OptionType[] = [
+  { value: "example-subcat-1", label: "Facial Care" },
+  { value: "example-subcat-2", label: "Hair Styling" },
+  { value: "example-subcat-3", label: "Pipe Repair" },
+];
+
+function orderSubCategoryId(order?: OrderModel | null): string {
+  const rec = order as (OrderModel & Record<string, unknown>) | null | undefined;
+  if (!rec) return "";
+  const ref = rec.subcategory_id ?? rec.sub_category_id;
+  if (ref && typeof ref === "object") {
+    return String((ref as { _id?: string })._id ?? "").trim();
+  }
+  return String(ref ?? "").trim();
+}
+
+function orderSubCategoryName(id: string, order?: OrderModel | null): string {
+  const value = String(id ?? "").trim();
+  if (!value) return "";
+  const fromList = ORDER_SUB_CATEGORY_OPTIONS.find(
+    (option) => option.value === value
+  )?.label;
+  if (fromList) return fromList;
+  if (orderSubCategoryId(order) === value) {
+    const rec = order as (OrderModel & Record<string, unknown>) | null | undefined;
+    const saved = String(
+      rec?.subcategory_name ?? rec?.sub_category_name ?? ""
+    ).trim();
+    if (saved) return saved;
+  }
+  return value;
+}
+
 const toTimeStorageFromDate = (date: Date | null): string =>
   date
     ? `2000-01-01T${String(date.getHours()).padStart(2, "0")}:${String(
@@ -387,6 +421,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       requested_partner: "",
       employee_id: "",
       category_id: "",
+      subcategory_id: "",
       requested_date: "",
       schedule_duration: "",
       requested_date_to: "",
@@ -404,6 +439,16 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
   });
 
   const form = watch();
+  const editSubCategoryOptions = useMemo(() => {
+    const id = String(form.subcategory_id ?? orderSubCategoryId(orderRow)).trim();
+    if (!id || ORDER_SUB_CATEGORY_OPTIONS.some((option) => option.value === id)) {
+      return ORDER_SUB_CATEGORY_OPTIONS;
+    }
+    return [
+      ...ORDER_SUB_CATEGORY_OPTIONS,
+      { value: id, label: orderSubCategoryName(id, orderRow) },
+    ];
+  }, [form.subcategory_id, orderRow]);
   const offerIdWatch = String(form.offer_id ?? "").trim();
   const serviceId = String(form.requested_services ?? "").trim();
   const hasServiceSelected = Boolean(serviceId);
@@ -512,7 +557,10 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
 
   useEffect(() => {
     if (!orderRow || catalogBusy || !franchisePinsLoadDone) return;
-    reset(seedEditOrderFormFromRow(orderRow));
+    reset({
+      ...seedEditOrderFormFromRow(orderRow),
+      subcategory_id: orderSubCategoryId(orderRow),
+    });
     setFormHydrated(true);
   }, [orderRow, catalogBusy, franchisePinsLoadDone, reset]);
 
@@ -1356,6 +1404,11 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       fullPayload,
       baseline.payload
     );
+    const subcategoryId = String(data.subcategory_id ?? "").trim();
+    if (subcategoryId !== orderSubCategoryId(orderRow)) {
+      payload.subcategory_id = subcategoryId;
+      payload.subcategory_name = orderSubCategoryName(subcategoryId, orderRow);
+    }
     if (Object.keys(payload).length === 0) {
       showErrorAlert("No changes to save.");
       return;
@@ -1658,6 +1711,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
               ) : null}
 
               {orderRow ? (
+                <>
                 <Row className="gy-3 gx-md-4 align-items-start mt-2 order-edit-catalog-row">
                   <Col xs={12} md={6}>
                     <div
@@ -1685,6 +1739,8 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                       />
                     </div>
                   </Col>
+                </Row>
+                <Row className="gy-3 gx-md-4 align-items-start">
                   <Col xs={12} md={6}>
                     <div
                       className={
@@ -1712,6 +1768,33 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                     </div>
                   </Col>
                   <Col xs={12} md={6}>
+                    <CustomTextFieldSelect
+                      key={`edit-order-sub-${form.category_id || "none"}`}
+                      label="Sub Category"
+                      controlId="edit-order-subcategory"
+                      asCol={false}
+                      options={editSubCategoryOptions}
+                      register={
+                        register as unknown as UseFormRegister<AddQuoteFormValues>
+                      }
+                      fieldName="subcategory_id"
+                      defaultValue={form.subcategory_id}
+                      setValue={
+                        setValue as (name: string, value: unknown) => void
+                      }
+                      placeholder={
+                        String(form.category_id ?? "").trim()
+                          ? "Select sub category"
+                          : "Select category first"
+                      }
+                      menuPortal
+                      isClearable
+                      isDisabled={!String(form.category_id ?? "").trim()}
+                    />
+                  </Col>
+                </Row>
+                <Row className="gy-3 gx-md-4 align-items-start order-edit-catalog-row">
+                  <Col xs={12} md={6}>
                     <div
                       className={
                         serviceReadOnly ? "order-edit-locked-select" : undefined
@@ -1738,6 +1821,7 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
                     </div>
                   </Col>
                 </Row>
+                </>
               ) : null}
 
               {hasServiceSelected ? (

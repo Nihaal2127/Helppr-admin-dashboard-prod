@@ -140,6 +140,73 @@ import { datePickerTimeToScheduleStorage } from "../../lib/order/orderTimeUtils"
 
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
+/** Subcategory options from franchise related-catalog partner rows (no separate getDropDown). */
+
+/** Build subcategory options from the selected partner's related-catalog record. */
+function subCategoryOptionsFromPartnerCatalog(
+  partner: Record<string, unknown> | null | undefined,
+  categoryId: string
+): OptionType[] {
+  const cid = String(categoryId ?? "").trim();
+  if (!partner || !cid) return [];
+
+  // IMPORTANT: Read the subcategory array, not active_services_providing.
+  const providing = partner.active_subcategories_providing;
+  const rows = Array.isArray(providing) ? providing : [];
+
+  const seen = new Set<string>();
+  const options: OptionType[] = [];
+
+  for (const item of rows) {
+    if (!item || typeof item !== "object") continue;
+
+    const row = item as Record<string, any>;
+    const subcategory = row.subcategory;
+
+    const rowCategoryId = String(
+      row.category_id ??
+        subcategory?.category_id ??
+        ""
+    ).trim();
+
+    // Only show subcategories belonging to the selected category.
+    if (rowCategoryId !== cid) continue;
+
+    // Exclude explicitly inactive records.
+    if (
+      row.is_active === false ||
+      row.effective_active === false ||
+      row.partner_enabled === false ||
+      row.global_active === false ||
+      row.franchise_enabled === false ||
+      subcategory?.is_active === false
+    ) {
+      continue;
+    }
+
+    const value = String(
+      subcategory?._id ??
+        subcategory?.id ??
+        row.subcategory_id ??
+        ""
+    ).trim();
+
+    const label = String(
+      subcategory?.name ??
+        subcategory?.label ??
+        row.subcategory_name ??
+        ""
+    ).trim();
+
+    if (!value || !label || seen.has(value)) continue;
+
+    seen.add(value);
+    options.push({ value, label });
+  }
+
+  return options.sort((a, b) => a.label.localeCompare(b.label));
+}
+
 const sanId = (id: string) => String(id).replace(/[^a-zA-Z0-9_]/g, "_");
 const fieldState = (cardId: string) => `addrCard_${sanId(cardId)}_state`;
 const fieldCity = (cardId: string) => `addrCard_${sanId(cardId)}_city`;
@@ -1845,6 +1912,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
   const resetCreateOrderCatalogSelections = useCallback(() => {
     setValue("customer_user_id", "", { shouldValidate: false });
     setValue("category_id", "", { shouldValidate: false });
+    setValue("subcategory_id", "", { shouldValidate: false });
     setValue("requested_services", "", { shouldValidate: false });
     setValue("requested_partner", "", { shouldValidate: false });
     setValue("created_by_id", "", { shouldValidate: false });
@@ -1891,6 +1959,32 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
       ),
     [quoteCategoryOptions, quoteCatalogServices, selectedPartnerCatalogRecord]
   );
+
+  /** Same source as Category — related-catalog partner rows (no subcategory getDropDown). */
+  const orderSubCategoryOptions = useMemo(
+    () =>
+      subCategoryOptionsFromPartnerCatalog(
+        selectedPartnerCatalogRecord,
+        String(createCategoryIdWatch ?? "").trim()
+      ),
+    [selectedPartnerCatalogRecord, createCategoryIdWatch]
+  );
+
+  useEffect(() => {
+    if (isEditable) return;
+    const current = String(getValues("subcategory_id") ?? "").trim();
+    if (
+      current &&
+      !orderSubCategoryOptions.some((option) => option.value === current)
+    ) {
+      setValue("subcategory_id", "", { shouldValidate: false });
+    }
+  }, [
+    isEditable,
+    orderSubCategoryOptions,
+    getValues,
+    setValue,
+  ]);
 
   const { quoteServiceOptionsForCategory, scheduleMode } = useMemo(() => {
     const cid = String(createCategoryIdWatch ?? "").trim();
@@ -3085,6 +3179,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
     );
     if (ok) return;
     setValue("category_id", "", { shouldValidate: false });
+    setValue("subcategory_id", "", { shouldValidate: false });
     setValue("requested_services", "", { shouldValidate: false });
     setValue("create_service_price", "", { shouldValidate: false });
     patchCreateScheduleField("service_date", "");
@@ -3163,6 +3258,10 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
         showErrorAlert("Please select a partner before category and service.");
         return;
       }
+      if (!String(data.subcategory_id ?? "").trim()) {
+        showErrorAlert("Please select a sub category.");
+        return;
+      }
       if (!String(data.requested_services ?? "").trim()) {
         showErrorAlert("Please select a service.");
         return;
@@ -3237,10 +3336,14 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
       }
     }
 
+    const subcategoryIdForItems = String(data.subcategory_id ?? "").trim();
     const updatedServiceItems = serviceItems.map((item) => ({
       ...item,
       user_id: selectedUser?._id,
       category_id: data.category_id,
+      ...(subcategoryIdForItems
+        ? { subcategory_id: subcategoryIdForItems }
+        : {}),
     }));
 
     const payloadServiceItems = updatedServiceItems.map((item) => {
@@ -3343,6 +3446,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
         requested_time_from: String(primaryLine?.service_from_time ?? "").trim(),
         requested_time_to: String(primaryLine?.service_to_time ?? "").trim(),
       });
+      const subcategoryId = String(data.subcategory_id ?? "").trim();
       const payload = buildCreateOrderPayload({
         userId: selectedUser!._id,
         userUniqueId: selectedUser?.user_id
@@ -3350,6 +3454,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
           : undefined,
         cityId: resolvedCityId,
         categoryId,
+        subcategoryId,
         partnerId: String(data.requested_partner ?? "").trim(),
         serviceId: String(data.requested_services ?? "").trim(),
         createdById:
@@ -3681,6 +3786,9 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                                 setValue("category_id", "", {
                                   shouldValidate: false,
                                 });
+                                setValue("subcategory_id", "", {
+                                  shouldValidate: false,
+                                });
                                 setValue("requested_services", "", {
                                   shouldValidate: false,
                                 });
@@ -3719,6 +3827,9 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                                 shouldValidate: createFormSubmitted,
                               });
                               if (name === "category_id") {
+                                setValue("subcategory_id", "", {
+                                  shouldValidate: false,
+                                });
                                 setValue("requested_services", "", {
                                   shouldValidate: false,
                                 });
@@ -3746,6 +3857,40 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                             }
                         />
                       </Col>
+                        <Col xs={12} md={6}>
+                          <CustomTextFieldSelect
+                            key={`create-order-sub-${createCategoryIdWatch || "none"}`}
+                            label="Sub Category"
+                            controlId="create-order-subcategory"
+                            asCol={false}
+                            options={orderSubCategoryOptions}
+                            register={register}
+                            fieldName="subcategory_id"
+                            error={errors.subcategory_id}
+                            defaultValue={getValues("subcategory_id")}
+                            setValue={
+                              setValue as (name: string, value: any) => void
+                            }
+                            placeholder={
+                              !createOrderPartnerSelected
+                                ? "Select partner first"
+                                : !String(createCategoryIdWatch ?? "").trim()
+                                  ? "Select category first"
+                                  : orderSubCategoryOptions.length
+                                    ? "Select sub category"
+                                    : "No sub categories"
+                            }
+                            menuPortal
+                            isClearable
+                            isDisabled={
+                              createOrderFieldsLocked ||
+                              !createOrderPartnerSelected ||
+                              !String(createCategoryIdWatch ?? "").trim()
+                            }
+                          />
+                        </Col>
+                    </Row>
+                    <Row className="gy-3 gx-md-4 align-items-start">
                         <Col xs={12} md={6}>
                         <CustomTextFieldSelect
                             key={`create-order-svc-${createCategoryIdWatch || "none"}`}

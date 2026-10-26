@@ -37,6 +37,8 @@ interface CustomHeaderProps {
   rightActions?: React.ReactNode;
   /** Hide top-right franchise selector for pages that should not expose it. */
   hideFranchiseDropdown?: boolean;
+  /** Hide the notification bell for pages that should not expose it. */
+  hideNotifications?: boolean;
 }
 
 const CustomHeader = ({
@@ -47,6 +49,7 @@ const CustomHeader = ({
   onLocationChange,
   rightActions,
   hideFranchiseDropdown = false,
+  hideNotifications = false,
 }: CustomHeaderProps) => {
   const navigate = useNavigate();
   const sidebar = useSidebar();
@@ -110,15 +113,17 @@ const CustomHeader = ({
   }, []);
 
   useEffect(() => {
+    if (hideNotifications) return;
     void refreshNotifications();
-  }, [refreshNotifications, selectedFranchise]);
+  }, [hideNotifications, refreshNotifications, selectedFranchise]);
 
   useEffect(() => {
-    if (!isNotificationOpen) return;
+    if (hideNotifications || !isNotificationOpen) return;
     void refreshNotifications();
-  }, [isNotificationOpen, refreshNotifications]);
+  }, [hideNotifications, isNotificationOpen, refreshNotifications]);
 
   useEffect(() => {
+    if (hideNotifications) return;
     const onUpdated = () => {
       void refreshNotifications();
     };
@@ -151,7 +156,7 @@ const CustomHeader = ({
       document.removeEventListener("visibilitychange", onVisibility);
       document.removeEventListener("mousedown", onClickOutside);
     };
-  }, [refreshNotifications]);
+  }, [hideNotifications, refreshNotifications]);
 
   useEffect(() => {
     let cancelled = false;
@@ -251,6 +256,7 @@ const CustomHeader = ({
           />
         </div>
       )}
+      {!hideNotifications && (
       <div ref={notificationRef} className="position-relative">
         <button
           type="button"
@@ -337,6 +343,7 @@ const CustomHeader = ({
           </div>
         )}
       </div>
+      )}
     </>
   );
 

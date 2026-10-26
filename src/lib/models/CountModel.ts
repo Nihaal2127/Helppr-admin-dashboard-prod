@@ -16,6 +16,12 @@ export interface CountModel {
   inactive_category: number | 0;
   requested_category?: number | 0;
 
+  total_subcategory?: number | 0;
+  active_subcategory?: number | 0;
+  inactive_subcategory?: number | 0;
+  requested_subcategory?: number | 0;
+  total_requestedsubcategory?: number | 0;
+
   total_service: number | 0;
   active_service: number | 0;
   inactive_service: number | 0;

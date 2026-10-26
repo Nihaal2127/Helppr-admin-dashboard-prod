@@ -442,6 +442,7 @@ export function buildCreateOrderPayload(input: {
   userUniqueId?: string;
   cityId: string;
   categoryId: string;
+  subcategoryId?: string;
   partnerId: string;
   serviceId: string;
   createdById: string;
@@ -487,10 +488,12 @@ export function buildCreateOrderPayload(input: {
   const charge = input.totalServiceCharge;
   const invoiceTotal = input.invoiceTotal ?? charge;
 
+  const subcategoryId = String(input.subcategoryId ?? "").trim();
   const line: Record<string, unknown> = {
     user_id: input.userId,
     partner_id: input.partnerId,
     category_id: input.categoryId,
+    ...(subcategoryId ? { subcategory_id: subcategoryId } : {}),
     service_id: input.serviceId,
     service_date: serviceDate,
     service_from_time: fromIso,
@@ -506,6 +509,7 @@ export function buildCreateOrderPayload(input: {
     user_unique_id: input.userUniqueId ?? "",
     city_id: input.cityId,
     category_id: input.categoryId,
+    ...(subcategoryId ? { subcategory_id: subcategoryId } : {}),
     created_by_id: input.createdById,
     payment_mode_id: "",
     transaction_id: "",
@@ -710,6 +714,9 @@ export type OrderListFilters = {
   from_date?: string | null;
   to_date?: string | null;
   franchise_id?: string | null;
+  /** Optional `GET /order/getAll` filter. */
+  subcategory_id?: string | null;
+  service_id?: string | null;
 };
 
 export type OrderListSort = ServerTableSortBy;
@@ -1170,6 +1177,8 @@ export const fetchOrder = async (
       : undefined;
   const fid = resolveFranchiseIdForQuery(filters.franchise_id);
 
+  const subcategoryId = String(filters.subcategory_id ?? "").trim();
+  const serviceId = String(filters.service_id ?? "").trim();
   const params = new URLSearchParams({
     page: String(page),
     limit: String(pageSize),
@@ -1182,6 +1191,8 @@ export const fetchOrder = async (
       ? { sort_by: apiSort.sort_by, sort_order: apiSort.sort_order }
       : {}),
     ...(fid ? { franchise_id: fid } : {}),
+    ...(subcategoryId ? { subcategory_id: subcategoryId } : {}),
+    ...(serviceId ? { service_id: serviceId } : {}),
   });
 
   if (!apiSort) {

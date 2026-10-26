@@ -59,14 +59,120 @@ type PartnerDetailsDialogProps = {
 
 type CatalogOption = { value: string; label: string };
 
+function formatPartnerServiceCities(
+  user?: UserModel | null
+): string {
+  const raw =
+    (user as { service_cities?: unknown } | undefined)?.service_cities ??
+    (user as { service_city_names?: unknown } | undefined)?.service_city_names;
+  if (!Array.isArray(raw) || raw.length === 0) return "";
+  const names = raw
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (item && typeof item === "object") {
+        return String(
+          (item as { name?: string }).name ??
+            (item as { label?: string }).label ??
+            ""
+        ).trim();
+      }
+      return "";
+    })
+    .filter(Boolean);
+  return names.join(", ");
+}
+
 type CatalogServiceLite = {
   _id: string;
   name: string;
   category_id: string;
   category_name?: string;
+  subcategory_id?: string;
+  subcategory_name?: string;
   desc?: string;
   price?: number | null;
 };
+
+/** Same interim labels used on Add Partner until a subcategory catalogue API exists. */
+const PARTNER_SUB_CATEGORY_LABELS: Record<string, string> = {
+  "example-subcat-1": "Facial Care",
+  "example-subcat-2": "Hair Styling",
+  "example-subcat-3": "Pipe Repair",
+};
+
+const MONGO_OBJECT_ID = /^[a-f0-9]{24}$/i;
+
+function subCategoryDisplayName(raw: unknown): string {
+  if (typeof raw === "string" || typeof raw === "number") {
+    const text = String(raw).trim();
+    if (!text || MONGO_OBJECT_ID.test(text)) return "";
+    return PARTNER_SUB_CATEGORY_LABELS[text] ?? text;
+  }
+  if (!raw || typeof raw !== "object") return "";
+  const rec = raw as Record<string, unknown>;
+  const name = String(
+    rec.name ??
+      rec.label ??
+      rec.subcategory_name ??
+      rec.sub_category_name ??
+      ""
+  ).trim();
+  if (name && !MONGO_OBJECT_ID.test(name)) return name;
+  const id = String(
+    rec._id ?? rec.id ?? rec.subcategory_id ?? rec.sub_category_id ?? ""
+  ).trim();
+  if (!id) return "";
+  return PARTNER_SUB_CATEGORY_LABELS[id] ?? "";
+}
+
+function uniqueSubCategoryLabels(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out;
+}
+
+function labelsFromUnknownList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return uniqueSubCategoryLabels(raw.map((item) => subCategoryDisplayName(item)));
+}
+
+function pushSubCategoryFromRecord(
+  row: Record<string, unknown>,
+  into: string[]
+) {
+  const direct =
+    row.subcategory_name ??
+    row.sub_category_name ??
+    row.subcategory ??
+    row.sub_category ??
+    row.subcategory_id ??
+    row.sub_category_id;
+  const name = subCategoryDisplayName(direct);
+  if (name) into.push(name);
+  const nested = row.subcategories ?? row.sub_categories ?? row.subCategoryRows;
+  if (!Array.isArray(nested)) return;
+  for (const item of nested) {
+    const label = subCategoryDisplayName(item);
+    if (label) into.push(label);
+  }
+}
+
+function partnerLevelSubCategoryLabels(user?: UserModel | null): string[] {
+  if (!user) return [];
+  const rec = user as UserModel & Record<string, unknown>;
+  const fromNames = labelsFromUnknownList(
+    rec.subcategory_names ?? rec.sub_category_names
+  );
+  if (fromNames.length > 0) return fromNames;
+  return labelsFromUnknownList(rec.subcategory_ids ?? rec.sub_category_ids);
+}
 
 function PartnerDetailsDialogView({
   userId,
@@ -215,6 +321,16 @@ function PartnerDetailsDialogView({
               ? String((s as { category_name?: string }).category_name)
               : undefined,
             desc: String((s as { desc?: string }).desc ?? ""),
+            subcategory_id: String(
+              (s as { subcategory_id?: string }).subcategory_id ??
+                (s as { sub_category_id?: string }).sub_category_id ??
+                ""
+            ).trim(),
+            subcategory_name: String(
+              (s as { subcategory_name?: string }).subcategory_name ??
+                (s as { sub_category_name?: string }).sub_category_name ??
+                ""
+            ).trim(),
             price:
               (s as { price?: number | null }).price !== undefined &&
               (s as { price?: number | null }).price !== null
@@ -254,6 +370,64 @@ function PartnerDetailsDialogView({
       catalogCategoryOptions
     );
   }, [userDetails, catalogServices, catalogCategoryOptions]);
+
+  const subCategoryLabelsByCategoryId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const partnerLevel = partnerLevelSubCategoryLabels(userDetails);
+    for (const group of viewCategoryServiceGroups) {
+      const labels: string[] = [];
+      // const partnerServices = Array.isArray(userDetails?.partner_services)
+      //   ? userDetails.partner_services
+      //   : [];
+       
+const partnerServices = userDetails?.partner_services ?? [];
+
+for (const ps of partnerServices) {
+  const row = ps as Record<string, any>;
+  const categoryRef = row.category_id;
+
+  const cid =
+    categoryRef && typeof categoryRef === "object"
+      ? String(categoryRef._id ?? "").trim()
+      : String(categoryRef ?? "").trim();
+
+  if (cid && cid !== group.categoryId) continue;
+
+  if (!Array.isArray(row.subcategories)) continue;
+
+  for (const subItem of row.subcategories) {
+    if (!subItem || typeof subItem !== "object") continue;
+
+    const subcategoryRef = subItem.subcategory_id;
+
+    const subcategoryName =
+      subcategoryRef && typeof subcategoryRef === "object"
+        ? String(subcategoryRef.name ?? "").trim()
+        : String(subcategoryRef ?? "").trim();
+
+    if (subcategoryName) {
+      labels.push(subcategoryName);
+    }
+  }
+}
+
+      for (const row of group.rows) {
+        const sid = String(row.serviceId ?? "").trim();
+        if (!sid) continue;
+        const svc = catalogServices.find((item) => item._id === sid);
+        const fromCatalog =
+          subCategoryDisplayName(svc?.subcategory_name) ||
+          subCategoryDisplayName(svc?.subcategory_id);
+        if (fromCatalog) labels.push(fromCatalog);
+      }
+      const resolved = uniqueSubCategoryLabels(labels);
+      map.set(
+        group.categoryId,
+        resolved.length > 0 ? resolved : partnerLevel
+      );
+    }
+    return map;
+  }, [viewCategoryServiceGroups, userDetails, catalogServices]);
 
   const openServices = (status: number | null) => {
     // `order_service/getAll?partner_id=` expects the partner document `_id` (ObjectId). Passing display id (e.g. P1029) can trigger a 500 from the API.
@@ -300,7 +474,7 @@ function PartnerDetailsDialogView({
       >
         <Modal.Header className="py-3 px-4 border-bottom-0">
           <Modal.Title as="h5" className="custom-modal-title">
-            Partner Information
+            Partner Information 
           </Modal.Title>
           <CustomCloseButton onClose={onClose} />
         </Modal.Header>
@@ -343,8 +517,15 @@ function PartnerDetailsDialogView({
                     : ""
                 }
                 franchiseName={partnerFranchiseFields.franchiseName}
-                // franchiseEmail={partnerFranchiseFields.franchiseEmail}
+                serviceCities={formatPartnerServiceCities(userDetails)}
+                directOrder={
+                  ((v: unknown) =>
+                    v === true || v === "true" || v === 1 || v === "1")(
+                    userDetails?.direct_order
+                  )
+                }
               />
+
             </div>
             <img
               src={editIcon}
@@ -413,12 +594,12 @@ function PartnerDetailsDialogView({
             <Col xs={12}>
               <section className="custom-other-details w-100">
                 <div className="partner-details-section-header">
-                  <h3>Categories &amp; services</h3>
+                  <h3>Categories &amp; sub categories &amp; services</h3>
                   {userDetails ? (
                       <img
                         src={editIcon}
-                        alt="Edit categories and services"
-                        title="Edit categories and services"
+                        alt="Edit categories & sub categories & services"
+                        title="Edit categories & sub categories & services"
                         style={{
                           width: "15px",
                           height: "15px",
@@ -459,7 +640,7 @@ function PartnerDetailsDialogView({
                 >
                   {viewCategoryServiceGroups.length === 0 ? (
                     <div className="text-muted small py-2">
-                      No categories and services
+                      No categories, sub categories and services
                     </div>
                   ) : (
                     <div className="table-responsive">
@@ -486,6 +667,17 @@ function PartnerDetailsDialogView({
                               }}
                             >
                               Category
+                            </th>
+                            <th
+                              scope="col"
+                              className="fw-semibold py-1 ps-3 pe-0"
+                              style={{
+                                width: "22%",
+                                minWidth: "120px",
+                                color: "var(--primary-txt-color)",
+                              }}
+                            >
+                              Sub Category
                             </th>
                             <th
                               scope="col"
@@ -523,6 +715,9 @@ function PartnerDetailsDialogView({
                                     },
                                   ];
                             const rowSpan = rows.length;
+                            const subCategoryLabels =
+                              subCategoryLabelsByCategoryId.get(g.categoryId) ??
+                              [];
                             return rows.map((row, idx) => (
                               <tr
                                 key={`${g.categoryId}-${
@@ -542,6 +737,28 @@ function PartnerDetailsDialogView({
                                     }}
                                   >
                                     {g.categoryLabel}
+                                  </td>
+                                ) : null}
+                                {idx === 0 ? (
+                                  <td
+                                    className="align-middle py-2 ps-3 text-wrap fw-medium fs-6"
+                                    rowSpan={rowSpan}
+                                    style={{
+                                      color: "#101010",
+                                      verticalAlign: "middle",
+                                      borderRight:
+                                        "1px solid var(--lb1-border)",
+                                    }}
+                                  >
+                                    {subCategoryLabels.length > 0 ? (
+                                      subCategoryLabels.map((name) => (
+                                        <div key={`${g.categoryId}-sub-${name}`}>
+                                          {name}
+                                        </div>
+                                      ))
+                                    ) : (
+                                      "—"
+                                    )}
                                   </td>
                                 ) : null}
                                 <td className="align-top py-2 ps-3 pe-2 text-wrap fs-6">

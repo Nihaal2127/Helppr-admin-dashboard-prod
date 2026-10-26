@@ -27,6 +27,7 @@ import { showErrorAlert } from "../../lib/global/alertHelper";
 import {
   createOrUpdateCategory,
   createOrUpdateCategoryWithRecord,
+  fetchCategoryDropDown,
 } from "../../services/categoryService";
 import {
   documentUploadFailureMessage,
@@ -36,8 +37,94 @@ import {
 } from "../../services/documentUploadService";
 import CustomMultiSelect from "../../components/CustomMultiSelect";
 import { fetchServicesForCategoryDialog } from "../../services/servicesService";
+import { apiRequest } from "../../lib/global/remote/apiHelper";
 import { openDialog } from "../../lib/global/DialogManager";
 import { showAddEditServiceDialog } from "./AddEditServiceDialog";
+import { showAddEditSubCategoryDialog } from "./AddEditSubCategoryDialog";
+
+function mapSubCategoryApiRowsToOptions(
+  data: unknown
+): { value: string; label: string }[] {
+  const buckets: unknown[] = [];
+  const push = (value: unknown) => {
+    if (Array.isArray(value)) buckets.push(...value);
+  };
+  const walk = (node: unknown, depth = 0) => {
+    if (depth > 4 || node == null) return;
+    if (Array.isArray(node)) {
+      push(node);
+      return;
+    }
+    if (typeof node !== "object") return;
+    const root = node as Record<string, unknown>;
+    push(root.records);
+    push(root.subcategories);
+    push(root.sub_categories);
+    push(root.list);
+    push(root.items);
+    push(root.result);
+    push(root.data);
+    if (root.data && typeof root.data === "object") {
+      walk(root.data, depth + 1);
+    }
+  };
+  walk(data);
+  const seen = new Set<string>();
+  const options: { value: string; label: string }[] = [];
+  for (const item of buckets) {
+    const row =
+      item && typeof item === "object"
+        ? (item as Record<string, unknown>)
+        : {};
+    const value = String(
+      row._id ?? row.id ?? row.subcategory_id ?? row.sub_category_id ?? row.value ?? ""
+    ).trim();
+    if (!value || seen.has(value)) continue;
+    const label =
+      String(row.name ?? row.label ?? row.subcategory_name ?? "").trim() ||
+      value;
+    seen.add(value);
+    options.push({ value, label });
+  }
+  return options;
+}
+
+async function fetchSubCategoryDropDownOptions(
+  categoryId?: string
+): Promise<{ value: string; label: string }[]> {
+  const cid = String(categoryId ?? "").trim();
+  const dropParams = new URLSearchParams();
+  if (cid) dropParams.set("category_id", cid);
+  const dropQuery = dropParams.toString();
+  const dropRes = await apiRequest(
+    dropQuery
+      ? `/subcategory/getDropDown?${dropQuery}`
+      : `/subcategory/getDropDown`,
+    "GET",
+    undefined,
+    false,
+    true
+  );
+  if (dropRes.success) {
+    const fromDrop = mapSubCategoryApiRowsToOptions(dropRes.data);
+    if (fromDrop.length > 0 || !cid) return fromDrop;
+  }
+  if (!cid) return [];
+  const listParams = new URLSearchParams({
+    page: "1",
+    limit: "200",
+    category_id: cid,
+  });
+  const listRes = await apiRequest(
+    `/subcategory/getAll?${listParams.toString()}`,
+    "GET",
+    undefined,
+    false,
+    true
+  );
+  if (!listRes.success) return [];
+  return mapSubCategoryApiRowsToOptions(listRes.data);
+}
 
 type AddEditCategoryDialogProps = {
   isEditable: boolean;
@@ -114,6 +201,10 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
     { value: string; label: string }[]
   >([]);
   const [serviceIds, setServiceIds] = useState<string[]>([]);
+  const [subCategoryOptions, setSubCategoryOptions] = useState<
+    { value: string; label: string }[]
+  >([]);
+  const [subCategoryIds, setSubCategoryIds] = useState<string[]>([]);
   const [draftCategoryId, setDraftCategoryId] = useState<string>("");
   const [draftImageUrl, setDraftImageUrl] = useState<string>("");
   /** Same as `draftCategoryId` state, updated synchronously before opening Add Service so `loadServiceOptions` never reads a stale empty draft (React state lags one render). */
@@ -141,6 +232,20 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
     return options;
   }, [category?._id]);
 
+  const loadSubCategoryOptions = useCallback(async () => {
+    const editingId = String(category?._id ?? "").trim();
+    // Add Category: keep the previous unscoped Sub Category dropdown (full getDropDown list).
+    const rows = await fetchSubCategoryDropDownOptions(
+      editingId || undefined
+    );
+    const options = [
+      { value: SELECT_ALL_OPTION, label: "Select All" },
+      ...rows,
+    ];
+    setSubCategoryOptions(options);
+    return options;
+  }, [category?._id]);
+
   useEffect(() => {
     if (!category) return;
     reset({
@@ -160,10 +265,16 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
   }, [loadServiceOptions, draftCategoryId, category?.is_request]);
 
   useEffect(() => {
+    if (category?.is_request) return;
+    void loadSubCategoryOptions();
+  }, [loadSubCategoryOptions, draftCategoryId, category?.is_request]);
+
+  useEffect(() => {
     const hydrateIds = isEditable || localViewMode;
     if (hydrateIds && category) {
       if ((category as CategoryModel).is_request) {
         setServiceIds([]);
+        setSubCategoryIds([]);
       } else {
         // Supports both old shape (`service_ids`) and API detail shape (`services: [{ _id, name }]`).
         const idsFromServiceIds = Array.isArray((category as any).service_ids)
@@ -177,6 +288,19 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
         setServiceIds(
           idsFromServiceIds.length > 0 ? idsFromServiceIds : idsFromServicesArray
         );
+        const idsFromSubIds = Array.isArray((category as any).subcategory_ids)
+          ? (category as any).subcategory_ids.map(String)
+          : Array.isArray((category as any).sub_category_ids)
+            ? (category as any).sub_category_ids.map(String)
+            : [];
+        const idsFromSubArray = Array.isArray((category as any).subcategories)
+          ? (category as any).subcategories
+              .map((s: any) => String(s?._id ?? s?.id ?? ""))
+              .filter(Boolean)
+          : [];
+        setSubCategoryIds(
+          idsFromSubIds.length > 0 ? idsFromSubIds : idsFromSubArray
+        );
       }
       setValue("franchise_id", category.franchise_id || "", {
         shouldValidate: false,
@@ -185,6 +309,7 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
       setDraftImageUrl("");
     } else if (!category) {
       setServiceIds([]);
+      setSubCategoryIds([]);
       setDraftCategoryId("");
       setDraftImageUrl("");
       setValue("franchise_id", "", { shouldValidate: false });
@@ -330,6 +455,174 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
     [openAddServiceForCategory]
   );
 
+  const openAddSubCategoryForCategory = useCallback(async () => {
+    const currentCategoryName = String(getValues("name") ?? "").trim();
+    const categoryIdFromRecord =
+      (category as any)?._id ??
+      (category as any)?.category_id ??
+      (category as any)?.id ??
+      "";
+    const currentCategoryId = String(
+      draftCategoryId || categoryIdFromRecord || ""
+    ).trim();
+
+    let resolvedCategoryId = currentCategoryId;
+    if (!resolvedCategoryId) {
+      const name = String(getValues("name") ?? "").trim();
+      const desc = String(getValues("desc") ?? "").trim();
+      const franchise_id = String(getValues("franchise_id") ?? "").trim();
+      if (!name || !desc) {
+        showErrorAlert("Enter category name and description first.");
+        return;
+      }
+
+      // Prefer an existing category with the same name (avoids category/create 409).
+      const existing = (await fetchCategoryDropDown()).find(
+        (option) =>
+          option.value &&
+          option.label.trim().toLowerCase() === name.toLowerCase()
+      );
+      if (existing?.value) {
+        resolvedCategoryId = String(existing.value).trim();
+        draftCategoryIdRef.current = resolvedCategoryId;
+        setDraftCategoryId(resolvedCategoryId);
+      } else {
+        if (fileInputs.length === 0) {
+          showErrorAlert("Upload category image first.");
+          return;
+        }
+        const draftUpload = await uploadDocumentImages({
+          uploadType: "2",
+          files: fileInputs,
+          isEditMode: false,
+        });
+        if (!draftUpload.ok) {
+          showErrorAlert(documentUploadFailureMessage(draftUpload.usedReplace));
+          return;
+        }
+        const fileList = draftUpload.paths;
+        const draftRes = await createOrUpdateCategoryWithRecord(
+          {
+            name,
+            desc,
+            service_ids: [],
+            subcategory_ids: [],
+            is_active: true,
+            ...(franchise_id ? { franchise_id } : {}),
+            image_url: String(fileList[0]),
+          },
+          false
+        );
+        resolvedCategoryId = String(
+          (draftRes.record as any)?._id ??
+            (draftRes.record as any)?.category_id ??
+            ""
+        ).trim();
+        if (!draftRes.response || !resolvedCategoryId) {
+          // Create may 409 if name already exists — resolve by name again.
+          const retry = (await fetchCategoryDropDown()).find(
+            (option) =>
+              option.value &&
+              option.label.trim().toLowerCase() === name.toLowerCase()
+          );
+          resolvedCategoryId = String(retry?.value ?? "").trim();
+        }
+        if (!resolvedCategoryId) {
+          showErrorAlert("Please save category first, then add sub category.");
+          return;
+        }
+        draftCategoryIdRef.current = resolvedCategoryId;
+        setDraftCategoryId(resolvedCategoryId);
+        setDraftImageUrl(String(fileList[0]));
+      }
+    }
+
+    draftCategoryIdRef.current = resolvedCategoryId;
+
+    const previousSubIds = new Set(
+      subCategoryOptions
+        .filter((s) => s.value !== SELECT_ALL_OPTION)
+        .map((s) => s.value)
+    );
+
+    const lockedCategoryLabel =
+      category?.name || currentCategoryName || "Current Category";
+
+    showAddEditSubCategoryDialog(null, false, {
+      presetCategoryName: lockedCategoryLabel,
+      presetCategoryId: resolvedCategoryId,
+      onSaved: async () => {
+        // Create already done in AddEditSubCategoryDialog via POST /subcategory/create
+        const previousServiceIds = new Set(
+          serviceOptions
+            .filter((s) => s.value !== SELECT_ALL_OPTION)
+            .map((s) => s.value)
+        );
+        const refreshedOptions = await loadSubCategoryOptions();
+        setSubCategoryIds((prev) => {
+          const next = new Set(prev);
+          refreshedOptions
+            .filter(
+              (s) =>
+                s.value !== SELECT_ALL_OPTION && !previousSubIds.has(s.value)
+            )
+            .forEach((s) => next.add(s.value));
+          return Array.from(next);
+        });
+        const refreshedServices = await loadServiceOptions();
+        setServiceIds((prev) => {
+          const next = new Set(prev);
+          refreshedServices
+            .filter(
+              (s) =>
+                s.value !== SELECT_ALL_OPTION &&
+                !previousServiceIds.has(s.value)
+            )
+            .forEach((s) => next.add(s.value));
+          return Array.from(next);
+        });
+        onRefreshData();
+        return true;
+      },
+    });
+  }, [
+    category,
+    draftCategoryId,
+    fileInputs,
+    getValues,
+    loadServiceOptions,
+    loadSubCategoryOptions,
+    onRefreshData,
+    serviceOptions,
+    subCategoryOptions,
+    setDraftCategoryId,
+    setDraftImageUrl,
+    setServiceIds,
+    setSubCategoryIds,
+  ]);
+
+  const addSubCategoryMenuFooter = useMemo(
+    () => (
+      <button
+        type="button"
+        className="w-100 text-start border-0 bg-transparent py-2 px-3"
+        style={{
+          color: "var(--primary-color)",
+          fontWeight: 600,
+          fontSize: 14,
+        }}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onClick={() => void openAddSubCategoryForCategory()}
+      >
+        + Add Sub Category
+      </button>
+    ),
+    [openAddSubCategoryForCategory]
+  );
+
   const handleServiceSelection = async (
     selectedOptions: { value: string; label: string }[]
   ) => {
@@ -360,6 +653,36 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
     setServiceIds(selectedIds);
   };
 
+  const handleSubCategorySelection = (
+    selectedOptions: { value: string; label: string }[]
+  ) => {
+    const isSelectAllSelected = selectedOptions.some(
+      (option) => option.value === SELECT_ALL_OPTION
+    );
+
+    let selectedIds: string[] = [];
+
+    if (isSelectAllSelected) {
+      const allSubs = subCategoryOptions.filter(
+        (s) => s.value !== SELECT_ALL_OPTION
+      );
+      const picked = selectedOptions.filter(
+        (o) => o.value !== SELECT_ALL_OPTION
+      );
+      const isAllSelected =
+        picked.length === allSubs.length &&
+        allSubs.every((sub) =>
+          picked.some((selected) => selected.value === sub.value)
+        );
+
+      selectedIds = isAllSelected ? [] : allSubs.map((sub) => sub.value);
+    } else {
+      selectedIds = selectedOptions.map((option) => option.value);
+    }
+
+    setSubCategoryIds(selectedIds);
+  };
+
   const selectedServiceOptions = useMemo(
     () =>
       serviceOptions.filter(
@@ -367,6 +690,15 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
           svc.value !== SELECT_ALL_OPTION && serviceIds.includes(svc.value)
       ),
     [serviceOptions, serviceIds]
+  );
+
+  const selectedSubCategoryOptions = useMemo(
+    () =>
+      subCategoryOptions.filter(
+        (sub) =>
+          sub.value !== SELECT_ALL_OPTION && subCategoryIds.includes(sub.value)
+      ),
+    [subCategoryOptions, subCategoryIds]
   );
 
   const linkedServiceNamesForView = useMemo(() => {
@@ -411,6 +743,37 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
     return [];
   }, [category, serviceOptions, serviceIds]);
 
+  const linkedSubCategoryNamesForView = useMemo(() => {
+    if (!category) return [];
+    const rawSubs = (category as any).subcategories;
+    if (Array.isArray(rawSubs) && rawSubs.length > 0) {
+      if (typeof rawSubs[0] === "object") {
+        return rawSubs
+          .map((s: any) => String(s?.name ?? s?.label ?? ""))
+          .filter(Boolean);
+      }
+      return rawSubs.map((s: any) => String(s)).filter(Boolean);
+    }
+    const names = (category as any).subcategory_names;
+    if (Array.isArray(names) && names.length > 0) {
+      return names.map(String).filter(Boolean);
+    }
+    const idsFromApi = Array.isArray((category as any).subcategory_ids)
+      ? (category as any).subcategory_ids.map(String)
+      : Array.isArray((category as any).sub_category_ids)
+        ? (category as any).sub_category_ids.map(String)
+        : [];
+    const ids = idsFromApi.length > 0 ? idsFromApi : subCategoryIds;
+    return ids
+      .map(
+        (id: string) =>
+          subCategoryOptions.find(
+            (s) => s.value === id && s.value !== SELECT_ALL_OPTION
+          )?.label
+      )
+      .filter(Boolean) as string[];
+  }, [category, subCategoryOptions, subCategoryIds]);
+
   const isRequestCategory = isCatalogRequestRow(
     category as unknown as Record<string, unknown>
   );
@@ -420,6 +783,10 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
 
   const onSubmitEvent = async (data: CategoryFormValues) => {
     const isRequestCategorySubmit = Boolean(category?.is_request);
+    if (!isRequestCategorySubmit && subCategoryIds.length === 0) {
+      showErrorAlert("Please select at least one sub category");
+      return;
+    }
     if (!isRequestCategorySubmit && serviceIds.length === 0) {
       showErrorAlert("Please select at least one service");
       return;
@@ -508,6 +875,7 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
       desc: data.desc,
       is_active: isActive,
       service_ids: isRequestCategorySubmit ? [] : serviceIds,
+      subcategory_ids: isRequestCategorySubmit ? [] : subCategoryIds,
       franchise_id: data.franchise_id,
       ...(isEditable &&
         isRequestCategorySubmit &&
@@ -733,6 +1101,64 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
                     className="mb-2"
                     style={{ color: "var(--primary-color)", fontWeight: 600 }}
                   >
+                    Sub Categories
+                  </p>
+                  {linkedSubCategoryNamesForView.length > 0 ? (
+                    <div
+                      className="mb-3"
+                      style={{
+                        maxHeight: 140,
+                        overflowY:
+                          linkedSubCategoryNamesForView.length > 6
+                            ? "auto"
+                            : "visible",
+                        border: "1px solid var(--txtfld-border)",
+                        borderRadius: 8,
+                        padding: "10px 12px",
+                        background: "var(--bs-body-bg, #fff)",
+                      }}
+                    >
+                      {linkedSubCategoryNamesForView.map(
+                        (name: string, idx: number) => (
+                          <div
+                            key={`${name}-${idx}`}
+                            style={{
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "start",
+                              padding: "6px 0",
+                              borderBottom:
+                                idx !==
+                                linkedSubCategoryNamesForView.length - 1
+                                  ? "1px dashed var(--txtfld-border)"
+                                  : "none",
+                            }}
+                          >
+                            <span
+                              className="flex-shrink-0"
+                              style={{
+                                color: "var(--primary-color)",
+                                fontWeight: 600,
+                              }}
+                            >
+                              {idx + 1}.
+                            </span>
+                            <span style={{ color: "var(--content-txt-color)" }}>
+                              {name}
+                            </span>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-muted small d-block mb-3">
+                      No sub categories linked
+                    </span>
+                  )}
+                  <p
+                    className="mb-2"
+                    style={{ color: "var(--primary-color)", fontWeight: 600 }}
+                  >
                     Services
                   </p>
                   {linkedServiceNamesForView.length > 0 ? (
@@ -918,6 +1344,19 @@ const AddEditCategoryDialog: React.FC<AddEditCategoryDialogProps> & {
               {!isRequestCategory ? (
                 <Col xs={12} md={6} className="min-w-0">
                   <label className="form-label fw-medium mb-2 d-block">
+                    <FieldLabelText label="Sub Category" required />
+                  </label>
+                  <CustomMultiSelect
+                    label=""
+                    controlId="Sub Category"
+                    options={subCategoryOptions}
+                    value={selectedSubCategoryOptions}
+                    onChange={handleSubCategorySelection}
+                    asCol={false}
+                    menuPortal
+                    menuFooter={addSubCategoryMenuFooter}
+                  />
+                  <label className="form-label fw-medium mb-2 d-block mt-3">
                     <FieldLabelText label="Services" required />
                   </label>
                   <CustomMultiSelect

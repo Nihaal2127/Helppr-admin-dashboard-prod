@@ -9,6 +9,7 @@ import type { ServiceDropDownOption } from "../../services/servicesService";
 import { UserModel } from "../../lib/models/UserModel";
 import { exportData } from "../../services/exportService";
 import { ApiPaths } from "../../lib/global/remote/apiPaths";
+import { apiRequest } from "../../lib/global/remote/apiHelper";
 import { buildOrderReportExportPayload } from "../../lib/reports/reportExportPayload";
 import {
   reportAllOption as allOption,
@@ -21,6 +22,65 @@ import {
 import type { ReportOptionType } from "../../lib/reports/reportFilterConstants";
 
 type OptionType = ReportOptionType;
+
+async function fetchReportSubCategoryOptions(
+  categoryIds: string[]
+): Promise<OptionType[]> {
+  const ids = categoryIds.map((id) => String(id ?? "").trim()).filter(Boolean);
+  const requests =
+    ids.length > 0
+      ? ids.map((category_id) =>
+          apiRequest(
+            `/subcategory/getDropDown?${new URLSearchParams({
+              category_id,
+            }).toString()}`,
+            "GET"
+          )
+        )
+      : [apiRequest("/subcategory/getDropDown", "GET")];
+  const results = await Promise.all(requests);
+  const seen = new Set<string>();
+  const options: OptionType[] = [];
+  for (const response of results) {
+    if (!response.success) continue;
+    const payload =
+      response.data && typeof response.data === "object"
+        ? (response.data as Record<string, unknown>)
+        : null;
+    const nested =
+      payload?.data &&
+      typeof payload.data === "object" &&
+      !Array.isArray(payload.data)
+        ? (payload.data as Record<string, unknown>)
+        : null;
+        const payloadRecords = payload?.records;
+        const payloadSubcategories = payload?.subcategories;
+        const nestedRecords = nested?.records;
+        
+        const rawRecords = Array.isArray(payloadRecords)
+          ? payloadRecords
+          : Array.isArray(nestedRecords)
+            ? nestedRecords
+            : Array.isArray(payloadSubcategories)
+              ? payloadSubcategories
+              : [];
+    for (const item of rawRecords) {
+      const row =
+        item && typeof item === "object"
+          ? (item as Record<string, unknown>)
+          : {};
+      const value = String(row._id ?? row.id ?? row.value ?? "").trim();
+      if (!value || seen.has(value)) continue;
+      const label = String(row.name ?? row.label ?? "").trim() || value;
+      seen.add(value);
+      options.push({ value, label });
+    }
+  }
+  options.sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+  );
+  return options;
+}
 
 type OrderReportsPageProps = {
   franchiseId?: string;
@@ -117,7 +177,11 @@ const OrderReportsPage = ({ franchiseId = "all" }: OrderReportsPageProps) => {
   >([]);
   const [services, setServices] = useState<OptionType[]>([]);
   const [categories, setCategories] = useState<OptionType[]>([]);
+  const [subCategories, setSubCategories] = useState<OptionType[]>([]);
   const [partners, setPartners] = useState<OptionType[]>([]);
+  const [subCategoryOptions, setSubCategoryOptions] = useState<OptionType[]>([
+    allOption,
+  ]);
 
   const [allCategoryOptions, setAllCategoryOptions] = useState<OptionType[]>(
     []
@@ -286,6 +350,18 @@ const OrderReportsPage = ({ franchiseId = "all" }: OrderReportsPageProps) => {
     }
   }, []);
 
+  const loadSubCategoryOptions = useCallback(async () => {
+    const categoryIds = categories
+      .filter((c) => c.value !== "all")
+      .map((c) => c.value);
+    try {
+      const rows = await fetchReportSubCategoryOptions(categoryIds);
+      setSubCategoryOptions([allOption, ...rows]);
+    } catch {
+      setSubCategoryOptions([allOption]);
+    }
+  }, [categories]);
+
   const loadPartnerOptions = useCallback(async () => {
     const key = String(franchiseId ?? "all");
     if (
@@ -354,6 +430,21 @@ const OrderReportsPage = ({ franchiseId = "all" }: OrderReportsPageProps) => {
   }, [serviceOptions]);
 
   useEffect(() => {
+    setSubCategories((prev) => {
+      const valid = new Set(subCategoryOptions.map((o) => o.value));
+      if (prev.every((p) => p.value === "all" || valid.has(p.value))) {
+        return prev;
+      }
+      return prev.filter((p) => p.value === "all" || valid.has(p.value));
+    });
+  }, [subCategoryOptions]);
+
+  useEffect(() => {
+    setSubCategories([]);
+    setSubCategoryOptions([allOption]);
+  }, [categories]);
+
+  useEffect(() => {
     setPartners((prev) => {
       const valid = new Set(partnerOptions.map((o) => o.value));
       if (prev.every((p) => p.value === "all" || valid.has(p.value))) {
@@ -402,6 +493,7 @@ const OrderReportsPage = ({ franchiseId = "all" }: OrderReportsPageProps) => {
     setCustomerPaymentStatus([]);
     setServices([]);
     setCategories([]);
+    setSubCategories([]);
     setPartners([]);
   };
 
@@ -524,6 +616,27 @@ const OrderReportsPage = ({ franchiseId = "all" }: OrderReportsPageProps) => {
                     )
                   }
                   onMenuOpen={() => void loadCategoryOptions()}
+                  asCol={false}
+                  selectedChipsMaxHeight={multiSelectChipsMaxHeight}
+                />
+              </Col>
+
+              <Col md={6}>
+                <Form.Label className={filterLabelClass}>
+                  Sub Category
+                </Form.Label>
+                <CustomMultiSelect
+                  label=""
+                  controlId="Sub Category"
+                  options={subCategoryOptions}
+                  value={subCategories}
+                  onChange={(selectedOptions) =>
+                    handleSelectWithAll(
+                      selectedOptions as OptionType[],
+                      setSubCategories
+                    )
+                  }
+                  onMenuOpen={() => void loadSubCategoryOptions()}
                   asCol={false}
                   selectedChipsMaxHeight={multiSelectChipsMaxHeight}
                 />

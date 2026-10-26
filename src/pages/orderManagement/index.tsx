@@ -35,6 +35,7 @@ import OrderRowActions from "./OrderRowActions";
 import { useForm, UseFormRegister } from "react-hook-form";
 import CustomSummaryBox from "../../components/CustomSummaryBox";
 import CustomDatePicker from "../../components/CustomDatePicker";
+import CustomFormSelect from "../../components/CustomFormSelect";
 import { getCount } from "../../services/getCountService";
 import type { GetCountExtra } from "../../services/getCountService";
 import { useFranchiseHeaderForm } from "../../lib/global/hooks/useFranchiseScopedGetCount";
@@ -51,17 +52,114 @@ const toIsoCalendarDate = (date: Date | null): string | null => {
   return `${y}-${m}-${d}`;
 };
 
+function orderServiceFilterId(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    return String(rec._id ?? rec.id ?? rec.service_id ?? "").trim();
+  }
+  const s = String(value).trim();
+  return !s || s === "[object Object]" ? "" : s;
+}
+
+function orderServiceFilterLabel(value: unknown, fallback?: unknown): string {
+  if (value && typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    const fromObj = String(
+      rec.name ?? rec.service_name ?? rec.label ?? ""
+    ).trim();
+    if (fromObj) return fromObj;
+  }
+  const fromFallback = String(fallback ?? "").trim();
+  if (fromFallback && fromFallback !== "[object Object]") return fromFallback;
+  return "";
+}
+
+/** Unique Service filter options from `GET /order/getAll` rows. */
+function serviceFilterOptionsFromOrders(
+  orders: OrderModel[]
+): { value: string; label: string }[] {
+  const unique = new Map<string, { value: string; label: string }>();
+  const push = (idRaw: unknown, nameRaw?: unknown) => {
+    const value = orderServiceFilterId(idRaw);
+    if (!value) return;
+    const label = orderServiceFilterLabel(idRaw, nameRaw) || value;
+    const existing = unique.get(value);
+    if (!existing || (existing.label === existing.value && label !== value)) {
+      unique.set(value, { value, label });
+    }
+  };
+
+  for (const order of orders) {
+    const rec = order as unknown as Record<string, unknown>;
+    push(
+      rec.service_id ?? rec.requested_services,
+      rec.service_name ?? rec.requested_services_name
+    );
+    const items = Array.isArray(rec.service_items) ? rec.service_items : [];
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const it = item as Record<string, unknown>;
+      const info =
+        it.service_info && typeof it.service_info === "object"
+          ? (it.service_info as Record<string, unknown>)
+          : null;
+      push(
+        it.service_id ?? info?._id ?? info?.id,
+        it.service_name ?? info?.name ?? info?.service_name
+      );
+    }
+    const nested = rec.services ?? rec.order_services;
+    if (Array.isArray(nested)) {
+      for (const item of nested) {
+        if (item && typeof item === "object") {
+          const it = item as Record<string, unknown>;
+          push(it._id ?? it.service_id ?? it.id, it.name ?? it.service_name);
+        } else {
+          push(item);
+        }
+      }
+    }
+  }
+
+  return Array.from(unique.values()).sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+  );
+}
+
+function mergeServiceFilterOptions(
+  prev: { value: string; label: string }[],
+  next: { value: string; label: string }[]
+): { value: string; label: string }[] {
+  const map = new Map(prev.map((row) => [row.value, row]));
+  for (const row of next) {
+    if (!row.value) continue;
+    const existing = map.get(row.value);
+    if (
+      !existing ||
+      (existing.label === existing.value && row.label && row.label !== row.value)
+    ) {
+      map.set(row.value, row);
+    }
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+  );
+}
+
 const OrderManagement = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const notificationDeepLinkHandledRef = useRef<string | null>(null);
+
   const { register, setValue, franchiseId: headerFranchiseId } =
     useFranchiseHeaderForm();
   const { register: dateFilterRegister, setValue: setDateFilterValue } =
     useForm<{
       from_date: string;
       to_date: string;
+      service_id: string;
     }>({
-      defaultValues: { from_date: "", to_date: "" },
+      defaultValues: { from_date: "", to_date: "", service_id: "" },
     });
 
   const [selectedStatus, setSelectedStatus] = useState<OrderTabKey>(2);
@@ -71,6 +169,9 @@ const OrderManagement = () => {
   const [totalPages, setTotalPages] = useState(0);
   const [fromDate, setFromDate] = useState<string | null>(null);
   const [toDate, setToDate] = useState<string | null>(null);
+  const [selectedServiceId, setSelectedServiceId] = useState("");
+  const [serviceOptions, setServiceOptions] = useState< { label: string; value: string }[]>([]);
+  const [isServiceLoading, setIsServiceLoading] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
   const [searchClearVersion, setSearchClearVersion] = useState(0);
@@ -112,10 +213,40 @@ const OrderManagement = () => {
       if (response) {
         setOrderList(orders);
         setTotalPages(tp);
+        setServiceOptions((prev) =>
+          mergeServiceFilterOptions(prev, serviceFilterOptionsFromOrders(orders))
+        );
       }
       fetchRef.current = false;
     },
     [currentPage, pageSize, listFilters, sortBy]
+  );
+
+  const fetchOrdersByService = useCallback(
+    async (serviceId: string) => {
+      if (!serviceId) return;
+  
+      const { response, orders, totalPages: tp } = await fetchOrder(
+        1,
+        pageSize,
+        {
+          status: String(selectedStatus),
+          service_id: serviceId,
+          ...listFilters,
+        },
+        sortBy
+      );
+  
+      if (response) {
+        setOrderList(orders);
+        setTotalPages(tp);
+        setCurrentPage(1);
+        setServiceOptions((prev) =>
+          mergeServiceFilterOptions(prev, serviceFilterOptionsFromOrders(orders))
+        );
+      }
+    },
+    [pageSize, selectedStatus, listFilters, sortBy]
   );
 
   const refreshData = useCallback(async () => {
@@ -212,6 +343,31 @@ const OrderManagement = () => {
   useEffect(() => {
     void Promise.all([reloadTabCounts(), refreshData()]);
   }, [reloadTabCounts, refreshData, currentPage, selectedStatus]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadServiceFilterOptions = async () => {
+      setIsServiceLoading(true);
+      try {
+        const fid = franchiseIdForApiQuery(headerFranchiseId);
+        const { response, orders } = await fetchOrder(1, 100, {
+          status: String(selectedStatus),
+          ...(fid ? { franchise_id: fid } : {}),
+        });
+        if (cancelled) return;
+        const next = response
+          ? serviceFilterOptionsFromOrders(orders)
+          : [];
+        setServiceOptions((prev) => mergeServiceFilterOptions(prev, next));
+      } finally {
+        if (!cancelled) setIsServiceLoading(false);
+      }
+    };
+    void loadServiceFilterOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [headerFranchiseId, selectedStatus]);
 
   const clearOrderFilters = useCallback(() => {
     setFromDate(null);
@@ -460,17 +616,23 @@ const OrderManagement = () => {
           })}
         </div>
 
+        <style>{`
+          .custom-utilty-tools-inline.custom-utilty-tools-inline--orders-wide-search.order-mgmt-search-compact > .d-flex.flex-column {
+            max-width: 22rem;
+            flex: 0 1 20rem;
+          }
+        `}</style>
         <CustomUtilityBox
           key={utilitySearchKey}
           title="Orders"
           searchHint={"Search Order ID, User Name, Partner Name"}
           toolsInlineRow
-          toolsInlineClassName="custom-utilty-tools-inline--orders-wide-search"
+          toolsInlineClassName="custom-utilty-tools-inline--orders-wide-search order-mgmt-search-compact"
           hideMoreIcon
           hideUtilityActions
           controlSlot={
             <>
-              <div style={{ minWidth: "220px" }}>
+              <div style={{ minWidth: "160px", maxWidth: "180px", flex: "0 0 160px" }}>
                 <Form.Label className="mb-1 fw-medium">From Date</Form.Label>
                 <CustomDatePicker
                   label=""
@@ -493,7 +655,7 @@ const OrderManagement = () => {
                   filterDate={() => true}
                 />
               </div>
-              <div style={{ minWidth: "220px" }}>
+              <div style={{ minWidth: "160px", maxWidth: "180px", flex: "0 0 160px" }}>
                 <Form.Label className="mb-1 fw-medium">To Date</Form.Label>
                 <CustomDatePicker
                   label=""
@@ -514,6 +676,39 @@ const OrderManagement = () => {
                   groupClassName="mb-0 w-100"
                   placeholderText="To Date"
                   filterDate={() => true}
+                />
+              </div>
+              <div style={{ minWidth: "180px", maxWidth: "220px", flex: "0 1 200px" }}>
+                <CustomFormSelect
+                  label="Service"
+                  controlId="order_service_filter"
+                  options={[
+                    { value: "", label: "All Services" },
+                    ...serviceOptions,
+                  ]}
+                  register={
+                    dateFilterRegister as unknown as UseFormRegister<any>
+                  }
+                  fieldName="service_id"
+                  defaultValue={selectedServiceId}
+                  setValue={
+                    setDateFilterValue as (name: string, value: any) => void
+                  }
+                  onChange={(e) => {
+                    const serviceId = e.target.value;
+                    setSelectedServiceId(serviceId);
+                    setCurrentPage(1);
+                    if (serviceId) {
+                      fetchOrdersByService(serviceId);
+                    } else {
+                      void refreshData();
+                    }
+                  }}
+                  asCol={false}
+                  noBottomMargin
+                  menuPortal
+                  clearResetsTo=""
+                  placeholder="All Services"
                 />
               </div>
             </>

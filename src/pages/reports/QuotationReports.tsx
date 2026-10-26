@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Row, Col, Button, Form } from "react-bootstrap";
 import CustomMultiSelect from "../../components/CustomMultiSelect";
 import CustomDatePicker from "../../components/CustomDatePicker";
@@ -12,6 +12,7 @@ import { FranchiseModel } from "../../lib/models/FranchiseModels";
 import { AreaModel } from "../../lib/models/AreaModel";
 import { exportData } from "../../services/exportService";
 import { ApiPaths } from "../../lib/global/remote/apiPaths";
+import { apiRequest } from "../../lib/global/remote/apiHelper";
 import { buildQuoteReportExportPayload } from "../../lib/reports/reportExportPayload";
 import type { ReportOptionType } from "../../lib/reports/reportFilterShared";
 import {
@@ -26,6 +27,65 @@ import {
 } from "../../lib/reports/reportFilterShared";
 
 type OptionType = ReportOptionType;
+
+async function fetchReportSubCategoryOptions(
+  categoryIds: string[]
+): Promise<OptionType[]> {
+  const ids = categoryIds.map((id) => String(id ?? "").trim()).filter(Boolean);
+  const requests =
+    ids.length > 0
+      ? ids.map((category_id) =>
+          apiRequest(
+            `/subcategory/getDropDown?${new URLSearchParams({
+              category_id,
+            }).toString()}`,
+            "GET"
+          )
+        )
+      : [apiRequest("/subcategory/getDropDown", "GET")];
+  const results = await Promise.all(requests);
+  const seen = new Set<string>();
+  const options: OptionType[] = [];
+  for (const response of results) {
+    if (!response.success) continue;
+    const payload =
+      response.data && typeof response.data === "object"
+        ? (response.data as Record<string, unknown>)
+        : null;
+    const nested =
+      payload?.data &&
+      typeof payload.data === "object" &&
+      !Array.isArray(payload.data)
+        ? (payload.data as Record<string, unknown>)
+        : null;
+        const payloadRecords = payload?.records;
+        const payloadSubcategories = payload?.subcategories;
+        const nestedRecords = nested?.records;
+        
+        const rawRecords = Array.isArray(payloadRecords)
+          ? payloadRecords
+          : Array.isArray(nestedRecords)
+            ? nestedRecords
+            : Array.isArray(payloadSubcategories)
+              ? payloadSubcategories
+              : [];
+    for (const item of rawRecords) {
+      const row =
+        item && typeof item === "object"
+          ? (item as Record<string, unknown>)
+          : {};
+      const value = String(row._id ?? row.id ?? row.value ?? "").trim();
+      if (!value || seen.has(value)) continue;
+      const label = String(row.name ?? row.label ?? "").trim() || value;
+      seen.add(value);
+      options.push({ value, label });
+    }
+  }
+  options.sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+  );
+  return options;
+}
 
 const QUOTE_STATUS_OPTIONS: OptionType[] = [
   allOption,
@@ -57,6 +117,7 @@ const QuotationReportsPage = ({ franchiseId = "all" }: QuotationReportsPageProps
   const [quoteStatus, setQuoteStatus] = useState<OptionType[]>([]);
   const [services, setServices] = useState<OptionType[]>([]);
   const [categories, setCategories] = useState<OptionType[]>([]);
+  const [subCategories, setSubCategories] = useState<OptionType[]>([]);
   const [partners, setPartners] = useState<OptionType[]>([]);
   const [userSelections, setUserSelections] = useState<OptionType[]>([]);
   const [states, setStates] = useState<OptionType[]>([]);
@@ -65,6 +126,9 @@ const QuotationReportsPage = ({ franchiseId = "all" }: QuotationReportsPageProps
   const [areas, setAreas] = useState<OptionType[]>([]);
 
   const [categoryOptions, setCategoryOptions] = useState<OptionType[]>([
+    allOption,
+  ]);
+  const [subCategoryOptions, setSubCategoryOptions] = useState<OptionType[]>([
     allOption,
   ]);
   const [serviceOptions, setServiceOptions] = useState<OptionType[]>([
@@ -204,6 +268,18 @@ const QuotationReportsPage = ({ franchiseId = "all" }: QuotationReportsPageProps
     }
   };
 
+  const loadSubCategoryOptions = useCallback(async () => {
+    const categoryIds = categories
+      .filter((c) => c.value !== "all")
+      .map((c) => c.value);
+    try {
+      const rows = await fetchReportSubCategoryOptions(categoryIds);
+      setSubCategoryOptions([allOption, ...rows]);
+    } catch {
+      setSubCategoryOptions([allOption]);
+    }
+  }, [categories]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -333,6 +409,21 @@ const QuotationReportsPage = ({ franchiseId = "all" }: QuotationReportsPageProps
   }, [serviceOptions]);
 
   useEffect(() => {
+    setSubCategories((prev) => {
+      const valid = new Set(subCategoryOptions.map((o) => o.value));
+      if (prev.every((p) => p.value === "all" || valid.has(p.value))) {
+        return prev;
+      }
+      return prev.filter((p) => p.value === "all" || valid.has(p.value));
+    });
+  }, [subCategoryOptions]);
+
+  useEffect(() => {
+    setSubCategories([]);
+    setSubCategoryOptions([allOption]);
+  }, [categories]);
+
+  useEffect(() => {
     setCities((prev) => {
       const valid = new Set(cityOptions.map((o) => o.value));
       if (prev.every((p) => p.value === "all" || valid.has(p.value))) {
@@ -390,6 +481,7 @@ const QuotationReportsPage = ({ franchiseId = "all" }: QuotationReportsPageProps
     setQuoteStatus([]);
     setServices([]);
     setCategories([]);
+    setSubCategories([]);
     setPartners([]);
     setUserSelections([]);
     setStates([]);
@@ -477,6 +569,27 @@ const QuotationReportsPage = ({ franchiseId = "all" }: QuotationReportsPageProps
                       setCategories
                     )
                   }
+                  asCol={false}
+                  selectedChipsMaxHeight={multiSelectChipsMaxHeight}
+                />
+              </Col>
+
+              <Col md={6}>
+                <Form.Label className={filterLabelClass}>
+                  Sub Category
+                </Form.Label>
+                <CustomMultiSelect
+                  label=""
+                  controlId="Sub Category"
+                  options={subCategoryOptions}
+                  value={subCategories}
+                  onChange={(selectedOptions) =>
+                    handleSelectWithAll(
+                      selectedOptions as OptionType[],
+                      setSubCategories
+                    )
+                  }
+                  onMenuOpen={() => void loadSubCategoryOptions()}
                   asCol={false}
                   selectedChipsMaxHeight={multiSelectChipsMaxHeight}
                 />

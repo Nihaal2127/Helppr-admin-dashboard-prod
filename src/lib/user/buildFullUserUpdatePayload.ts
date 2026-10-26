@@ -118,6 +118,14 @@ function getPartnerFieldsFromUser(
     out.verification_rejection_reason = user.verification_rejection_reason;
   }
 
+  const rawDirectOrder =
+    record.direct_order ?? user.direct_order ?? record.is_direct_order;
+  out.direct_order =
+    rawDirectOrder === true ||
+    rawDirectOrder === "true" ||
+    rawDirectOrder === 1 ||
+    rawDirectOrder === "1";
+
   Object.assign(out, partnerSubscriptionPayloadFromUser(user));
 
   return out;

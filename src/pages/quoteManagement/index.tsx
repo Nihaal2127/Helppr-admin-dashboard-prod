@@ -14,6 +14,7 @@ import CustomTable from "../../components/CustomTable";
 import CustomCloseButton from "../../components/CustomCloseButton";
 import CustomActionColumn from "../../components/CustomActionColumn";
 import CustomDatePicker from "../../components/CustomDatePicker";
+import CustomFormSelect from "../../components/CustomFormSelect";
 import CustomTextFieldDatePicket from "../../components/CustomTextFieldDatePicket";
 import CustomTextFieldSelect from "../../components/CustomTextFieldSelect";
 import CustomTextFieldTimePicket from "../../components/CustomTextFieldTimePicket";
@@ -80,6 +81,61 @@ import QuoteAddressOptionsLoader from "../../components/quote/QuoteAddressOption
 import {
   openQuoteFromNotification,
 } from "../../lib/notifications/notificationNavigation";
+import { apiRequest } from "../../lib/global/remote/apiHelper";
+
+/** Unique subcategory options from `GET /quote/getAll` records. */
+function mapSubCategoryOptionsFromQuoteGetAll(data: unknown): OptionType[] {
+  const payload =
+    data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+  const nested =
+    payload?.data &&
+    typeof payload.data === "object" &&
+    !Array.isArray(payload.data)
+      ? (payload.data as Record<string, unknown>)
+      : null;
+      const payloadRecords = payload?.records;
+const nestedRecords = nested?.records;
+const payloadSubcategories = payload?.subcategories;
+const dataRecords = Array.isArray(data) ? data : null;
+
+const rawRecords = Array.isArray(payloadRecords)
+  ? payloadRecords
+  : Array.isArray(nestedRecords)
+    ? nestedRecords
+    : Array.isArray(payloadSubcategories)
+      ? payloadSubcategories
+      : dataRecords ?? [];
+  const seen = new Set<string>();
+  const options: OptionType[] = [];
+  for (const item of rawRecords) {
+    const row =
+      item && typeof item === "object"
+        ? (item as Record<string, unknown>)
+        : {};
+    const nestedSub =
+      row.subcategory_id &&
+      typeof row.subcategory_id === "object" &&
+      !Array.isArray(row.subcategory_id)
+        ? (row.subcategory_id as Record<string, unknown>)
+        : null;
+    const value = String(
+      nestedSub?._id ??
+        nestedSub?.id ??
+        (typeof row.subcategory_id === "string" ||
+        typeof row.subcategory_id === "number"
+          ? row.subcategory_id
+          : "") ??
+        ""
+    ).trim();
+    if (!value || value === "[object Object]" || seen.has(value)) continue;
+    const label = String(
+      row.subcategory_name ?? nestedSub?.name ?? nestedSub?.label ?? value
+    ).trim();
+    seen.add(value);
+    options.push({ value, label: label || value });
+  }
+  return options;
+}
 
 /** Time-only value for `CustomTimePicker` / stored fields (same pattern as quote schedule edit). */
 const toTimeStorageFromDate = (date: Date | null): string =>
@@ -186,6 +242,9 @@ const QuoteManagement = () => {
   const [searchClearVersion, setSearchClearVersion] = useState(0);
   const [fromDate, setFromDate] = useState<string | null>(null);
   const [toDate, setToDate] = useState<string | null>(null);
+  const [selectedServiceId, setSelectedServiceId] = useState("");
+const [serviceFilterOptions, setServiceFilterOptions] = useState<OptionType[]>([]);
+const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
   const [utilitySearchKey, setUtilitySearchKey] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -194,8 +253,9 @@ const QuoteManagement = () => {
     useForm<{
       from_date: string;
       to_date: string;
+      service_id: string;
     }>({
-      defaultValues: { from_date: "", to_date: "" },
+      defaultValues: { from_date: "", to_date: "", service_id: "" },
     });
   const { register, setValue, watch } = useForm<any>({
     defaultValues: franchiseHeaderFormDefaults(),
@@ -205,6 +265,7 @@ const QuoteManagement = () => {
     register: addQuoteRegister,
     handleSubmit: handleAddQuoteSubmit,
     setValue: setAddQuoteValue,
+    getValues: getAddQuoteValues,
     watch: watchAddQuote,
     reset: resetAddQuote,
     formState: { errors: addQuoteErrors, isSubmitted: addQuoteFormSubmitted },
@@ -217,6 +278,7 @@ const QuoteManagement = () => {
       requested_partner: "",
       employee_id: "",
       category_id: "",
+      subcategory_id: "",
       requested_date: "",
       schedule_duration: "",
       requested_date_to: "",
@@ -258,6 +320,9 @@ const QuoteManagement = () => {
   const [quoteCategoryOptions, setQuoteCategoryOptions] = useState<
     OptionType[]
   >([]);
+  const [quoteSubCategoryOptions, setQuoteSubCategoryOptions] = useState<
+    OptionType[]
+  >([]);
   const addQuoteServiceId = String(addQuote.requested_services ?? "").trim();
   const hasAddQuoteServiceSelected = Boolean(addQuoteServiceId);
   const currentUserRole = getLocalStorage(AppConstant.userRole);
@@ -285,6 +350,7 @@ const QuoteManagement = () => {
     setAddQuoteValue("user_id", "", { shouldValidate: false });
     setAddQuoteValue("user_name", "", { shouldValidate: false });
     setAddQuoteValue("category_id", "", { shouldValidate: false });
+    setAddQuoteValue("subcategory_id", "", { shouldValidate: false });
     setAddQuoteValue("requested_services", "", { shouldValidate: false });
     setAddQuoteValue("requested_partner", "", { shouldValidate: false });
     setAddQuoteValue("employee_id", "", { shouldValidate: false });
@@ -297,6 +363,7 @@ const QuoteManagement = () => {
     setAddQuoteValue("service_price", "", { shouldValidate: false });
     setAddQuoteValue("user_description", "", { shouldValidate: false });
     setAddQuoteValue("admin_description", "", { shouldValidate: false });
+    setQuoteSubCategoryOptions([]);
     setCreateQuoteAddressId("");
     setAddQuoteAddressUi(emptyAddQuoteAddressUi());
   }, [setAddQuoteValue]);
@@ -455,6 +522,60 @@ const QuoteManagement = () => {
     addQuote.requested_services,
     quoteCatalogServicesForPartner,
     selectedPartnerCatalogRecord,
+  ]);
+
+  /**
+   * Add Quote Sub Category dropdown —
+   * `GET /quote/getAll?page=1&limit=10` (+ optional category_id / subcategory_id / franchise_id).
+   */
+  useEffect(() => {
+    const categoryId = String(addQuote.category_id ?? "").trim();
+    let cancelled = false;
+    if (!categoryId || !showAddQuote) {
+      setQuoteSubCategoryOptions([]);
+      return;
+    }
+    void (async () => {
+      const params = new URLSearchParams({
+        page: "1",
+        limit: "10",
+        category_id: categoryId,
+      });
+      const franchiseId = String(
+        isSuperAdminOrStaff
+          ? addQuote.franchise_id ?? ""
+          : sessionFranchiseIdForQuoteCatalog
+      ).trim();
+      if (franchiseId) params.set("franchise_id", franchiseId);
+      const response = await apiRequest(
+        `/quote/getAll?${params.toString()}`,
+        "GET"
+      );
+      if (cancelled) return;
+      if (!response.success) {
+        setQuoteSubCategoryOptions([]);
+        return;
+      }
+      const options = mapSubCategoryOptionsFromQuoteGetAll(response.data);
+      setQuoteSubCategoryOptions(options);
+      const selectedSub = String(
+        getAddQuoteValues("subcategory_id") ?? ""
+      ).trim();
+      if (selectedSub && !options.some((option) => option.value === selectedSub)) {
+        setAddQuoteValue("subcategory_id", "", { shouldValidate: false });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    addQuote.category_id,
+    addQuote.franchise_id,
+    showAddQuote,
+    isSuperAdminOrStaff,
+    sessionFranchiseIdForQuoteCatalog,
+    getAddQuoteValues,
+    setAddQuoteValue,
   ]);
 
   const selectedAddQuoteServiceOption = useMemo(() => {
@@ -680,12 +801,129 @@ const QuoteManagement = () => {
       keyword: searchKeyword,
       from_date: fromDate,
       to_date: toDate,
+      service_id: selectedServiceId || undefined,
       franchise_id:
         franchiseIdForApiQuery(headerFranchiseScope) || undefined,
     }),
-    [searchKeyword, fromDate, toDate, headerFranchiseScope]
+    [
+      searchKeyword,
+      fromDate,
+      toDate,
+      selectedServiceId,
+      headerFranchiseScope,
+    ]
   );
-
+  useEffect(() => {
+    let cancelled = false;
+  
+    const loadServiceFilterOptions = async () => {
+      setIsServiceFilterLoading(true);
+  
+      try {
+        const params = new URLSearchParams({
+          page: "1",
+          limit: "100",
+        });
+  
+        const franchiseId = String(
+          franchiseIdForApiQuery(headerFranchiseScope) || ""
+        ).trim();
+  
+        if (franchiseId) {
+          params.set("franchise_id", franchiseId);
+        }
+  
+        const response = await apiRequest(
+          `/quote/getAll?${params.toString()}`,
+          "GET"
+        );
+  
+        if (cancelled) return;
+  
+        if (!response.success) {
+          setServiceFilterOptions([]);
+          return;
+        }
+  
+        // Reuse the quote records to build unique service options.
+        const payload = response.data as any;
+        const nested =
+          payload?.data && typeof payload.data === "object"
+            ? payload.data
+            : null;
+  
+        const records = Array.isArray(payload?.records)
+          ? payload.records
+          : Array.isArray(nested?.records)
+            ? nested.records
+            : Array.isArray(payload?.data)
+              ? payload.data
+              : Array.isArray(payload)
+                ? payload
+                : [];
+  
+        const unique = new Map<string, OptionType>();
+  
+        for (const record of records) {
+          const rawService =
+            record?.service_id ??
+            record?.requested_services ??
+            record?.services;
+  
+          const serviceObject =
+            rawService && typeof rawService === "object"
+              ? rawService
+              : null;
+  
+          const value = String(
+            serviceObject?._id ??
+              serviceObject?.id ??
+              (typeof rawService === "string" ||
+              typeof rawService === "number"
+                ? rawService
+                : "")
+          ).trim();
+  
+          const label = String(
+            serviceObject?.name ??
+              serviceObject?.service_name ??
+              record?.service_name ??
+              record?.requested_services_name ??
+              ""
+          ).trim();
+  
+          if (value && value !== "[object Object]") {
+            unique.set(value, {
+              value,
+              label: label || value,
+            });
+          }
+        }
+  
+        setServiceFilterOptions(
+          Array.from(unique.values()).sort((a, b) =>
+            a.label.localeCompare(b.label)
+          )
+        );
+      } catch (error) {
+        console.error("Failed to load quote service filters:", error);
+  
+        if (!cancelled) {
+          setServiceFilterOptions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsServiceFilterLoading(false);
+        }
+      }
+    };
+  
+    void loadServiceFilterOptions();
+  
+    return () => {
+      cancelled = true;
+    };
+  }, [headerFranchiseScope]);
   /** Refetch the paginated list for the active tab (not tab totals — those use `refreshQuoteSummaryFromGetCount`). */
   const fetchData = useCallback(async () => {
     const seq = (quoteListFetchSeqRef.current += 1);
@@ -829,6 +1067,7 @@ const QuoteManagement = () => {
     );
     if (ok) return;
     setAddQuoteValue("category_id", "", { shouldValidate: false });
+    setAddQuoteValue("subcategory_id", "", { shouldValidate: false });
     setAddQuoteValue("requested_services", "", { shouldValidate: false });
     setAddQuoteValue("requested_date", "", { shouldValidate: false });
     setAddQuoteValue("schedule_duration", "", { shouldValidate: false });
@@ -1368,6 +1607,7 @@ const QuoteManagement = () => {
       requested_partner: "",
       employee_id: "",
       category_id: "",
+      subcategory_id: "",
       requested_date: "",
       schedule_duration: "",
       requested_date_to: "",
@@ -1441,6 +1681,11 @@ const QuoteManagement = () => {
       return;
     }
 
+    if (!String(data.subcategory_id ?? "").trim()) {
+      showErrorAlert("Please select a sub category.");
+      return;
+    }
+
     if (!String(data.requested_services ?? "").trim()) {
       showErrorAlert("Please select a service.");
       return;
@@ -1496,7 +1741,8 @@ const QuoteManagement = () => {
       }
     }
 
-    // POST .../quote/create — only service_price is sent as price; tax / commission / min. deposit are UI-only.
+    // POST /quote/create — real API body includes subcategory_id.
+    const subcategoryId = String(data.subcategory_id ?? "").trim();
     const body = buildCreateQuotePayload({
       user_id: data.user_id,
       category_id: data.category_id,
@@ -1522,7 +1768,10 @@ const QuoteManagement = () => {
       return;
     }
 
-    const ok = await createQuote(body);
+    const ok = await createQuote({
+      ...body,
+      subcategory_id: subcategoryId,
+    });
     if (ok) {
       setShowAddQuote(false);
       setCreateQuoteAddressId("");
@@ -1572,16 +1821,22 @@ const QuoteManagement = () => {
         ))}
       </div>
 
+      <style>{`
+        .custom-utilty-tools-inline.custom-utilty-tools-inline--quotes-wide-search.quote-mgmt-search-compact > .d-flex.flex-column {
+          max-width: 22rem;
+          flex: 0 1 20rem;
+        }
+      `}</style>
       <CustomUtilityBox
         key={utilitySearchKey}
         title=""
         searchHint={"Search service name, partner name, user name"}
         toolsInlineRow
-        toolsInlineClassName="custom-utilty-tools-inline--quotes-wide-search"
+        toolsInlineClassName="custom-utilty-tools-inline--quotes-wide-search quote-mgmt-search-compact"
         hideMoreIcon
         controlSlot={
           <>
-            <div style={{ minWidth: "220px" }}>
+            <div style={{ minWidth: "160px", maxWidth: "180px", flex: "0 0 160px" }}>
               <Form.Label className="mb-1 fw-medium">From date</Form.Label>
               <CustomDatePicker
                 label=""
@@ -1611,7 +1866,7 @@ const QuoteManagement = () => {
                 filterDate={() => true}
               />
             </div>
-            <div style={{ minWidth: "220px" }}>
+            <div style={{ minWidth: "160px", maxWidth: "180px", flex: "0 0 160px" }}>
               <Form.Label className="mb-1 fw-medium">To date</Form.Label>
               <CustomDatePicker
                 label=""
@@ -1639,8 +1894,37 @@ const QuoteManagement = () => {
                 }}
               />
             </div>
+            <div style={{ minWidth: "180px", maxWidth: "220px", flex: "0 1 200px" }}>
+              <CustomFormSelect
+                label="Service"
+                controlId="quote_service_filter"
+                options={[
+                  { value: "", label: "All Services" },
+                  ...serviceFilterOptions,
+                ]}
+                register={
+                  quoteFilterRegister as unknown as UseFormRegister<any>
+                }
+                fieldName="service_id"
+                defaultValue={selectedServiceId}
+                setValue={
+                  setQuoteFilterValue as (name: string, value: any) => void
+                }
+                onChange={(e) => {
+                  setSelectedServiceId(e.target.value);
+                  setCurrentPage(1);
+                }}
+                isDisabled={isServiceFilterLoading}
+                asCol={false}
+                noBottomMargin
+                menuPortal
+                clearResetsTo=""
+                placeholder="All Services"
+              />
+            </div>
           </>
         }
+        
         afterSearchSlot={
           <Button
             variant="outline-secondary"
@@ -2012,6 +2296,9 @@ const QuoteManagement = () => {
                               setAddQuoteValue("category_id", "", {
                                 shouldValidate: false,
                               });
+                              setAddQuoteValue("subcategory_id", "", {
+                                shouldValidate: false,
+                              });
                               setAddQuoteValue("requested_services", "", {
                                 shouldValidate: false,
                               });
@@ -2073,6 +2360,9 @@ const QuoteManagement = () => {
                               { shouldValidate: addQuoteFormSubmitted }
                             );
                             if (name === "category_id") {
+                              setAddQuoteValue("subcategory_id", "", {
+                                shouldValidate: false,
+                              });
                               setAddQuoteValue("requested_services", "", {
                                 shouldValidate: false,
                               });
@@ -2116,6 +2406,42 @@ const QuoteManagement = () => {
                           }
                         />
                       </Col>
+                      <Col xs={12} md={6}>
+                        <CustomTextFieldSelect
+                          key={`add-quote-sub-${addQuote.category_id || "none"}`}
+                          label="Sub Category"
+                          controlId="add-quote-subcategory"
+                          asCol={false}
+                          options={quoteSubCategoryOptions}
+                          register={
+                            addQuoteRegister as unknown as UseFormRegister<any>
+                          }
+                          fieldName="subcategory_id"
+                          error={addQuoteErrors.subcategory_id}
+                          defaultValue={addQuote.subcategory_id}
+                          setValue={
+                            setAddQuoteValue as (name: string, value: any) => void
+                          }
+                          placeholder={
+                            !addQuotePartnerSelected
+                              ? "Select partner first"
+                              : !addQuote.category_id
+                                ? "Select category first"
+                                : quoteSubCategoryOptions.length
+                                  ? "Select sub category"
+                                  : "No sub categories"
+                          }
+                          menuPortal
+                          isClearable
+                          isDisabled={
+                            addQuoteFieldsLocked ||
+                            !addQuotePartnerSelected ||
+                            !String(addQuote.category_id ?? "").trim()
+                          }
+                        />
+                      </Col>
+                    </Row>
+                    <Row className="gy-3 gx-md-4 align-items-start">
                       <Col xs={12} md={6}>
                         <CustomTextFieldSelect
                           key={`add-quote-svc-${addQuote.category_id || "none"}`}
@@ -2214,6 +2540,9 @@ const QuoteManagement = () => {
                               setAddQuoteValue("category_id", "", {
                                 shouldValidate: false,
                               });
+                              setAddQuoteValue("subcategory_id", "", {
+                                shouldValidate: false,
+                              });
                               setAddQuoteValue("requested_services", "", {
                                 shouldValidate: false,
                               });
@@ -2252,6 +2581,8 @@ const QuoteManagement = () => {
                           isDisabled={addQuoteFieldsLocked}
                         />
                       </Col>
+                    </Row>
+                    <Row className="gy-3 gx-md-4 align-items-start">
                       <Col xs={12} md={6}>
                         <CustomTextFieldSelect
                           label="Category"
@@ -2273,6 +2604,9 @@ const QuoteManagement = () => {
                               { shouldValidate: addQuoteFormSubmitted }
                             );
                             if (name === "category_id") {
+                              setAddQuoteValue("subcategory_id", "", {
+                                shouldValidate: false,
+                              });
                               setAddQuoteValue("requested_services", "", {
                                 shouldValidate: false,
                               });
@@ -2313,6 +2647,40 @@ const QuoteManagement = () => {
                           menuPortal
                           isDisabled={
                             addQuoteFieldsLocked || !addQuotePartnerSelected
+                          }
+                        />
+                      </Col>
+                      <Col xs={12} md={6}>
+                        <CustomTextFieldSelect
+                          key={`add-quote-sub-${addQuote.category_id || "none"}-franchise`}
+                          label="Sub Category"
+                          controlId="add-quote-subcategory-franchise"
+                          asCol={false}
+                          options={quoteSubCategoryOptions}
+                          register={
+                            addQuoteRegister as unknown as UseFormRegister<any>
+                          }
+                          fieldName="subcategory_id"
+                          error={addQuoteErrors.subcategory_id}
+                          defaultValue={addQuote.subcategory_id}
+                          setValue={
+                            setAddQuoteValue as (name: string, value: any) => void
+                          }
+                          placeholder={
+                            !addQuotePartnerSelected
+                              ? "Select partner first"
+                              : !addQuote.category_id
+                                ? "Select category first"
+                                : quoteSubCategoryOptions.length
+                                  ? "Select sub category"
+                                  : "No sub categories"
+                          }
+                          menuPortal
+                          isClearable
+                          isDisabled={
+                            addQuoteFieldsLocked ||
+                            !addQuotePartnerSelected ||
+                            !String(addQuote.category_id ?? "").trim()
                           }
                         />
                       </Col>

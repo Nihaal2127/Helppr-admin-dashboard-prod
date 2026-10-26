@@ -36,6 +36,12 @@ type QuoteInfoDialogProps = {
   onRefreshData?: () => void;
 };
 
+const QUOTE_SUB_CATEGORY_LABELS: Record<string, string> = {
+  "example-subcat-1": "Facial Care",
+  "example-subcat-2": "Hair Styling",
+  "example-subcat-3": "Pipe Repair",
+};
+
 const STATUS_TEXT_CLASS: Record<string, string> = {
   new: "text-secondary",
   pending: "text-warning",
@@ -156,6 +162,14 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
       serviceFees?.min_deposit_type,
     ]
   );
+
+  const subCategoryLabel = useMemo(() => {
+    const name = String(displayQuote.subcategory_name ?? "").trim();
+    if (name) return name;
+    const id = String(displayQuote.subcategory_id ?? "").trim();
+    if (!id) return "-";
+    return QUOTE_SUB_CATEGORY_LABELS[id] ?? id;
+  }, [displayQuote.subcategory_id, displayQuote.subcategory_name]);
 
   const serviceLabel = useMemo(() => {
     const candidates = [
@@ -308,6 +322,7 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
                     : undefined
                 }
               />
+              <DetailsRow title="Sub Category" value={subCategoryLabel} />
               <DetailsRow
                 title="Quote status"
                 value={
