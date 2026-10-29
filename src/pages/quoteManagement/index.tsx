@@ -259,6 +259,34 @@ function compareIsoDateOnlyAsc(aIso: string, bIso: string): number | null {
   return startOfLocalDay(a).getTime() - startOfLocalDay(b).getTime();
 }
 
+/** Calendar `YYYY-MM-DD` from API date/ISO values without UTC day-shift on date-only strings. */
+function ymdFromUnknownDate(value: unknown): string | null {
+  const t = String(value ?? "").trim();
+  if (!t) return null;
+  const iso = t.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return null;
+  return toIsoCalendarDate(d);
+}
+
+/**
+ * Quote list From/To date filter uses the table **Created Date** column.
+ * `GET /quote/getAll` ignores from_date/to_date query params, so this is applied locally.
+ */
+function quoteMatchesFromToDateFilter(
+  quote: QuoteRow,
+  from: string | null,
+  to: string | null
+): boolean {
+  if (!from && !to) return true;
+  const created = ymdFromUnknownDate(quote.created_at);
+  if (!created) return false;
+  if (from && created < from) return false;
+  if (to && created > to) return false;
+  return true;
+}
+
 const addQuoteTimePickerAllowAllHours = (): boolean => true;
 
 const QuoteManagement = () => {
@@ -931,21 +959,41 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
   /** Refetch the paginated list for the active tab (not tab totals — those use `refreshQuoteSummaryFromGetCount`). */
   const fetchData = useCallback(async () => {
     const seq = (quoteListFetchSeqRef.current += 1);
+    const filterFromDate = String(quoteListFilters.from_date ?? "").trim() || null;
+    const filterToDate = String(quoteListFilters.to_date ?? "").trim() || null;
+    const dateFilterActive = Boolean(filterFromDate || filterToDate);
+    const apiListFilters = {
+      keyword: quoteListFilters.keyword,
+      service_id: quoteListFilters.service_id,
+      franchise_id: quoteListFilters.franchise_id,
+    };
     const res = await fetchQuotes(
       selectedTab,
-      currentPage,
-      pageSize,
-      quoteListFilters,
+      dateFilterActive ? 1 : currentPage,
+      dateFilterActive ? Math.max(pageSize, 1000) : pageSize,
+      apiListFilters,
       sortBy
     );
     if (seq !== quoteListFetchSeqRef.current) return;
-    if (res.response) {
-      setQuoteRows(res.quotes);
-      setTotalPages(res.totalPages);
-    } else {
+    if (!res.response) {
       setQuoteRows([]);
       setTotalPages(0);
+      return;
     }
+    if (!dateFilterActive) {
+      setQuoteRows(res.quotes);
+      setTotalPages(res.totalPages);
+      return;
+    }
+    const filtered = res.quotes.filter((quote) =>
+      quoteMatchesFromToDateFilter(quote, filterFromDate, filterToDate)
+    );
+    const pages =
+      filtered.length === 0 ? 0 : Math.ceil(filtered.length / pageSize);
+    const pageIndex = Math.min(Math.max(currentPage, 1), Math.max(pages, 1));
+    const start = (pageIndex - 1) * pageSize;
+    setQuoteRows(filtered.slice(start, start + pageSize));
+    setTotalPages(pages);
   }, [currentPage, pageSize, quoteListFilters, selectedTab, sortBy]);
 
   /** Ignore stale `getCount` responses when the header franchise filter changes quickly. */

@@ -194,18 +194,42 @@ function serviceRowSubCategoryName(row: Record<string, unknown>): string {
   );
 }
 
+function serviceRowSubCategoryId(row: Record<string, unknown>): string {
+  return (
+    idField(row.subcategory_id) ||
+    idField(row.sub_category_id) ||
+    idField(row.subcategory) ||
+    idField(row.sub_category)
+  );
+}
+
+function serviceRecordId(row: Record<string, unknown>): string {
+  return idField(row._id) || idField(row.service_id) || idField(row.id);
+}
+
 type SubCategoryLookup = {
   nameById: Map<string, string>;
+  nameByServiceId: Map<string, string>;
+  idByServiceId: Map<string, string>;
 };
 
 async function fetchSubCategoryLookup(): Promise<SubCategoryLookup> {
   const nameById = new Map<string, string>();
+  const nameByServiceId = new Map<string, string>();
+  const idByServiceId = new Map<string, string>();
   const addPayload = (data: unknown) => {
     const page = extractSubCategoryPage(data, 200);
     for (const row of page.records) {
       const id = String(row._id ?? "").trim();
       const name = String(row.name ?? "").trim();
       if (id && name) nameById.set(id, name);
+      const serviceIds = Array.isArray(row.service_ids) ? row.service_ids : [];
+      for (const serviceId of serviceIds) {
+        const sid = String(serviceId ?? "").trim();
+        if (!sid) continue;
+        if (id) idByServiceId.set(sid, id);
+        if (name) nameByServiceId.set(sid, name);
+      }
     }
   };
 
@@ -227,7 +251,7 @@ async function fetchSubCategoryLookup(): Promise<SubCategoryLookup> {
   );
   if (listRes.success) addPayload(listRes.data);
 
-  return { nameById };
+  return { nameById, nameByServiceId, idByServiceId };
 }
 
 function withServiceSubCategoryName(
@@ -236,16 +260,172 @@ function withServiceSubCategoryName(
 ): ServiceModel {
   const row = service as unknown as Record<string, unknown>;
   const existing = serviceRowSubCategoryName(row);
+  const subId = serviceRowSubCategoryId(row);
   if (existing) {
-    return { ...service, subcategory_name: existing } as ServiceModel;
+    return {
+      ...service,
+      subcategory_name: existing,
+      ...(subId ? { subcategory_id: subId } : {}),
+    } as ServiceModel;
   }
-  const subId =
-    idField(row.subcategory_id) || idField(row.sub_category_id);
   const fromId = subId ? lookup.nameById.get(subId) ?? "" : "";
   if (fromId) {
-    return { ...service, subcategory_name: fromId } as ServiceModel;
+    return {
+      ...service,
+      subcategory_name: fromId,
+      ...(subId ? { subcategory_id: subId } : {}),
+    } as ServiceModel;
+  }
+  const serviceId = serviceRecordId(row);
+  const fromLink = serviceId ? lookup.nameByServiceId.get(serviceId) ?? "" : "";
+  if (fromLink) {
+    const linkedId = lookup.idByServiceId.get(serviceId) ?? "";
+    return {
+      ...service,
+      subcategory_name: fromLink,
+      ...(linkedId ? { subcategory_id: linkedId } : {}),
+    } as ServiceModel;
   }
   return { ...service, subcategory_name: "" } as ServiceModel;
+}
+
+/**
+ * Service-tab search against `GET /service/getAll`.
+ * Sends `keyword` / `search` / `q` plus subcategory fields so the backend
+ * can match service name, category, and sub category.
+ */
+async function fetchServicesIncludingSubCategorySearch(
+  page: number,
+  pageSize: number,
+  filters: {
+    keyword?: string;
+    status?: string;
+    sort?: string;
+    is_request?: string;
+  },
+  sortBy: ServerTableSortBy,
+  franchiseId?: string
+): Promise<{
+  response: boolean;
+  services: ServiceModel[];
+  totalPages: number;
+  resolvedPage?: number;
+}> {
+  const keyword = String(filters.keyword ?? "").trim();
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(pageSize),
+  });
+  if (keyword) {
+    params.set("keyword", keyword);
+    params.set("search", keyword);
+    params.set("q", keyword);
+    params.set("subcategory", keyword);
+    params.set("subcategory_name", keyword);
+    params.set("sub_category", keyword);
+    params.set("sub_category_name", keyword);
+  }
+  if (filters.is_request) {
+    params.set("is_request", String(filters.is_request));
+  }
+  const status = String(filters.status ?? "").trim();
+  if (status && status !== "All") {
+    params.set("is_active", status.toLowerCase());
+  }
+  const primarySort = sortBy[0];
+  if (primarySort?.id) {
+    const order = primarySort.desc ? "desc" : "asc";
+    params.set("sort_by", String(primarySort.id));
+    params.set("sort_order", order);
+    params.set("order", order);
+  }
+  const fid = String(franchiseId ?? "").trim();
+  if (fid) params.set("franchise_id", fid);
+
+  const response = await apiRequest(
+    `/service/getAll?${params.toString()}`,
+    "GET"
+  );
+  if (!response.success) {
+    return { response: false, services: [], totalPages: 0 };
+  }
+
+  const payload = (response as { data?: unknown }).data as
+    | Record<string, unknown>
+    | undefined;
+  const nested =
+    payload?.data && typeof payload.data === "object"
+      ? (payload.data as Record<string, unknown>)
+      : null;
+  const records = Array.isArray(payload?.records)
+    ? payload.records
+    : Array.isArray(nested?.records)
+    ? nested.records
+    : Array.isArray(payload?.data)
+    ? payload.data
+    : [];
+  const totalPages = Number(
+    payload?.totalPages ?? nested?.totalPages ?? 0
+  );
+  const currentPage = Number(
+    payload?.currentPage ?? nested?.currentPage ?? page
+  );
+
+  return {
+    response: true,
+    services: records as ServiceModel[],
+    totalPages,
+    ...(currentPage !== page ? { resolvedPage: currentPage } : {}),
+  };
+}
+
+async function ensureServiceLinkedToSubCategory(
+  serviceId: string,
+  catalogFranchiseId?: string
+): Promise<void> {
+  const sid = String(serviceId ?? "").trim();
+  if (!sid) return;
+  const { response, service } = await fetchServiceById(
+    sid,
+    catalogFranchiseId
+  );
+  if (!response || !service) return;
+  const subId = serviceRowSubCategoryId(
+    service as unknown as Record<string, unknown>
+  );
+  if (!subId) return;
+  const subRes = await apiRequest(
+    `/subcategory/get/${subId}`,
+    "GET",
+    undefined,
+    false,
+    true,
+    true
+  );
+  if (!subRes.success) return;
+  const record = unwrapSubCategoryGet(subRes.data);
+  if (!record) return;
+  const mapped = mapSubCategoryRecord(record);
+  const currentIds = Array.isArray(mapped.service_ids)
+    ? mapped.service_ids.map((id) => String(id ?? "").trim()).filter(Boolean)
+    : [];
+  if (currentIds.includes(sid)) return;
+  await apiRequest(
+    updateSubCategoryPath(subId),
+    "PUT",
+    {
+      name: mapped.name,
+      desc: mapped.desc ?? "",
+      category_id: mapped.category_id,
+      service_ids: [...currentIds, sid],
+      is_active: mapped.is_active !== false,
+      ...(mapped.image_url ? { image_url: mapped.image_url } : {}),
+    },
+    false,
+    false,
+    false,
+    true
+  );
 }
 
 function extractRequestedCategoryPage(
@@ -353,7 +533,18 @@ function mergeServiceDetailForDialog(
   row: Record<string, unknown>,
   api: ServiceModel
 ): ServiceModel {
-  return mergeModerationDetail(row, api);
+  const merged = mergeModerationDetail(row, api) as unknown as Record<
+    string,
+    unknown
+  >;
+  const subId = serviceRowSubCategoryId(merged) || serviceRowSubCategoryId(row);
+  const subName =
+    serviceRowSubCategoryName(merged) || serviceRowSubCategoryName(row);
+  return {
+    ...(merged as object),
+    ...(subId ? { subcategory_id: subId } : {}),
+    ...(subName ? { subcategory_name: subName } : {}),
+  } as ServiceModel;
 }
 
 function mergeCategoryDetailForDialog<T extends object>(
@@ -571,17 +762,32 @@ const ServiceManagement = () => {
             }
           }
         } else if (selected === "box-service") {
+          const serviceFilters = {
+            ...filters,
+            ...(showRequestedService ? { is_request: "true" } : {}),
+          };
+          const keyword = String(filters.keyword ?? "").trim();
+          const searched = keyword
+            ? await fetchServicesIncludingSubCategorySearch(
+                currentPage,
+                pageSize,
+                serviceFilters,
+                sortBy,
+                catalogFranchiseId || undefined
+              )
+            : null;
+          const fromServiceApi =
+            !searched || !searched.response
+              ? await fetchService(
+                  currentPage,
+                  pageSize,
+                  serviceFilters,
+                  sortBy,
+                  catalogFranchiseId || undefined
+                )
+              : searched;
           const { response, services, totalPages, resolvedPage } =
-            await fetchService(
-            currentPage,
-            pageSize,
-            {
-              ...filters,
-              ...(showRequestedService ? { is_request: "true" } : {}),
-            },
-            sortBy,
-            catalogFranchiseId || undefined
-          );
+            fromServiceApi;
           if (response) {
             if (generation !== fetchGenerationRef.current) return;
             if (typeof resolvedPage === "number") {
@@ -1180,7 +1386,15 @@ const setSubCategoryActive = useCallback(
           showAddEditServiceDialog(
             true,
             service,
-            openRequestedService,
+            () => {
+              void (async () => {
+                await ensureServiceLinkedToSubCategory(
+                  openId,
+                  catalogFranchiseId
+                );
+                openRequestedService();
+              })();
+            },
             true
           );
         }
@@ -1414,7 +1628,15 @@ const setSubCategoryActive = useCallback(
               showAddEditServiceDialog(
                 true,
                 record,
-                () => void refreshTableAfterMutation("box-service"),
+                () => {
+                  void (async () => {
+                    await ensureServiceLinkedToSubCategory(
+                      sid,
+                      catalogFranchiseId
+                    );
+                    await refreshTableAfterMutation("box-service");
+                  })();
+                },
                 true,
                 undefined,
                 true
@@ -1571,7 +1793,15 @@ const setSubCategoryActive = useCallback(
               showAddEditServiceDialog(
                 true,
                 record,
-                openRequestedService,
+                () => {
+                  void (async () => {
+                    await ensureServiceLinkedToSubCategory(
+                      sid,
+                      catalogFranchiseId
+                    );
+                    openRequestedService();
+                  })();
+                },
                 true
               );
             }}
@@ -1676,12 +1906,12 @@ const setSubCategoryActive = useCallback(
               : showRequestedCategory
               ? "Search Category name"
               : showRequestedService
-              ? "Search Service name"
+              ? "Search Service name, Category, Sub Category"
               : selectedBox === "box-category"
               ? "Search Category name"
               : selectedBox === "box-subcategory"
               ? "Search Sub Category name"
-              : "Search Service name, Category"
+              : "Search Service name, Category, Sub Category"
           }
           onSearch={(value) => {
             handleFilterChange({ keyword: value });

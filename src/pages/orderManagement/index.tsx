@@ -52,6 +52,35 @@ const toIsoCalendarDate = (date: Date | null): string | null => {
   return `${y}-${m}-${d}`;
 };
 
+/** Calendar `YYYY-MM-DD` from API date/ISO values without UTC day-shift on date-only strings. */
+function ymdFromUnknownDate(value: unknown): string | null {
+  const t = String(value ?? "").trim();
+  if (!t) return null;
+  const iso = t.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return null;
+  return toIsoCalendarDate(d);
+}
+
+/**
+ * Order list From/To date filter uses the table **Order Date** column.
+ * `GET /order/getAll` date params overlap schedule dates, which is why
+ * older Order Date rows (e.g. Aug/Sept) still appeared for an Oct range.
+ */
+function orderMatchesFromToDateFilter(
+  order: OrderModel,
+  from: string | null,
+  to: string | null
+): boolean {
+  if (!from && !to) return true;
+  const orderDate = ymdFromUnknownDate(order.order_date);
+  if (!orderDate) return false;
+  if (from && orderDate < from) return false;
+  if (to && orderDate > to) return false;
+  return true;
+}
+
 function orderServiceFilterId(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "object") {
@@ -197,22 +226,46 @@ const OrderManagement = () => {
     async (filters: { keyword?: string; status?: string; sort?: string }) => {
       if (fetchRef.current) return;
       fetchRef.current = true;
+      const filterFromDate = String(listFilters.from_date ?? "").trim() || null;
+      const filterToDate = String(listFilters.to_date ?? "").trim() || null;
+      const dateFilterActive = Boolean(filterFromDate || filterToDate);
+      const apiListFilters = {
+        ...(listFilters.keyword ? { keyword: listFilters.keyword } : {}),
+        ...(listFilters.franchise_id
+          ? { franchise_id: listFilters.franchise_id }
+          : {}),
+      };
       const {
         response,
         orders,
         totalPages: tp,
       } = await fetchOrder(
-        currentPage,
-        pageSize,
+        dateFilterActive ? 1 : currentPage,
+        dateFilterActive ? Math.max(pageSize, 1000) : pageSize,
         {
           ...filters,
-          ...listFilters,
+          ...apiListFilters,
         },
         sortBy
       );
       if (response) {
-        setOrderList(orders);
-        setTotalPages(tp);
+        if (!dateFilterActive) {
+          setOrderList(orders);
+          setTotalPages(tp);
+        } else {
+          const filtered = orders.filter((order) =>
+            orderMatchesFromToDateFilter(order, filterFromDate, filterToDate)
+          );
+          const pages =
+            filtered.length === 0 ? 0 : Math.ceil(filtered.length / pageSize);
+          const pageIndex = Math.min(
+            Math.max(currentPage, 1),
+            Math.max(pages, 1)
+          );
+          const start = (pageIndex - 1) * pageSize;
+          setOrderList(filtered.slice(start, start + pageSize));
+          setTotalPages(pages);
+        }
         setServiceOptions((prev) =>
           mergeServiceFilterOptions(prev, serviceFilterOptionsFromOrders(orders))
         );
@@ -225,21 +278,40 @@ const OrderManagement = () => {
   const fetchOrdersByService = useCallback(
     async (serviceId: string) => {
       if (!serviceId) return;
-  
+      const filterFromDate = String(listFilters.from_date ?? "").trim() || null;
+      const filterToDate = String(listFilters.to_date ?? "").trim() || null;
+      const dateFilterActive = Boolean(filterFromDate || filterToDate);
+      const apiListFilters = {
+        ...(listFilters.keyword ? { keyword: listFilters.keyword } : {}),
+        ...(listFilters.franchise_id
+          ? { franchise_id: listFilters.franchise_id }
+          : {}),
+      };
+
       const { response, orders, totalPages: tp } = await fetchOrder(
         1,
-        pageSize,
+        dateFilterActive ? Math.max(pageSize, 1000) : pageSize,
         {
           status: String(selectedStatus),
           service_id: serviceId,
-          ...listFilters,
+          ...apiListFilters,
         },
         sortBy
       );
-  
+
       if (response) {
-        setOrderList(orders);
-        setTotalPages(tp);
+        if (!dateFilterActive) {
+          setOrderList(orders);
+          setTotalPages(tp);
+        } else {
+          const filtered = orders.filter((order) =>
+            orderMatchesFromToDateFilter(order, filterFromDate, filterToDate)
+          );
+          const pages =
+            filtered.length === 0 ? 0 : Math.ceil(filtered.length / pageSize);
+          setOrderList(filtered.slice(0, pageSize));
+          setTotalPages(pages);
+        }
         setCurrentPage(1);
         setServiceOptions((prev) =>
           mergeServiceFilterOptions(prev, serviceFilterOptionsFromOrders(orders))

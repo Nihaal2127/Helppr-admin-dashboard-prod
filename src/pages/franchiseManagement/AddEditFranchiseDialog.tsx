@@ -47,6 +47,8 @@ type AddEditFranchiseDialogProps = {
 type OptionType = {
   value: string;
   label: string;
+  /** Present on subcategory catalog rows (`GET /subcategory/getAll`). */
+  category_id?: string;
 };
 
 type ServiceLite = {
@@ -54,6 +56,12 @@ type ServiceLite = {
   name: string;
   category_id: string;
   category_name?: string;
+  subcategory_id?: string;
+};
+
+type ViewCategoryServiceBlock = {
+  subCategory: string;
+  services: string[];
 };
 
 type ViewCategoryServicesGroup = {
@@ -61,6 +69,8 @@ type ViewCategoryServicesGroup = {
   categoryLabel: string;
   subCategories: string[];
   services: string[];
+  /** Subcategory + the services that belong to it (for view dividers). */
+  blocks: ViewCategoryServiceBlock[];
 };
 
 const UNCATEGORIZED_KEY = "__uncategorized__";
@@ -72,6 +82,50 @@ const SELECT_ALL_SUB_CATEGORY: OptionType = {
 };
 const isMongoObjectId = (value: string) =>
   /^[a-f\d]{24}$/i.test(String(value ?? "").trim());
+
+function catalogRefId(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    const s = String(value).trim();
+    return !s || s === "undefined" || s === "null" || s === "[object Object]"
+      ? ""
+      : s;
+  }
+  if (typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    return String(rec._id ?? rec.id ?? "").trim();
+  }
+  return "";
+}
+
+function labelsEqual(a: string, b: string): boolean {
+  return (
+    String(a ?? "").trim().toLowerCase() ===
+    String(b ?? "").trim().toLowerCase()
+  );
+}
+
+/** Parent category for a subcategory: catalog category_id, then selected services, then name match. */
+function resolveSubcategoryParentCategoryId(
+  opt: OptionType,
+  allServices: ServiceLite[],
+  franchiseServiceIds: string[],
+  categoryOptions: OptionType[]
+): string {
+  const fromOpt = String(opt.category_id ?? "").trim();
+  if (fromOpt) return fromOpt;
+  const subId = String(opt.value ?? "").trim();
+  const svc = allServices.find(
+    (s) =>
+      String(s.subcategory_id ?? "").trim() === subId &&
+      franchiseServiceIds.includes(String(s._id))
+  );
+  if (svc?.category_id) return String(svc.category_id);
+  const nameMatch = categoryOptions.find(
+    (c) => c.value !== "select-all" && labelsEqual(c.label, opt.label)
+  );
+  return nameMatch?.value ? String(nameMatch.value) : "";
+}
 
 function extractSubCategoryDropDownOptions(data: unknown): OptionType[] {
   const buckets: unknown[] = [];
@@ -114,8 +168,16 @@ function extractSubCategoryDropDownOptions(data: unknown): OptionType[] {
     const label =
       String(row.name ?? row.label ?? row.subcategory_name ?? "").trim() ||
       value;
+    const categoryId =
+      catalogRefId(row.category_id) ||
+      catalogRefId(row.category) ||
+      catalogRefId(row.categoryId);
     seen.add(value);
-    options.push({ value, label });
+    options.push({
+      value,
+      label,
+      ...(categoryId ? { category_id: categoryId } : {}),
+    });
   }
   return options;
 }
@@ -209,6 +271,7 @@ function mergeSubCategoryOptions(
     merged.push({
       value,
       label: String(o.label ?? "").trim() || value,
+      ...(o.category_id ? { category_id: o.category_id } : {}),
     });
   }
   for (let i = 0; i < extraIds.length; i++) {
@@ -965,12 +1028,37 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     [serviceOptions, serviceIds]
   );
 
+  const subCategorySelectOptions = useMemo(() => {
+    const selectedCats = new Set(categoryIds.map(String));
+    const rows = subCategoryOptions.filter((o) => {
+      if (o.value === "select-all") return false;
+      if (selectedCats.size === 0) return false;
+      const parentId = resolveSubcategoryParentCategoryId(
+        o,
+        allServices,
+        serviceIds,
+        categoryOptions
+      );
+      if (parentId) return selectedCats.has(String(parentId));
+      return false;
+    });
+    return rows.length > 0
+      ? [SELECT_ALL_SUB_CATEGORY, ...rows]
+      : [];
+  }, [
+    subCategoryOptions,
+    categoryIds,
+    allServices,
+    serviceIds,
+    categoryOptions,
+  ]);
+
   const selectedSubCategoryOptions = useMemo(
     () =>
-      subCategoryOptions.filter(
+      subCategorySelectOptions.filter(
         (o) => o.value !== "select-all" && subCategoryIds.includes(o.value)
       ),
-    [subCategoryOptions, subCategoryIds]
+    [subCategorySelectOptions, subCategoryIds]
   );
 
   /** Keep chip order aligned with `areaIds` (not alphabetical options order). */
@@ -1020,13 +1108,64 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
             );
             return opt?.label ?? id;
           });
+    const selectedSubOpts = subCategoryOptions.filter(
+      (o) =>
+        o.value !== "select-all" &&
+        (subCatIds.includes(String(o.value)) ||
+          franchiseSubCategories.some((n) => labelsEqual(n, o.label)))
+    );
     const withSubCategories = (
-      groups: Omit<ViewCategoryServicesGroup, "subCategories">[]
-    ): ViewCategoryServicesGroup[] =>
-      groups.map((g) => ({
-        ...g,
-        subCategories: franchiseSubCategories,
-      }));
+      groups: Omit<ViewCategoryServicesGroup, "subCategories" | "blocks">[]
+    ): ViewCategoryServicesGroup[] => {
+      const byCat = new Map<string, OptionType[]>();
+      for (const opt of selectedSubOpts) {
+        const cid = resolveSubcategoryParentCategoryId(
+          opt,
+          allServices,
+          svcIds,
+          categoryOptions
+        );
+        if (!cid) continue;
+        if (!byCat.has(cid)) byCat.set(cid, []);
+        const arr = byCat.get(cid)!;
+        if (!arr.some((o) => o.value === opt.value)) arr.push(opt);
+      }
+      return groups.map((g) => {
+        const catSubs = byCat.get(String(g.categoryId)) ?? [];
+        const used = new Set<string>();
+        const blocks: ViewCategoryServiceBlock[] = [];
+        catSubs.forEach((sub) => {
+          const linked = g.services.filter((label) => {
+            const svc = allServices.find(
+              (s) =>
+                String(s.category_id) === String(g.categoryId) &&
+                labelsEqual(s.name, label) &&
+                String(s.subcategory_id ?? "").trim() === String(sub.value)
+            );
+            return Boolean(svc);
+          });
+          let names = linked;
+          if (
+            names.length === 0 &&
+            catSubs.length === 1 &&
+            g.services.length > 0
+          ) {
+            names = [g.services[0]];
+          }
+          names.forEach((n) => used.add(n));
+          blocks.push({ subCategory: sub.label, services: names });
+        });
+        const rest = g.services.filter((n) => !used.has(n));
+        if (rest.length > 0 || blocks.length === 0) {
+          blocks.push({ subCategory: "", services: rest });
+        }
+        return {
+          ...g,
+          subCategories: catSubs.map((o) => o.label),
+          blocks,
+        };
+      });
+    };
 
     const serviceLabel = (sid: string, index: number): string => {
       const fromAll = allServices.find((x) => String(x._id) === sid);
@@ -1121,7 +1260,8 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       }
     }
 
-    const built: Omit<ViewCategoryServicesGroup, "subCategories">[] = [];
+    const built: Omit<ViewCategoryServicesGroup, "subCategories" | "blocks">[] =
+      [];
     const seen = new Set<string>();
 
     for (const cid of catIdsOrder) {
@@ -1180,8 +1320,10 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
         ]);
       }
       if (nameCats.length > 0 || nameSvcs.length > 0) {
-        const groups: Omit<ViewCategoryServicesGroup, "subCategories">[] =
-          nameCats.map((label, i) => ({
+        const groups: Omit<
+          ViewCategoryServicesGroup,
+          "subCategories" | "blocks"
+        >[] = nameCats.map((label, i) => ({
             categoryId: catIdsOrder[i] || `cat-name-${i}`,
             categoryLabel: label,
             services: [] as string[],
@@ -1275,6 +1417,10 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
             category_name: s.category_name
               ? String(s.category_name)
               : undefined,
+            subcategory_id:
+              catalogRefId(s.subcategory_id) ||
+              catalogRefId(s.sub_category_id) ||
+              undefined,
           }));
         };
 
@@ -1560,6 +1706,19 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       (id) => !selectedIds.includes(id)
     );
     setCategoryIds(selectedIds);
+    setSubCategoryIds((prev) =>
+      prev.filter((id) => {
+        const opt = subCategoryOptions.find((o) => String(o.value) === String(id));
+        if (!opt) return false;
+        const parentId = resolveSubcategoryParentCategoryId(
+          opt,
+          allServices,
+          serviceIds,
+          categoryOptions
+        );
+        return Boolean(parentId && selectedIds.includes(String(parentId)));
+      })
+    );
 
     const auto = allServices
       .filter((svc) => selectedIds.includes(String(svc.category_id)))
@@ -1591,7 +1750,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     subCategorySelectionTouchedRef.current = true;
     const selectedIds = parseMultiSelectIds(
       selectedOptions,
-      subCategoryOptions
+      subCategorySelectOptions
     );
     setSubCategoryIds(selectedIds);
   };
@@ -1870,50 +2029,68 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                           </tr>
                         </thead>
                         <tbody>
-                          {viewCategoryServiceGroups.map((g) => (
-                            <tr
-                              key={g.categoryId}
-                              style={{ borderColor: "var(--lb1-border)" }}
-                            >
-                              <td className="align-top py-2 ps-3 text-wrap">
-                                <span style={{ color: "#101010" }}>
-                                  {g.categoryLabel}
-                                </span>
-                              </td>
-                              <td className="align-top py-2 ps-3 text-wrap">
-                                <div className="text-wrap">
-                                  {g.subCategories.length > 0 ? (
-                                    <ul className="mb-0 ps-3">
-                                      {g.subCategories.map((subName, si) => (
-                                        <li
-                                          key={`${g.categoryId}-sub-${si}`}
-                                        >
-                                          {subName}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  ) : (
-                                    <span className="text-muted">—</span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="align-top py-2 ps-3 pe-0">
-                                <div className="text-wrap">
-                                  {g.services.length > 0 ? (
-                                    <ul className="mb-0 ps-3">
-                                      {g.services.map((svcName, si) => (
-                                        <li key={`${g.categoryId}-svc-${si}`}>
-                                          {svcName}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  ) : (
-                                    <span className="text-muted">—</span>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
+                          {viewCategoryServiceGroups.map((g) => {
+                            const blocks =
+                              g.blocks && g.blocks.length > 0
+                                ? g.blocks
+                                : [
+                                    {
+                                      subCategory:
+                                        g.subCategories[0] ?? "",
+                                      services: g.services,
+                                    },
+                                  ];
+                            return blocks.map((block, bi) => {
+                              const dividerStyle = {
+                                borderColor: "var(--lb1-border)",
+                              };
+                              return (
+                                <tr
+                                  key={`${g.categoryId}-block-${bi}`}
+                                  style={{ borderColor: "var(--lb1-border)" }}
+                                >
+                                  {bi === 0 ? (
+                                    <td
+                                      className="align-top py-2 ps-3 text-wrap"
+                                      rowSpan={blocks.length}
+                                    >
+                                      <span style={{ color: "#101010" }}>
+                                        {g.categoryLabel}
+                                      </span>
+                                    </td>
+                                  ) : null}
+                                  <td
+                                    className="align-top py-2 ps-3 text-wrap"
+                                    style={dividerStyle}
+                                  >
+                                    {block.subCategory ? (
+                                      <span>{block.subCategory}</span>
+                                    ) : (
+                                      <span className="text-muted">—</span>
+                                    )}
+                                  </td>
+                                  <td
+                                    className="align-top py-2 ps-3 pe-0"
+                                    style={dividerStyle}
+                                  >
+                                    {block.services.length > 0 ? (
+                                      <ul className="mb-0 ps-3">
+                                        {block.services.map((svcName, si) => (
+                                          <li
+                                            key={`${g.categoryId}-svc-${bi}-${si}`}
+                                          >
+                                            {svcName}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    ) : (
+                                      <span className="text-muted">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            });
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -2091,7 +2268,7 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
                 <CustomMultiSelect
                   label="Sub Category"
                   controlId="Sub Category"
-                  options={subCategoryOptions}
+                  options={subCategorySelectOptions}
                   value={selectedSubCategoryOptions}
                   onChange={(opts) =>
                     handleSubCategorySelection(opts as OptionType[])

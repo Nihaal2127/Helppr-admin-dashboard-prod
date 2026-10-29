@@ -37,24 +37,66 @@ const CREATE_SUBCATEGORY_PATH = "/subcategory/create";
 const UPDATE_SUBCATEGORY_PATH = (id: string) => `/subcategory/update/${id}`;
 
 function extractCreatedSubCategoryId(data: unknown): string {
-  if (!data || typeof data !== "object") return "";
-  const root = data as Record<string, unknown>;
-  const nested =
-    root.data && typeof root.data === "object" && !Array.isArray(root.data)
-      ? (root.data as Record<string, unknown>)
+  const fromRecord = (row: Record<string, unknown> | null): string => {
+    if (!row) return "";
+    return String(
+      row._id ?? row.id ?? row.subcategory_id ?? row.sub_category_id ?? ""
+    ).trim();
+  };
+  const asRecord = (value: unknown): Record<string, unknown> | null =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
       : null;
-  const candidate =
+
+  const root = asRecord(data);
+  if (!root) return "";
+  const nested = asRecord(root.data);
+  const nestedRecord = asRecord(nested?.data);
+  const candidate = asRecord(
     root.record ??
-    root.subcategory ??
-    nested?.record ??
-    nested?.subcategory ??
-    (root._id || root.id ? root : undefined) ??
-    (nested && (nested._id || nested.id) ? nested : undefined);
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-    return String(root._id ?? root.id ?? nested?._id ?? nested?.id ?? "").trim();
-  }
-  const rec = candidate as Record<string, unknown>;
-  return String(rec._id ?? rec.id ?? rec.subcategory_id ?? "").trim();
+      root.subcategory ??
+      nested?.record ??
+      nested?.subcategory ??
+      nestedRecord?.record ??
+      nestedRecord?.subcategory ??
+      (root._id || root.id ? root : undefined) ??
+      (nested && (nested._id || nested.id) ? nested : undefined)
+  );
+  return (
+    fromRecord(candidate) ||
+    fromRecord(root) ||
+    fromRecord(nested) ||
+    fromRecord(nestedRecord)
+  );
+}
+
+async function persistSubCategoryServiceIds(input: {
+  id: string;
+  name: string;
+  description: string;
+  category_id: string;
+  service_ids: string[];
+  is_active?: boolean;
+}): Promise<boolean> {
+  const id = String(input.id ?? "").trim();
+  if (!id) return false;
+  const response = await apiRequest(
+    UPDATE_SUBCATEGORY_PATH(id),
+    "PUT",
+    {
+      name: input.name,
+      desc: input.description,
+      description: input.description,
+      category_id: input.category_id,
+      service_ids: input.service_ids ?? [],
+      is_active: input.is_active !== false,
+    },
+    false,
+    false,
+    false,
+    true
+  );
+  return Boolean(response.success);
 }
 
 
@@ -265,6 +307,10 @@ const AddEditSubCategoryDialog: React.FC<Props> & {
   /** Set after POST /subcategory/create from + Add Service so main Add does not create twice. */
   const createdViaAddServiceRef = useRef(false);
   const createdSubCategoryIdRef = useRef(String(subCategory?._id ?? "").trim());
+  const serviceIdsRef = useRef<string[]>(serviceIds);
+  serviceIdsRef.current = serviceIds;
+  const serviceChoicesRef = useRef(serviceChoices);
+  serviceChoicesRef.current = serviceChoices;
 
 const serviceOptions = useMemo(
   () => [
@@ -452,8 +498,11 @@ const handleServiceSelection = (
       const body = new FormData();
       body.append("name", name);
       body.append("description", description);
+      body.append("desc", description);
       body.append("category_id", matchedCategory.value);
-      body.append("service_ids", JSON.stringify(serviceIds ?? []));
+      const currentServiceIds = serviceIdsRef.current ?? [];
+      body.append("service_ids", JSON.stringify(currentServiceIds));
+      currentServiceIds.forEach((id) => body.append("service_ids", id));
       if (imageFile) {
         body.append("image", imageFile);
       }
@@ -467,19 +516,31 @@ const handleServiceSelection = (
       createdViaAddServiceRef.current = true;
       const createdId = extractCreatedSubCategoryId(response.data);
       if (createdId) createdSubCategoryIdRef.current = createdId;
+      if (createdId && currentServiceIds.length > 0) {
+        await persistSubCategoryServiceIds({
+          id: createdId,
+          name,
+          description,
+          category_id: matchedCategory.value,
+          service_ids: currentServiceIds,
+          is_active: true,
+        });
+      }
       void onSaved?.({
         name,
         description,
         category_id: matchedCategory.value,
         category_name: matchedCategory.label,
-        service_ids: serviceIds,
+        service_ids: currentServiceIds,
         image: imageFile,
       });
     }
 
     const categoryLabel =
       matchedCategory.label || lockedCategoryLabel || "Selected Category";
-    const previousIds = new Set(serviceChoices.map((s) => s.value));
+    const previousIds = new Set(
+      serviceChoicesRef.current.map((s) => s.value)
+    );
     const subcategoryId = String(
       createdSubCategoryIdRef.current || subCategory?._id || ""
     ).trim();
@@ -488,7 +549,7 @@ const handleServiceSelection = (
       null,
       async () => {
         const services = await fetchServicesForCategoryDialog({
-          mode: isEditable ? "edit" : "add",
+          mode: "edit",
           categoryId: matchedCategory.value,
         });
         const nextChoices = services
@@ -501,10 +562,22 @@ const handleServiceSelection = (
         const newlyAdded = nextChoices
           .filter((s) => !previousIds.has(s.value))
           .map((s) => s.value);
-        if (newlyAdded.length > 0) {
-          setServiceIds((prev) =>
-            Array.from(new Set([...prev, ...newlyAdded]))
-          );
+        const nextServiceIds = Array.from(
+          new Set([...(serviceIdsRef.current ?? []), ...newlyAdded])
+        );
+        setServiceIds(nextServiceIds);
+        const linkedSubCategoryId = String(
+          createdSubCategoryIdRef.current || subCategory?._id || ""
+        ).trim();
+        if (linkedSubCategoryId && nextServiceIds.length > 0) {
+          await persistSubCategoryServiceIds({
+            id: linkedSubCategoryId,
+            name,
+            description,
+            category_id: matchedCategory.value,
+            service_ids: nextServiceIds,
+            is_active: subCategory?.is_active !== false,
+          });
         }
       },
       false,
@@ -647,8 +720,10 @@ const handleServiceSelection = (
       const body = new FormData();
       body.append("name", saved.name);
       body.append("description", saved.description);
+      body.append("desc", saved.description);
       body.append("category_id", saved.category_id);
       body.append("service_ids", JSON.stringify(saved.service_ids ?? []));
+      (saved.service_ids ?? []).forEach((id) => body.append("service_ids", id));
       if (saved.image) {
         body.append("image", saved.image);
       }
@@ -662,6 +737,23 @@ const handleServiceSelection = (
       createdViaAddServiceRef.current = true;
       const createdId = extractCreatedSubCategoryId(response.data);
       if (createdId) createdSubCategoryIdRef.current = createdId;
+    }
+
+    const persistId = String(
+      createdSubCategoryIdRef.current || subCategory?._id || ""
+    ).trim();
+    if (persistId) {
+      const linked = await persistSubCategoryServiceIds({
+        id: persistId,
+        name: saved.name,
+        description: saved.description,
+        category_id: saved.category_id,
+        service_ids: saved.service_ids ?? [],
+        is_active: subCategory?.is_active !== false,
+      });
+      if (!linked) return;
+    } else if (!isEditable) {
+      showErrorAlert("Sub category saved, but services could not be linked.");
     }
 
     const result = await onSaved?.(saved);
