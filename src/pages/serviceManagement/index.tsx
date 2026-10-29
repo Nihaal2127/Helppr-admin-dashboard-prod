@@ -357,12 +357,15 @@ async function fetchServicesIncludingSubCategorySearch(
     payload?.data && typeof payload.data === "object"
       ? (payload.data as Record<string, unknown>)
       : null;
-  const records = Array.isArray(payload?.records)
-    ? payload.records
-    : Array.isArray(nested?.records)
-    ? nested.records
-    : Array.isArray(payload?.data)
-    ? payload.data
+  const payloadRecords = payload?.records;
+  const nestedRecords = nested?.records;
+  const payloadData = payload?.data;
+  const records = Array.isArray(payloadRecords)
+    ? payloadRecords
+    : Array.isArray(nestedRecords)
+    ? nestedRecords
+    : Array.isArray(payloadData)
+    ? payloadData
     : [];
   const totalPages = Number(
     payload?.totalPages ?? nested?.totalPages ?? 0
