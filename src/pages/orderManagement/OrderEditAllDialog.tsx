@@ -80,13 +80,6 @@ import {
 } from "../../lib/form/missingRequiredFields";
 import type { MissingRequiredField } from "../../lib/form/missingRequiredFields";
 
-/** Interim options until a subcategory catalogue API exists. */
-const ORDER_SUB_CATEGORY_OPTIONS: OptionType[] = [
-  { value: "example-subcat-1", label: "Facial Care" },
-  { value: "example-subcat-2", label: "Hair Styling" },
-  { value: "example-subcat-3", label: "Pipe Repair" },
-];
-
 function orderSubCategoryId(order?: OrderModel | null): string {
   const rec = order as (OrderModel & Record<string, unknown>) | null | undefined;
   if (!rec) return "";
@@ -97,13 +90,56 @@ function orderSubCategoryId(order?: OrderModel | null): string {
   return String(ref ?? "").trim();
 }
 
-function orderSubCategoryName(id: string, order?: OrderModel | null): string {
+function subCategoryOptionsFromPartnerCatalog(
+  partner: Record<string, unknown> | null | undefined,
+  categoryId: string
+): OptionType[] {
+  const cid = String(categoryId ?? "").trim();
+  if (!partner || !cid) return [];
+  const providing = partner.active_subcategories_providing;
+  const rows = Array.isArray(providing) ? providing : [];
+  const seen = new Set<string>();
+  const options: OptionType[] = [];
+  for (const item of rows) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, any>;
+    const subcategory = row.subcategory;
+    const rowCategoryId = String(
+      row.category_id ?? subcategory?.category_id ?? ""
+    ).trim();
+    if (rowCategoryId !== cid) continue;
+    if (
+      row.is_active === false ||
+      row.effective_active === false ||
+      row.partner_enabled === false ||
+      row.global_active === false ||
+      row.franchise_enabled === false ||
+      subcategory?.is_active === false
+    ) {
+      continue;
+    }
+    const value = String(
+      subcategory?._id ?? subcategory?.id ?? row.subcategory_id ?? ""
+    ).trim();
+    const label = String(
+      subcategory?.name ?? subcategory?.label ?? row.subcategory_name ?? ""
+    ).trim();
+    if (!value || !label || seen.has(value)) continue;
+    seen.add(value);
+    options.push({ value, label });
+  }
+  return options.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function orderSubCategoryName(
+  id: string,
+  order?: OrderModel | null,
+  options?: OptionType[]
+): string {
   const value = String(id ?? "").trim();
   if (!value) return "";
-  const fromList = ORDER_SUB_CATEGORY_OPTIONS.find(
-    (option) => option.value === value
-  )?.label;
-  if (fromList) return fromList;
+  const fromOpts = options?.find((option) => option.value === value)?.label;
+  if (fromOpts) return fromOpts;
   if (orderSubCategoryId(order) === value) {
     const rec = order as (OrderModel & Record<string, unknown>) | null | undefined;
     const saved = String(
@@ -439,16 +475,6 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
   });
 
   const form = watch();
-  const editSubCategoryOptions = useMemo(() => {
-    const id = String(form.subcategory_id ?? orderSubCategoryId(orderRow)).trim();
-    if (!id || ORDER_SUB_CATEGORY_OPTIONS.some((option) => option.value === id)) {
-      return ORDER_SUB_CATEGORY_OPTIONS;
-    }
-    return [
-      ...ORDER_SUB_CATEGORY_OPTIONS,
-      { value: id, label: orderSubCategoryName(id, orderRow) },
-    ];
-  }, [form.subcategory_id, orderRow]);
   const offerIdWatch = String(form.offer_id ?? "").trim();
   const serviceId = String(form.requested_services ?? "").trim();
   const hasServiceSelected = Boolean(serviceId);
@@ -677,6 +703,25 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
       ),
     [quoteCategoryOptions, quoteCatalogServices, selectedPartnerCatalogRecord]
   );
+
+  const editSubCategoryOptions = useMemo(() => {
+    const cid = String(form.category_id ?? orderRow?.category_id ?? "").trim();
+    const options = subCategoryOptionsFromPartnerCatalog(
+      selectedPartnerCatalogRecord,
+      cid
+    );
+    const id = String(form.subcategory_id ?? orderSubCategoryId(orderRow)).trim();
+    if (!id || options.some((option) => option.value === id)) return options;
+    return [
+      { value: id, label: orderSubCategoryName(id, orderRow, options) },
+      ...options,
+    ];
+  }, [
+    selectedPartnerCatalogRecord,
+    form.category_id,
+    form.subcategory_id,
+    orderRow,
+  ]);
 
   const { quoteServiceOptionsForCategory, scheduleMode } = useMemo(() => {
     const cid = String(form.category_id ?? "").trim();
@@ -1407,7 +1452,11 @@ const OrderEditAllDialog: React.FC<OrderEditAllDialogProps> & {
     const subcategoryId = String(data.subcategory_id ?? "").trim();
     if (subcategoryId !== orderSubCategoryId(orderRow)) {
       payload.subcategory_id = subcategoryId;
-      payload.subcategory_name = orderSubCategoryName(subcategoryId, orderRow);
+      payload.subcategory_name = orderSubCategoryName(
+        subcategoryId,
+        orderRow,
+        editSubCategoryOptions
+      );
     }
     if (Object.keys(payload).length === 0) {
       showErrorAlert("No changes to save.");

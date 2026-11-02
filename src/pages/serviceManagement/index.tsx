@@ -153,11 +153,25 @@ function extractSubCategoryPage(
     : Array.isArray(data)
     ? data
     : [];
+  const pageMeta =
+    source.pagination && typeof source.pagination === "object"
+      ? (source.pagination as Record<string, unknown>)
+      : root.pagination && typeof root.pagination === "object"
+      ? (root.pagination as Record<string, unknown>)
+      : {};
   const totalRecords = Number(
     source.totalRecords ??
-      source.total ??
+      source.total_items ??
       source.totalItems ??
+      source.total ??
       source.count ??
+      root.totalItems ??
+      root.total_items ??
+      root.totalRecords ??
+      nested?.totalItems ??
+      nested?.total_items ??
+      pageMeta.totalItems ??
+      pageMeta.total_items ??
       rawRecords.length
   );
   const reportedPages = Number(source.totalPages ?? root.totalPages ?? 0);
@@ -689,27 +703,6 @@ const ServiceManagement = () => {
       requested_service:
         countModel.requested_service ?? countModel.total_requestedservice ?? 0,
     });
-    const countRecord = countModel as unknown as Record<string, unknown>;
-    setSubCategoryData((prev) => ({
-      Total:
-        "total_subcategory" in countRecord
-          ? Number(countRecord.total_subcategory ?? 0)
-          : prev.Total,
-      Active:
-        "active_subcategory" in countRecord
-          ? Number(countRecord.active_subcategory ?? 0)
-          : prev.Active,
-      Inactive:
-        "inactive_subcategory" in countRecord
-          ? Number(countRecord.inactive_subcategory ?? 0)
-          : prev.Inactive,
-      requested_subcategory:
-        Number(countRecord.requested_subcategory ?? 0) > 0
-          ? Number(countRecord.requested_subcategory)
-          : Number(countRecord.total_requestedsubcategory ?? 0) > 0
-          ? Number(countRecord.total_requestedsubcategory)
-          : prev.requested_subcategory,
-    }));
   }, [countModel]);
 
   const fetchData = useCallback(
@@ -809,6 +802,7 @@ const ServiceManagement = () => {
             setTotalPages(totalPages || 0);
           }
         } else if (selected === "box-subcategory") {
+          const franchiseId = String(catalogFranchiseId ?? "").trim();
           if (showRequestedSubCategory) {
             const params = new URLSearchParams({
               page: String(currentPage),
@@ -820,6 +814,7 @@ const ServiceManagement = () => {
               params.set("search", keyword);
               params.set("keyword", keyword);
             }
+            if (franchiseId) params.set("franchise_id", franchiseId);
             const response = await apiRequest(
               `/subcategory/getAll?${params.toString()}`,
               "GET"
@@ -849,6 +844,7 @@ const ServiceManagement = () => {
               params.set("is_active", "false");
               params.set("status", "inactive");
             }
+            if (franchiseId) params.set("franchise_id", franchiseId);
             const response = await apiRequest(
               `/subcategory/getAll?${params.toString()}`,
               "GET"
@@ -860,12 +856,43 @@ const ServiceManagement = () => {
             setTotalPages(page.totalPages);
             setSubCategoryData((prev) => {
               if (filters.status === "true") {
-                return { ...prev, Active: page.totalItems };
+                const nextActive = page.totalItems;
+                const nextInactive = Number(prev.Inactive ?? 0);
+                const prevTotal = Number(prev.Total ?? 0);
+                return {
+                  ...prev,
+                  Active: nextActive,
+                  Total:
+                    prevTotal > 0
+                      ? prevTotal
+                      : nextActive + nextInactive,
+                };
               }
               if (filters.status === "false") {
-                return { ...prev, Inactive: page.totalItems };
+                const nextInactive = page.totalItems;
+                const nextActive = Number(prev.Active ?? 0);
+                const prevTotal = Number(prev.Total ?? 0);
+                return {
+                  ...prev,
+                  Inactive: nextInactive,
+                  Total:
+                    prevTotal > 0
+                      ? prevTotal
+                      : nextActive + nextInactive,
+                };
               }
-              return { ...prev, Total: page.totalItems };
+              const nextTotal = page.totalItems;
+              const nextActive = Number(prev.Active ?? 0);
+              const nextInactive = Number(prev.Inactive ?? 0);
+              return {
+                ...prev,
+                Total:
+                  nextTotal > 0
+                    ? nextTotal
+                    : nextActive + nextInactive > 0
+                    ? nextActive + nextInactive
+                    : nextTotal,
+              };
             });
           }
         }
@@ -919,9 +946,8 @@ const ServiceManagement = () => {
     [fetchData, activeFilters]
   );
 
-  
-const fetchSubCategoryCounts = useCallback(async () => {
-  try {
+  const fetchSubCategoryCounts = useCallback(async () => {
+    const franchiseId = String(catalogFranchiseId ?? "").trim();
     const fetchCount = async (opts?: {
       status?: "true" | "false";
       isRequest?: boolean;
@@ -930,26 +956,21 @@ const fetchSubCategoryCounts = useCallback(async () => {
         page: "1",
         limit: "1",
       });
-
       if (opts?.isRequest) {
         params.set("is_request", "true");
       } else if (opts?.status) {
         params.set("is_active", opts.status);
-        params.set(
-          "status",
-          opts.status === "true" ? "active" : "inactive"
-        );
+        params.set("status", opts.status === "true" ? "active" : "inactive");
       }
-
+      if (franchiseId) params.set("franchise_id", franchiseId);
       const response = await apiRequest(
         `/subcategory/getAll?${params.toString()}`,
-        "GET"
+        "GET",
+        undefined,
+        false,
+        true
       );
-
-      if (!response.success) {
-        throw new Error("Failed to fetch subcategory counts");
-      }
-
+      if (!response.success) return null;
       return extractSubCategoryPage(response.data, 1).totalItems;
     };
 
@@ -960,29 +981,36 @@ const fetchSubCategoryCounts = useCallback(async () => {
       fetchCount({ isRequest: true }),
     ]);
 
-    setSubCategoryData((prev) => ({
-      ...prev,
-      Total: total,
-      Active: active,
-      Inactive: inactive,
-      requested_subcategory: requested,
-    }));
-  } catch (error) {
-    console.error("Failed to load subcategory counts:", error);
-  }
-}, []);
+    setSubCategoryData((prev) => {
+      const nextActive = Number(active ?? prev.Active ?? 0);
+      const nextInactive = Number(inactive ?? prev.Inactive ?? 0);
+      const nextTotal = Number(total ?? prev.Total ?? 0);
+      return {
+        Total:
+          nextTotal > 0
+            ? nextTotal
+            : nextActive + nextInactive > 0
+            ? nextActive + nextInactive
+            : nextTotal,
+        Active: nextActive,
+        Inactive: nextInactive,
+        requested_subcategory: Number(
+          requested ?? prev.requested_subcategory ?? 0
+        ),
+      };
+    });
+  }, [catalogFranchiseId]);
 
-useEffect(() => {
-  void fetchSubCategoryCounts();
-}, [fetchSubCategoryCounts]);
-
+  useEffect(() => {
+    void fetchSubCategoryCounts();
+  }, [fetchSubCategoryCounts]);
 
   const refreshTableAfterMutation = useCallback(
     async (box: string) => {
       await refreshSummaryCounts();
-      await refreshData(box);
+      await Promise.all([refreshData(box), fetchSubCategoryCounts()]);
     },
-    [refreshSummaryCounts, refreshData]
+    [refreshSummaryCounts, refreshData, fetchSubCategoryCounts]
   );
 
   const useFranchiseMappingToggle =
@@ -1834,7 +1862,14 @@ const setSubCategoryActive = useCallback(
                 id === "box-category"
                   ? categoryData
                   : id === "box-subcategory"
-                  ? subCategoryData
+                  ? {
+                      ...subCategoryData,
+                      Total:
+                        Number(subCategoryData.Total ?? 0) > 0
+                          ? Number(subCategoryData.Total)
+                          : Number(subCategoryData.Active ?? 0) +
+                            Number(subCategoryData.Inactive ?? 0),
+                    }
                   : serviceData
               }
               onSelect={(divId) => {

@@ -1713,6 +1713,23 @@ function AddEditUserDialogView({
     return Array.from(byId.values());
   }, [franchiseCityOptions, cities, user?.service_cities]);
 
+  /** Add Partner: Service Cities must not include the City already selected. */
+  const addPartnerServiceCityOptions = useMemo(() => {
+    const selectedCityId = String(watchedCityId ?? "").trim();
+    return (cities ?? []).filter(
+      (c) => String(c.value ?? "").trim() !== selectedCityId
+    );
+  }, [cities, watchedCityId]);
+
+  useEffect(() => {
+    if (!isAddPartner) return;
+    const selectedCityId = String(watchedCityId ?? "").trim();
+    if (!selectedCityId) return;
+    setServiceCityIds((prev) =>
+      prev.filter((id) => String(id) !== selectedCityId)
+    );
+  }, [isAddPartner, watchedCityId]);
+
   const handleServiceCitySelection = useCallback(
     (selectedOptions: CitySelectOption[]) => {
       setServiceCityIds(selectedOptions.map((o) => o.value));
@@ -2986,8 +3003,8 @@ function AddEditUserDialogView({
                             controlId="Cities"
                             asCol={false}
                             menuPortal
-                            options={cities ?? []}
-                            value={(cities ?? []).filter((c) =>
+                            options={addPartnerServiceCityOptions}
+                            value={addPartnerServiceCityOptions.filter((c) =>
                               serviceCityIds.includes(String(c.value))
                             )}
                             onChange={(opts) =>

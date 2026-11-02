@@ -52,12 +52,6 @@ import OrderAmountSummaryPanel from "./OrderAmountSummaryPanel";
 import { resolveExistingImageSrc } from "../../services/documentUploadService";
 import profilePlaceholder from "../../assets/icons/profile.svg";
 
-const ORDER_SUB_CATEGORY_LABELS: Record<string, string> = {
-  "example-subcat-1": "Facial Care",
-  "example-subcat-2": "Hair Styling",
-  "example-subcat-3": "Pipe Repair",
-};
-
 function nestedSubCategoryName(value: unknown): string {
   if (!value || typeof value !== "object") return "";
   const rec = value as Record<string, unknown>;
@@ -89,7 +83,7 @@ function orderSubCategoryLabel(order?: OrderModel | null): string {
       : ref ?? ""
   ).trim();
   if (!id) return "-";
-  return ORDER_SUB_CATEGORY_LABELS[id] ?? id;
+  return id;
 }
 
 type OrderInfoDialogProps = {

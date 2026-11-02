@@ -51,6 +51,11 @@ export function isAuthenticatedPathAllowed(
   const menuKey = keyForPath(p);
   const hasAllowList = Boolean(allowedMenuKeys && allowedMenuKeys.size > 0);
 
+  // Audit Logs is super admin only (not franchise admin, staff, or employee).
+  if (matchesPrefix(p, "/audit-logs")) {
+    return r === UserRole.ADMIN;
+  }
+
   if (r === UserRole.ADMIN) {
     return !isAdminDeniedPath(p);
   }

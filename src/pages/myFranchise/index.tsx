@@ -45,6 +45,8 @@ import { fetchCategoryById } from "../../services/categoryService";
 import { fetchServiceById } from "../../services/servicesService";
 import { getCount } from "../../services/getCountService";
 import { apiRequest } from "../../lib/global/remote/apiHelper";
+import { AppConstant } from "../../lib/global/AppConstant";
+import { getLocalStorage } from "../../lib/global/localStorageHelper";
 import FranchiseEmployeeDialog from "./FranchiseEmployeeDialog";
 import RequestedCategoryDialog from "./RequestedCategoryDialog";
 import RequestedServiceDialog from "./RequestedServiceDialog";
@@ -62,6 +64,56 @@ type ServicesViewMode = "catalog" | "requested";
 type CategoriesViewMode = "catalog" | "requested";
 
 type SubCategoriesViewMode = "catalog" | "requested";
+
+/** Same as super admin Sub Category filter: `/subcategory/getAll?franchise_id=`. */
+function sessionFranchiseIdForSubCategoryGetAll(): string {
+  return String(getLocalStorage(AppConstant.partnerId) ?? "").trim();
+}
+
+function withSubCategoryFranchiseId(params: URLSearchParams): URLSearchParams {
+  const fid = sessionFranchiseIdForSubCategoryGetAll();
+  if (fid) params.set("franchise_id", fid);
+  return params;
+}
+
+/** Summary Active → `is_active=true`, Inactive → `is_active=false`. */
+function franchiseSubCategoryIsActiveParam(
+  statusFilter?: string
+): "true" | "false" | undefined {
+  const s = String(statusFilter ?? "").trim().toLowerCase();
+  if (s === "true" || s === "active" || s === "1") return "true";
+  if (s === "false" || s === "inactive" || s === "0") return "false";
+  return undefined;
+}
+
+/**
+ * One list API, same pattern as Categories (`/franchise-category/getAll`):
+ * `GET /franchise-subcategory/getAll?page=&limit=&franchise_id=`
+ * plus `is_active=true|false` or `is_request=true`.
+ */
+function myFranchiseSubCategoryListUrl(opts: {
+  page: number;
+  limit: number;
+  keyword?: string;
+  statusFilter?: string;
+  requested?: boolean;
+}): string {
+  const params = withSubCategoryFranchiseId(
+    new URLSearchParams({
+      page: String(opts.page),
+      limit: String(opts.limit),
+    })
+  );
+  const keyword = String(opts.keyword ?? "").trim();
+  if (keyword) params.set("keyword", keyword);
+  if (opts.requested) {
+    params.set("is_request", "true");
+  } else {
+    const isActive = franchiseSubCategoryIsActiveParam(opts.statusFilter);
+    if (isActive) params.set("is_active", isActive);
+  }
+  return `/franchise-subcategory/getAll?${params.toString()}`;
+}
 
 type FranchiseBoxConfig = {
   id: BoxId;
@@ -178,6 +230,12 @@ function categoryCatalogServiceNames(cat: CategoryRow): string[] {
   return [];
 }
 
+const MONGO_OBJECT_ID = /^[a-f0-9]{24}$/i;
+
+function isMongoObjectId(value: string): boolean {
+  return MONGO_OBJECT_ID.test(String(value ?? "").trim());
+}
+
 function labelListFromUnknown(raw: unknown): string[] {
   const items = Array.isArray(raw)
     ? raw
@@ -193,6 +251,7 @@ function labelListFromUnknown(raw: unknown): string[] {
       label = String(
         rec.name ??
           rec.label ??
+          rec.service_name ??
           rec.subcategory_name ??
           rec.sub_category_name ??
           ""
@@ -201,11 +260,22 @@ function labelListFromUnknown(raw: unknown): string[] {
       label = String(item ?? "").trim();
     }
     const key = label.toLowerCase();
-    if (!label || label === "-" || seen.has(key)) continue;
+    if (!label || label === "-" || isMongoObjectId(label) || seen.has(key)) {
+      continue;
+    }
     seen.add(key);
     labels.push(label);
   }
   return labels;
+}
+
+/** First bucket that yields human-readable names (`related_services` before id arrays). */
+function firstNonEmptyLabelList(...buckets: unknown[]): string[] {
+  for (const bucket of buckets) {
+    const labels = labelListFromUnknown(bucket);
+    if (labels.length) return labels;
+  }
+  return [];
 }
 
 function catalogSubCategoryLabels(row: object): string[] {
@@ -213,6 +283,8 @@ function catalogSubCategoryLabels(row: object): string[] {
   const buckets = [
     rec.subcategory_names,
     rec.sub_category_names,
+    rec.subcategories,
+    rec.sub_categories,
     rec.subcategory_name,
     rec.sub_category_name,
     rec.subCategoryName,
@@ -228,6 +300,23 @@ function catalogSubCategoryLabels(row: object): string[] {
     }
   }
   return labels;
+}
+
+/** Services tab only: `GET /franchise-service/getAll` `subcategory_id.name`. */
+function serviceTabSubCategoryLabels(row: object): string[] {
+  const fromCatalog = catalogSubCategoryLabels(row);
+  if (fromCatalog.length) return fromCatalog;
+  const rec = row as Record<string, unknown>;
+  const raw = rec.subcategory_id ?? rec.sub_category_id;
+  let label = "";
+  if (raw != null && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    label = String(obj.name ?? obj.label ?? obj.subcategory_name ?? "").trim();
+  } else {
+    label = String(raw ?? "").trim();
+  }
+  if (!label || label === "-") return [];
+  return [label];
 }
 
 /** Normalize `POST /api/getCount` `record` values (numbers or numeric strings). */
@@ -362,6 +451,7 @@ type SubCategoryRow = {
   description?: string;
   image_url?: string;
   services?: unknown;
+  related_services?: unknown;
   service_names?: unknown;
   is_request?: boolean;
   approval_status?: string;
@@ -383,6 +473,13 @@ function textFromUnknown(value: unknown): string {
   return "";
 }
 
+/** API display names only — skip raw Mongo ObjectIds. */
+function displayNameFromUnknown(value: unknown): string {
+  const text = textFromUnknown(value);
+  if (!text || isMongoObjectId(text)) return "";
+  return text;
+}
+
 function idFromUnknown(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "string" || typeof value === "number") {
@@ -401,22 +498,32 @@ function mapFranchiseSubCategoryRecord(raw: unknown): SubCategoryRow {
   const category =
     row.category && typeof row.category === "object"
       ? (row.category as Record<string, unknown>)
+      : row.related_category && typeof row.related_category === "object"
+      ? (row.related_category as Record<string, unknown>)
+      : row.category_id && typeof row.category_id === "object"
+      ? (row.category_id as Record<string, unknown>)
       : null;
   const isActive =
-    row.is_active !== undefined
-      ? coerceCatalogRowActive(row.is_active)
-      : row.franchise_active !== undefined
+    row.franchise_active !== undefined
       ? coerceCatalogRowActive(row.franchise_active)
+      : row.is_active !== undefined
+      ? coerceCatalogRowActive(row.is_active)
       : true;
+  const relatedServices = row.related_services;
   return {
     ...(row as object),
     _id: String(row._id ?? row.id ?? row.subcategory_id ?? "").trim(),
-    name: textFromUnknown(row.name),
+    name: displayNameFromUnknown(row.name) || textFromUnknown(row.name),
     category_name:
-      textFromUnknown(row.category_name) ||
-      textFromUnknown(row.categoryName) ||
-      textFromUnknown(category?.name) ||
-      textFromUnknown(row.category_id),
+      displayNameFromUnknown(row.category_name) ||
+      displayNameFromUnknown(row.categoryName) ||
+      displayNameFromUnknown(category?.name) ||
+      displayNameFromUnknown(row.related_category) ||
+      displayNameFromUnknown(
+        row.category_id && typeof row.category_id === "object"
+          ? row.category_id
+          : ""
+      ),
     category_id: idFromUnknown(row.category_id) || idFromUnknown(category?._id),
     is_active: isActive,
     franchise_active:
@@ -426,8 +533,13 @@ function mapFranchiseSubCategoryRecord(raw: unknown): SubCategoryRow {
     desc: textFromUnknown(row.description ?? row.desc),
     description: textFromUnknown(row.description ?? row.desc),
     image_url: textFromUnknown(row.image_url ?? row.image),
-    services: row.services ?? row.related_services,
-    service_names: row.service_names,
+    related_services: relatedServices,
+    services: row.services,
+    service_names: firstNonEmptyLabelList(
+      relatedServices,
+      row.service_names,
+      row.services
+    ),
     is_request: Boolean(row.is_request),
     approval_status: textFromUnknown(row.approval_status),
     requested_by: row.requested_by,
@@ -457,38 +569,91 @@ function unwrapSubCategoryGetRecord(
     : null;
 }
 
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function firstFiniteNumber(...values: unknown[]): number {
+  for (const value of values) {
+    if (value == null || value === "") continue;
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return NaN;
+}
+
+function hasSubCategoryList(rec: Record<string, unknown> | null): boolean {
+  if (!rec) return false;
+  return (
+    Array.isArray(rec.records) ||
+    Array.isArray(rec.subcategories) ||
+    Array.isArray(rec.all_subcategories) ||
+    Array.isArray(rec.requested_subcategories)
+  );
+}
+
+function subCategoryRecordsFromSource(source: Record<string, unknown>, data: unknown): unknown[] {
+  if (Array.isArray(source.records)) return source.records;
+  if (Array.isArray(source.subcategories)) return source.subcategories;
+  if (Array.isArray(source.all_subcategories)) return source.all_subcategories;
+  if (Array.isArray(source.requested_subcategories)) {
+    return source.requested_subcategories;
+  }
+  if (Array.isArray(data)) return data;
+  return [];
+}
+
 function extractFranchiseSubCategoryPage(
   data: unknown,
   limit: number
-): { records: SubCategoryRow[]; totalPages: number; totalItems: number } {
-  const root =
-    data && typeof data === "object" ? (data as Record<string, unknown>) : {};
-  const nested =
-    root.data && typeof root.data === "object" && !Array.isArray(root.data)
-      ? (root.data as Record<string, unknown>)
-      : null;
-  const source =
-    Array.isArray(root.records) || Array.isArray(root.subcategories)
-      ? root
-      : nested &&
-        (Array.isArray(nested.records) || Array.isArray(nested.subcategories))
-      ? nested
-      : root;
-  const rawRecords = Array.isArray(source.records)
-    ? source.records
-    : Array.isArray(source.subcategories)
-    ? source.subcategories
-    : Array.isArray(data)
-    ? data
-    : [];
-  const totalItems = Number(
-    source.totalItems ??
-      source.totalRecords ??
-      source.total ??
-      source.count ??
-      rawRecords.length
+): {
+  records: SubCategoryRow[];
+  totalPages: number;
+  totalItems: number;
+  backendTotalItems?: number;
+} {
+  const root = objectRecord(data) ?? {};
+  const nested = objectRecord(root.data);
+  const source = hasSubCategoryList(root)
+    ? root
+    : hasSubCategoryList(nested)
+    ? nested!
+    : root;
+  const rawRecords = subCategoryRecordsFromSource(source, data);
+  const pageMeta =
+    objectRecord(source.pagination) ??
+    objectRecord(root.pagination) ??
+    objectRecord(nested?.pagination) ??
+    {};
+  const backendTotal = firstFiniteNumber(
+    source.totalItems,
+    source.total_items,
+    source.totalRecords,
+    source.total_records,
+    source.total,
+    source.count,
+    pageMeta.totalItems,
+    pageMeta.total_items,
+    pageMeta.totalRecords,
+    pageMeta.total,
+    root.totalItems,
+    root.total_items,
+    nested?.totalItems,
+    nested?.total_items
   );
-  const reportedPages = Number(source.totalPages ?? root.totalPages ?? 0);
+  const totalItems = Number.isFinite(backendTotal)
+    ? backendTotal
+    : rawRecords.length;
+  const reportedPages = firstFiniteNumber(
+    source.totalPages,
+    source.total_pages,
+    pageMeta.totalPages,
+    pageMeta.total_pages,
+    root.totalPages,
+    nested?.totalPages
+  );
   const pageSize = limit > 0 ? limit : 10;
   return {
     records: rawRecords.map(mapFranchiseSubCategoryRecord),
@@ -498,7 +663,8 @@ function extractFranchiseSubCategoryPage(
         : totalItems > 0
         ? Math.ceil(totalItems / pageSize)
         : 0,
-    totalItems: Number.isFinite(totalItems) ? totalItems : rawRecords.length,
+    totalItems,
+    backendTotalItems: Number.isFinite(backendTotal) ? backendTotal : undefined,
   };
 }
 
@@ -548,10 +714,19 @@ const MyFranchise = () => {
   >([]);
   const [subcategories, setSubcategories] = useState<SubCategoryRow[]>([]);
   const [subcategoryTotalPages, setSubcategoryTotalPages] = useState(0);
+  const [subcategoryListTotal, setSubcategoryListTotal] = useState(0);
+  const [subcategoryActiveTotal, setSubcategoryActiveTotal] = useState<
+    number | null
+  >(null);
+  const [subcategoryInactiveTotal, setSubcategoryInactiveTotal] = useState<
+    number | null
+  >(null);
   const [requestedSubcategoryTotal, setRequestedSubcategoryTotal] = useState<
     number | null
   >(null);
   const subcategoryFetchGenRef = useRef(0);
+  /** True when Sub Categories Active/Inactive/Total was clicked in the same event as box select. */
+  const subcatFilterClickRef = useRef(false);
 
   /** Dashboard totals from `POST /api/getCount` `{ type: "my-franchise" }` (preferred over list-length counts). */
   const [countSummaries, setCountSummaries] = useState<{
@@ -629,6 +804,53 @@ const MyFranchise = () => {
     }));
   }, []);
 
+  const refreshRequestedSubcategoryCount = useCallback(async () => {
+    const response = await apiRequest(
+      myFranchiseSubCategoryListUrl({
+        page: 1,
+        limit: 1,
+        requested: true,
+      }),
+      "GET",
+      undefined,
+      false,
+      true
+    );
+    if (!response.success) return;
+    const page = extractFranchiseSubCategoryPage(response.data, 1);
+    if (page.backendTotalItems != null) {
+      setRequestedSubcategoryTotal(page.backendTotalItems);
+    }
+  }, []);
+
+  /** Total / Active / Inactive cards use `totalItems` from `franchise-subcategory/getAll`. */
+  const refreshSubcategoryActiveInactiveCounts = useCallback(async () => {
+    const fetchStatusTotal = async (statusFilter?: "true" | "false") => {
+      const response = await apiRequest(
+        myFranchiseSubCategoryListUrl({
+          page: 1,
+          limit: 1,
+          statusFilter,
+        }),
+        "GET",
+        undefined,
+        false,
+        true
+      );
+      if (!response.success) return null;
+      const page = extractFranchiseSubCategoryPage(response.data, 1);
+      return page.backendTotalItems ?? page.totalItems;
+    };
+    const [total, active, inactive] = await Promise.all([
+      fetchStatusTotal(),
+      fetchStatusTotal("true"),
+      fetchStatusTotal("false"),
+    ]);
+    if (total != null) setSubcategoryListTotal(total);
+    if (active != null) setSubcategoryActiveTotal(active);
+    if (inactive != null) setSubcategoryInactiveTotal(inactive);
+  }, []);
+
   const refreshMyFranchiseCountSummaries = useCallback(async () => {
     const countRes = await getCount("my-franchise");
     if (countRes.responseCount && countRes.countModel) {
@@ -637,21 +859,14 @@ const MyFranchise = () => {
     } else {
       setCountSummaries(null);
     }
-    const requestedParams = new URLSearchParams({
-      page: "1",
-      limit: "1",
-      is_request: "true",
-    });
-    const requestedRes = await apiRequest(
-      `/subcategory/getAll?${requestedParams.toString()}`,
-      "GET"
-    );
-    if (requestedRes.success) {
-      setRequestedSubcategoryTotal(
-        extractFranchiseSubCategoryPage(requestedRes.data, 1).totalItems
-      );
-    }
-  }, []);
+    await Promise.all([
+      refreshRequestedSubcategoryCount(),
+      refreshSubcategoryActiveInactiveCounts(),
+    ]);
+  }, [
+    refreshRequestedSubcategoryCount,
+    refreshSubcategoryActiveInactiveCounts,
+  ]);
 
   const hydrateFranchiseSlices = useCallback(
     async (slices: MyFranchiseDataSlice[]) => {
@@ -735,26 +950,14 @@ const MyFranchise = () => {
     }
     await hydrateFranchiseSlices(slicesForCurrentSelection);
     if (selectedBox === "box-subcategories") {
-      const params = new URLSearchParams({
-        page: String(currentPage),
-        limit: String(pageSize),
-      });
-      const keyword = searchKeyword.trim();
-      if (keyword) params.set("keyword", keyword);
-      if (subcategoriesViewMode === "requested") {
-        params.set("is_request", "true");
-      } else {
-        if (statusFilter === "true") {
-          params.set("is_active", "true");
-          params.set("status", "active");
-        }
-        if (statusFilter === "false") {
-          params.set("is_active", "false");
-          params.set("status", "inactive");
-        }
-      }
       const response = await apiRequest(
-        `/subcategory/getAll?${params.toString()}`,
+        myFranchiseSubCategoryListUrl({
+          page: currentPage,
+          limit: pageSize,
+          keyword: searchKeyword,
+          statusFilter,
+          requested: subcategoriesViewMode === "requested",
+        }),
         "GET"
       );
       if (response.success) {
@@ -762,7 +965,19 @@ const MyFranchise = () => {
         setSubcategories(page.records);
         setSubcategoryTotalPages(page.totalPages);
         if (subcategoriesViewMode === "requested") {
-          setRequestedSubcategoryTotal(page.totalItems);
+          if (!String(searchKeyword ?? "").trim() && page.backendTotalItems != null) {
+            setRequestedSubcategoryTotal(page.backendTotalItems);
+          }
+        } else if (!String(searchKeyword ?? "").trim()) {
+          const count = page.backendTotalItems ?? page.totalItems;
+          const isActive = franchiseSubCategoryIsActiveParam(statusFilter);
+          if (isActive === "true") {
+            setSubcategoryActiveTotal(count);
+          } else if (isActive === "false") {
+            setSubcategoryInactiveTotal(count);
+          } else {
+            setSubcategoryListTotal(count);
+          }
         }
       }
     }
@@ -863,31 +1078,19 @@ const MyFranchise = () => {
     })();
   }, [searchParams, setSearchParams, reloadFranchiseData]);
 
-  /** Franchise admin Sub Categories tab — `GET /subcategory/getAll?page=&limit=`. */
+  /** Franchise admin Sub Categories tab — `GET /franchise-subcategory/getAll`. */
   useEffect(() => {
     if (selectedBox !== "box-subcategories") return;
     const generation = ++subcategoryFetchGenRef.current;
     void (async () => {
-      const params = new URLSearchParams({
-        page: String(currentPage),
-        limit: String(pageSize),
-      });
-      const keyword = searchKeyword.trim();
-      if (keyword) params.set("keyword", keyword);
-      if (subcategoriesViewMode === "requested") {
-        params.set("is_request", "true");
-      } else {
-        if (statusFilter === "true") {
-          params.set("is_active", "true");
-          params.set("status", "active");
-        }
-        if (statusFilter === "false") {
-          params.set("is_active", "false");
-          params.set("status", "inactive");
-        }
-      }
       const response = await apiRequest(
-        `/subcategory/getAll?${params.toString()}`,
+        myFranchiseSubCategoryListUrl({
+          page: currentPage,
+          limit: pageSize,
+          keyword: searchKeyword,
+          statusFilter,
+          requested: subcategoriesViewMode === "requested",
+        }),
         "GET"
       );
       if (generation !== subcategoryFetchGenRef.current) return;
@@ -900,7 +1103,19 @@ const MyFranchise = () => {
       setSubcategories(page.records);
       setSubcategoryTotalPages(page.totalPages);
       if (subcategoriesViewMode === "requested") {
-        setRequestedSubcategoryTotal(page.totalItems);
+        if (!String(searchKeyword ?? "").trim() && page.backendTotalItems != null) {
+          setRequestedSubcategoryTotal(page.backendTotalItems);
+        }
+      } else if (!String(searchKeyword ?? "").trim()) {
+        const count = page.backendTotalItems ?? page.totalItems;
+        const isActive = franchiseSubCategoryIsActiveParam(statusFilter);
+        if (isActive === "true") {
+          setSubcategoryActiveTotal(count);
+        } else if (isActive === "false") {
+          setSubcategoryInactiveTotal(count);
+        } else {
+          setSubcategoryListTotal(count);
+        }
       }
     })();
   }, [
@@ -1024,13 +1239,29 @@ const MyFranchise = () => {
   );
   const subcategoriesSummaryForBox = useMemo(() => {
     const base = countSummaries?.subcategories;
-    const requested =
-      requestedSubcategoryTotal ?? base?.requested_subcategory;
+    const listTotal = Number(subcategoryListTotal ?? 0);
+    const totalFromCount = Number(base?.Total ?? 0);
+    const active = Number(subcategoryActiveTotal ?? base?.Active ?? 0);
+    const inactive = Number(subcategoryInactiveTotal ?? base?.Inactive ?? 0);
+    const total =
+      listTotal > 0
+        ? listTotal
+        : active + inactive > 0
+        ? active + inactive
+        : totalFromCount;
     return {
-      ...(base ?? {}),
-      ...(requested != null ? { requested_subcategory: requested } : {}),
+      Total: total,
+      Active: active,
+      Inactive: inactive,
+      requested_subcategory: Number(requestedSubcategoryTotal ?? 0),
     };
-  }, [countSummaries, requestedSubcategoryTotal]);
+  }, [
+    countSummaries,
+    requestedSubcategoryTotal,
+    subcategoryListTotal,
+    subcategoryActiveTotal,
+    subcategoryInactiveTotal,
+  ]);
 
   const handleBoxSelect = useCallback(
     (divId: string) => {
@@ -1057,6 +1288,39 @@ const MyFranchise = () => {
     setSubcategoriesViewMode("catalog");
     setCurrentPage(1);
   }, []);
+
+  const selectSubCategoryCatalog = useCallback(() => {
+    setSelectedBox("box-subcategories");
+    setServicesViewMode("catalog");
+    setCategoriesViewMode("catalog");
+    setSubcategoriesViewMode("catalog");
+    setSearchKeyword("");
+    setAreaSortBy([]);
+    setServiceSortBy([]);
+    setCategorySortBy([]);
+    setCurrentPage(1);
+  }, []);
+
+  /** Sub Categories card title — Total list (no `is_active`) unless Active/Inactive runs in this click. */
+  const handleSubCategoryBoxSelect = useCallback(() => {
+    subcatFilterClickRef.current = false;
+    selectSubCategoryCatalog();
+    queueMicrotask(() => {
+      if (!subcatFilterClickRef.current) {
+        setStatusFilter(undefined);
+      }
+    });
+  }, [selectSubCategoryCatalog]);
+
+  /** Sub Categories Active → `is_active=true`, Inactive → `is_active=false`. */
+  const handleSubCategoryFilterChange = useCallback(
+    (filter: { status?: string }) => {
+      subcatFilterClickRef.current = true;
+      selectSubCategoryCatalog();
+      setStatusFilter(filter.status);
+    },
+    [selectSubCategoryCatalog]
+  );
 
   const keyword = searchKeyword.trim().toLowerCase();
 
@@ -1310,13 +1574,18 @@ const MyFranchise = () => {
         )
       );
       const row = subcategories.find((s) => s._id === sid);
-      const response = await apiRequest(`/subcategory/update/${sid}`, "PUT", {
-        name: String(row?.name ?? "").trim(),
-        desc: String(row?.description ?? row?.desc ?? "").trim(),
-        category_id: String(row?.category_id ?? "").trim(),
-        is_active,
-        ...(row?.image_url ? { image_url: String(row.image_url) } : {}),
-      });
+      const franchiseId = sessionFranchiseIdForSubCategoryGetAll();
+      const response = await apiRequest(
+        `/franchise-subcategory/update/${sid}`,
+        "PUT",
+        {
+          is_active,
+          ...(franchiseId ? { franchise_id: franchiseId } : {}),
+          ...(row?.category_id
+            ? { category_id: String(row.category_id).trim() }
+            : {}),
+        }
+      );
       if (response.success) {
         showSuccessAlert("Sub category status updated");
         await reloadFranchiseData();
@@ -1582,7 +1851,7 @@ const MyFranchise = () => {
         accessor: "subcategory_name",
         Cell: ({ row }: { row: any }) =>
           serviceNamesHoverFromList(
-            catalogSubCategoryLabels(row.original ?? {})
+            serviceTabSubCategoryLabels(row.original ?? {})
           ),
       },
       {
@@ -1954,14 +2223,16 @@ const MyFranchise = () => {
           {
             Header: "Services",
             accessor: "service_names",
-            Cell: ({ row }: { row: any }) =>
-              serviceNamesHoverFromList(
-                labelListFromUnknown(
-                  (row.original ?? {}).service_names ??
-                    (row.original ?? {}).services ??
-                    (row.original ?? {}).related_services
+            Cell: ({ row }: { row: any }) => {
+              const rec = (row.original ?? {}) as Record<string, unknown>;
+              return serviceNamesHoverFromList(
+                firstNonEmptyLabelList(
+                  rec.related_services,
+                  rec.service_names,
+                  rec.services
                 )
-              ),
+              );
+            },
           },
           {
             Header: "Status",
@@ -2168,9 +2439,17 @@ const MyFranchise = () => {
             divId={cfg.id}
             title={cfg.title}
             data={cfg.data}
-            onSelect={handleBoxSelect}
+            onSelect={
+              cfg.id === "box-subcategories"
+                ? handleSubCategoryBoxSelect
+                : handleBoxSelect
+            }
             isSelected={selectedBox === cfg.id}
-            onFilterChange={handleFilterChange}
+            onFilterChange={
+              cfg.id === "box-subcategories"
+                ? handleSubCategoryFilterChange
+                : handleFilterChange
+            }
             isAddShow={cfg.isAddShow}
             addButtonLable={cfg.addLabel}
             onAddClick={cfg.onAdd}
@@ -2210,11 +2489,20 @@ const MyFranchise = () => {
                 : cfg.id === "box-subcategories"
                 ? (key) => {
                     if (key === "requested_subcategory") {
+                      subcatFilterClickRef.current = true;
                       setSelectedBox("box-subcategories");
                       setSubcategoriesViewMode("requested");
                       setStatusFilter(undefined);
                       setSearchKeyword("");
                       setCurrentPage(1);
+                      setSubcategories([]);
+                      setSubcategoryTotalPages(0);
+                      return;
+                    }
+                    if (key === "Total") {
+                      subcatFilterClickRef.current = true;
+                      selectSubCategoryCatalog();
+                      setStatusFilter(undefined);
                     }
                   }
                 : undefined

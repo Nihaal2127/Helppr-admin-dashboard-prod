@@ -68,19 +68,61 @@ import {
 } from "../../lib/form/missingRequiredFields";
 import type { MissingRequiredField } from "../../lib/form/missingRequiredFields";
 
-/** Interim options until a subcategory catalogue API exists. */
-const QUOTE_SUB_CATEGORY_OPTIONS: OptionType[] = [
-  { value: "example-subcat-1", label: "Facial Care" },
-  { value: "example-subcat-2", label: "Hair Styling" },
-  { value: "example-subcat-3", label: "Pipe Repair" },
-];
+/** Sub Category options from related-catalog `partners[].active_subcategories_providing`. */
+function subCategoryOptionsFromPartnerCatalog(
+  partner: Record<string, unknown> | null | undefined,
+  categoryId: string
+): OptionType[] {
+  const cid = String(categoryId ?? "").trim();
+  if (!partner || !cid) return [];
 
-function quoteSubCategoryName(id: string): string {
+  const providing = partner.active_subcategories_providing;
+  const rows = Array.isArray(providing) ? providing : [];
+  const seen = new Set<string>();
+  const options: OptionType[] = [];
+
+  for (const item of rows) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, any>;
+    const subcategory = row.subcategory;
+    const rowCategoryId = String(
+      row.category_id ?? subcategory?.category_id ?? ""
+    ).trim();
+    if (rowCategoryId !== cid) continue;
+    if (
+      row.is_active === false ||
+      row.effective_active === false ||
+      row.partner_enabled === false ||
+      row.global_active === false ||
+      row.franchise_enabled === false ||
+      subcategory?.is_active === false
+    ) {
+      continue;
+    }
+    const value = String(
+      subcategory?._id ?? subcategory?.id ?? row.subcategory_id ?? ""
+    ).trim();
+    const label = String(
+      subcategory?.name ?? subcategory?.label ?? row.subcategory_name ?? ""
+    ).trim();
+    if (!value || !label || seen.has(value)) continue;
+    seen.add(value);
+    options.push({ value, label });
+  }
+
+  return options.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function quoteSubCategoryName(
+  id: string,
+  options: OptionType[],
+  savedName?: string
+): string {
   const value = String(id ?? "").trim();
   if (!value) return "";
   return (
-    QUOTE_SUB_CATEGORY_OPTIONS.find((option) => option.value === value)?.label ??
-    value
+    options.find((option) => option.value === value)?.label ??
+    String(savedName ?? "").trim()
   );
 }
 
@@ -310,23 +352,6 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   });
 
   const form = watch();
-  const editSubCategoryOptions = useMemo(() => {
-    const id = String(
-      form.subcategory_id ?? quoteRow?.subcategory_id ?? ""
-    ).trim();
-    if (!id || QUOTE_SUB_CATEGORY_OPTIONS.some((option) => option.value === id)) {
-      return QUOTE_SUB_CATEGORY_OPTIONS;
-    }
-    const savedName = String(quoteRow?.subcategory_name ?? "").trim();
-    return [
-      ...QUOTE_SUB_CATEGORY_OPTIONS,
-      { value: id, label: savedName || quoteSubCategoryName(id) },
-    ];
-  }, [
-    form.subcategory_id,
-    quoteRow?.subcategory_id,
-    quoteRow?.subcategory_name,
-  ]);
   const isNewTabQuoteEdit = useMemo(
     () => normalizeQuoteApiStatus(quoteRow?.status) === "new",
     [quoteRow?.status]
@@ -615,6 +640,27 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       ),
     [quoteCategoryOptions, quoteCatalogServices, selectedPartnerCatalogRecord]
   );
+
+  const editSubCategoryOptions = useMemo(() => {
+    const cid = String(form.category_id ?? quoteRow?.category_id ?? "").trim();
+    const options = subCategoryOptionsFromPartnerCatalog(
+      selectedPartnerCatalogRecord,
+      cid
+    );
+    const id = String(
+      form.subcategory_id ?? quoteRow?.subcategory_id ?? ""
+    ).trim();
+    if (!id || options.some((option) => option.value === id)) return options;
+    const savedName = String(quoteRow?.subcategory_name ?? "").trim();
+    return [{ value: id, label: savedName || id }, ...options];
+  }, [
+    selectedPartnerCatalogRecord,
+    form.category_id,
+    form.subcategory_id,
+    quoteRow?.category_id,
+    quoteRow?.subcategory_id,
+    quoteRow?.subcategory_name,
+  ]);
 
   const editCategoryOptions = useMemo(() => {
     if (isNewTabQuoteEdit || isCatalogLockedQuoteEdit) {
@@ -1259,8 +1305,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
           subcategory_id:
             String(formData.subcategory_id ?? "").trim() || undefined,
           subcategory_name:
-            quoteSubCategoryName(String(formData.subcategory_id ?? "")) ||
-            undefined,
+            quoteSubCategoryName(
+              String(formData.subcategory_id ?? ""),
+              editSubCategoryOptions,
+              quoteRow?.subcategory_name
+            ) || undefined,
           service_id: String(formData.requested_services ?? "").trim(),
           partner_id: String(formData.requested_partner ?? "").trim() || undefined,
           employee_id: String(formData.employee_id ?? "").trim() || undefined,
@@ -1284,8 +1333,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
           subcategory_id:
             String(formData.subcategory_id ?? "").trim() || undefined,
           subcategory_name:
-            quoteSubCategoryName(String(formData.subcategory_id ?? "")) ||
-            undefined,
+            quoteSubCategoryName(
+              String(formData.subcategory_id ?? ""),
+              editSubCategoryOptions,
+              quoteRow?.subcategory_name
+            ) || undefined,
           service_id: String(formData.requested_services ?? "").trim(),
           partner_id: String(formData.requested_partner ?? "").trim() || undefined,
           employee_id: String(formData.employee_id ?? "").trim() || undefined,

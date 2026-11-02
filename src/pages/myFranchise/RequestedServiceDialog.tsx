@@ -23,6 +23,7 @@ import {
 } from "../../services/myFranchiseService";
 import { fetchCategoryDropDown } from "../../services/categoryService";
 import { fetchServiceById } from "../../services/servicesService";
+import { apiRequest } from "../../lib/global/remote/apiHelper";
 import sampleServiceViewImage from "../../assets/icons/profile.svg";
 
 type CategoryOption = { value: string; label: string };
@@ -30,8 +31,96 @@ type CategoryOption = { value: string; label: string };
 type RequestedServiceFormValues = {
   name: string;
   category_id: string;
+  subcategory_id: string;
   desc: string;
 };
+
+function extractSubCategoryDropDownOptions(
+  data: unknown
+): CategoryOption[] {
+  const buckets: unknown[] = [];
+  const push = (value: unknown) => {
+    if (Array.isArray(value)) buckets.push(...value);
+  };
+  const walk = (node: unknown, depth = 0) => {
+    if (depth > 4 || node == null) return;
+    if (Array.isArray(node)) {
+      push(node);
+      return;
+    }
+    if (typeof node !== "object") return;
+    const root = node as Record<string, unknown>;
+    push(root.records);
+    push(root.subcategories);
+    push(root.sub_categories);
+    push(root.list);
+    push(root.items);
+    push(root.result);
+    push(root.data);
+    if (root.data && typeof root.data === "object") {
+      walk(root.data, depth + 1);
+    }
+  };
+  walk(data);
+  const seen = new Set<string>();
+  const options: CategoryOption[] = [];
+  for (const item of buckets) {
+    if (typeof item === "string" || typeof item === "number") {
+      const value = String(item).trim();
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      options.push({ value, label: value });
+      continue;
+    }
+    const row =
+      item && typeof item === "object"
+        ? (item as Record<string, unknown>)
+        : {};
+    const value = String(
+      row._id ??
+        row.id ??
+        row.subcategory_id ??
+        row.sub_category_id ??
+        row.value ??
+        ""
+    ).trim();
+    if (!value || seen.has(value)) continue;
+    const label =
+      String(row.name ?? row.label ?? row.subcategory_name ?? "").trim() ||
+      value;
+    seen.add(value);
+    options.push({ value, label });
+  }
+  return options;
+}
+
+async function fetchSubCategoriesByCategoryId(
+  categoryId: string
+): Promise<CategoryOption[]> {
+  const cid = String(categoryId ?? "").trim();
+  if (!cid) return [];
+  const params = new URLSearchParams({ category_id: cid });
+  const res = await apiRequest(
+    `/subcategory/getDropDown?${params.toString()}`,
+    "GET",
+    undefined,
+    false,
+    true
+  );
+  if (!res.success) return [];
+  return extractSubCategoryDropDownOptions(res.data);
+}
+
+function requestedSubCategoryId(request: RequestedServiceRow | null): string {
+  if (!request) return "";
+  const rec = request as unknown as Record<string, unknown>;
+  const ref = rec.subcategory_id ?? rec.sub_category_id;
+  if (ref && typeof ref === "object") {
+    const obj = ref as Record<string, unknown>;
+    return String(obj._id ?? obj.id ?? obj.value ?? "").trim();
+  }
+  return String(ref ?? "").trim();
+}
 
 type RequestedServiceDialogProps = {
   onClose: () => void;
@@ -72,6 +161,9 @@ const RequestedServiceDialog: React.FC<RequestedServiceDialogProps> & {
   );
   const [effectiveCategoryOptions, setEffectiveCategoryOptions] =
     useState<CategoryOption[]>(categoryOptions);
+  const [subCategoryOptions, setSubCategoryOptions] = useState<
+    CategoryOption[]
+  >([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,28 +228,59 @@ const RequestedServiceDialog: React.FC<RequestedServiceDialogProps> & {
     handleSubmit,
     setValue,
     reset,
+    watch,
     formState: { errors },
   } = useForm<RequestedServiceFormValues>({
     defaultValues: {
       name: "",
       category_id: "",
+      subcategory_id: "",
       desc: "",
     },
   });
 
+  const watchedCategoryId = watch("category_id");
+  const watchedSubCategoryId = watch("subcategory_id");
+
   useEffect(() => {
     if (isAdd) {
-      reset({ name: "", category_id: "", desc: "" });
+      reset({ name: "", category_id: "", subcategory_id: "", desc: "" });
       return;
     }
     if (request && isEditing) {
       reset({
         name: request.name,
         category_id: request.category_id,
+        subcategory_id: requestedSubCategoryId(request),
         desc: request.description ?? "",
       });
     }
   }, [isAdd, request, isEditing, reset]);
+
+  useEffect(() => {
+    const cid = String(watchedCategoryId ?? "").trim();
+    if (!cid) {
+      setSubCategoryOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const options = await fetchSubCategoriesByCategoryId(cid);
+      if (cancelled) return;
+      setSubCategoryOptions(options);
+      const current = String(watchedSubCategoryId ?? "").trim();
+      if (current && !options.some((o) => o.value === current)) {
+        setValue("subcategory_id", "", {
+          shouldValidate: false,
+          shouldDirty: true,
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload options only when category changes
+  }, [watchedCategoryId, setValue]);
 
   const readImageDataUrl = (files: File[]): Promise<string | undefined> => {
     if (!files.length) return Promise.resolve(undefined);
@@ -173,6 +296,7 @@ const RequestedServiceDialog: React.FC<RequestedServiceDialogProps> & {
   const onSubmitForm = async (data: RequestedServiceFormValues) => {
     const name = data.name.trim();
     const category_id = String(data.category_id ?? "").trim();
+    const subcategory_id = String(data.subcategory_id ?? "").trim();
     const description = data.desc.trim();
     if (!name) {
       showErrorAlert("Service name is required");
@@ -208,6 +332,7 @@ const RequestedServiceDialog: React.FC<RequestedServiceDialogProps> & {
         category_id,
         description,
         image_url,
+        ...(subcategory_id ? { subcategory_id } : {}),
       });
       if (ok) {
         showSuccessAlert("Service request submitted");
@@ -227,6 +352,7 @@ const RequestedServiceDialog: React.FC<RequestedServiceDialogProps> & {
       category_id,
       description,
       image_url: image_url ?? request.image_url,
+      ...(subcategory_id ? { subcategory_id } : {}),
     });
     if (ok) {
       showSuccessAlert("Service request updated");
@@ -427,6 +553,35 @@ const RequestedServiceDialog: React.FC<RequestedServiceDialogProps> & {
             requiredMessage="Please select category"
             placeholder="Select category"
             defaultValue={isAdd ? "" : request?.category_id ?? ""}
+            setValue={(name: string, value: any) => {
+              setValue(name as keyof RequestedServiceFormValues, value, {
+                shouldValidate: true,
+                shouldDirty: true,
+                shouldTouch: true,
+              });
+              if (name === "category_id") {
+                setValue("subcategory_id", "", {
+                  shouldValidate: false,
+                  shouldDirty: true,
+                });
+              }
+            }}
+            menuPortal
+          />
+        </Col>
+        <Col md={6}>
+          <CustomFormSelect
+            key={`requested-service-subcategory-${String(watchedCategoryId ?? "")}`}
+            label="Sub Category"
+            controlId="subcategory"
+            options={subCategoryOptions}
+            register={register as unknown as UseFormRegister<any>}
+            fieldName="subcategory_id"
+            error={errors.subcategory_id as any}
+            asCol={false}
+            placeholder="Select subcategory"
+            defaultValue={String(watchedSubCategoryId ?? "")}
+            isDisabled={!String(watchedCategoryId ?? "").trim()}
             setValue={(name: string, value: any) => {
               setValue(name as keyof RequestedServiceFormValues, value, {
                 shouldValidate: true,

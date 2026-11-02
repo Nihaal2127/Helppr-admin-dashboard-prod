@@ -79,6 +79,9 @@ export type ServiceRow = {
   name: string;
   category_name: string;
   is_active: boolean;
+  /** From `GET /franchise-service/getAll` `subcategory_id.name`. */
+  subcategory_name?: string;
+  subcategory_id?: unknown;
 };
 
 export type CategoryRow = {
@@ -88,6 +91,8 @@ export type CategoryRow = {
   is_active: boolean;
   /** From `GET /category/get/:id` when API sends `service_names` (optional). */
   service_names?: string[];
+  /** Nested objects from `GET /franchise-category/getAll` (`subcategories[].name`). */
+  subcategories?: unknown;
 };
 
 export type RequestedApprovalStatus = "pending" | "approved" | "rejected";
@@ -1469,6 +1474,23 @@ function serviceNamesFromCategoryDoc(doc: Record<string, unknown>): string[] {
   return names;
 }
 
+function subcategoriesFromCategoryDoc(doc: Record<string, unknown>): unknown[] {
+  const raw = doc.subcategories ?? doc.sub_categories;
+  return Array.isArray(raw) ? raw : [];
+}
+
+function nestedCatalogName(raw: unknown): string {
+  if (raw == null) return "";
+  if (typeof raw === "string" || typeof raw === "number") {
+    return String(raw).trim();
+  }
+  if (typeof raw === "object") {
+    const rec = raw as Record<string, unknown>;
+    return String(rec.name ?? rec.label ?? rec.subcategory_name ?? "").trim();
+  }
+  return "";
+}
+
 /** One franchise-category GET supplies mapping + catalogue rows — no per-id category GETs. */
 function categoryRowsFromFranchiseCategoryMap(
   catMap: FranchiseCategoryMapCache
@@ -1500,12 +1522,14 @@ function categoryRowsFromFranchiseCategoryMap(
         : [];
       const fromDoc = doc ? serviceNamesFromCategoryDoc(doc) : [];
       const service_names = fromHint.length > 0 ? fromHint : fromDoc;
+      const subcategories = doc ? subcategoriesFromCategoryDoc(doc) : [];
         return {
         _id: cid,
         category_id: cid,
         name,
           is_active: entry.is_active,
           ...(service_names.length ? { service_names } : {}),
+          ...(subcategories.length ? { subcategories } : {}),
       };
     })
     .filter((r): r is CategoryRow => r != null);
@@ -1554,6 +1578,8 @@ function serviceRowsFromFranchiseServiceMap(
         }
       }
       if (!category_name) category_name = "-";
+      const subcategoryRef = doc?.subcategory_id ?? doc?.sub_category_id;
+      const subcategory_name = nestedCatalogName(subcategoryRef);
       /** Match category rows: one canonical catalogue id for toggle + PUT (merge uses Mongo `_id` when `all_services` is present). */
       const canonicalServiceId = doc ? mongoId : sid;
       return {
@@ -1562,6 +1588,8 @@ function serviceRowsFromFranchiseServiceMap(
         name,
         category_name,
         is_active: entry.is_active,
+        ...(subcategory_name ? { subcategory_name } : {}),
+        ...(subcategoryRef != null ? { subcategory_id: subcategoryRef } : {}),
       };
     })
     .filter((r): r is ServiceRow => r != null);
@@ -2289,6 +2317,7 @@ export type RequestedServiceInput = {
   category_id: string;
   description: string;
   image_url?: string;
+  subcategory_id?: string;
 };
 
 export async function createRequestedService(
@@ -2296,11 +2325,13 @@ export async function createRequestedService(
 ): Promise<boolean> {
   const franchiseId = await resolveSessionFranchiseId();
   const imageUrl = String(input.image_url ?? "").trim();
+  const subcategoryId = String(input.subcategory_id ?? "").trim();
   const payload = {
     name: input.name.trim(),
     category_id: input.category_id,
     desc: input.description.trim(),
     ...(imageUrl ? { image_url: imageUrl } : {}),
+    ...(subcategoryId ? { subcategory_id: subcategoryId } : {}),
     tax: 0,
     commission: 0,
     payment_type: "per_hour",
@@ -2329,11 +2360,13 @@ export async function updateRequestedService(
   input: RequestedServiceInput
 ): Promise<boolean> {
   const imageUrl = String(input.image_url ?? "").trim();
+  const subcategoryId = String(input.subcategory_id ?? "").trim();
   const payload = {
     name: input.name.trim(),
     category_id: input.category_id,
     desc: input.description.trim(),
     ...(imageUrl ? { image_url: imageUrl } : {}),
+    ...(subcategoryId ? { subcategory_id: subcategoryId } : {}),
     tax: 0,
     commission: 0,
     payment_type: "per_hour",

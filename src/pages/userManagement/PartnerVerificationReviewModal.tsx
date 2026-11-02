@@ -67,19 +67,13 @@ type CatalogServiceLite = {
   price?: number | null;
 };
 
-const PARTNER_SUB_CATEGORY_LABELS: Record<string, string> = {
-  "example-subcat-1": "Facial Care",
-  "example-subcat-2": "Hair Styling",
-  "example-subcat-3": "Pipe Repair",
-};
-
 const MONGO_OBJECT_ID = /^[a-f0-9]{24}$/i;
 
 function subCategoryDisplayName(raw: unknown): string {
   if (typeof raw === "string" || typeof raw === "number") {
     const text = String(raw).trim();
     if (!text || MONGO_OBJECT_ID.test(text)) return "";
-    return PARTNER_SUB_CATEGORY_LABELS[text] ?? text;
+    return text;
   }
   if (!raw || typeof raw !== "object") return "";
   const rec = raw as Record<string, unknown>;
@@ -91,11 +85,7 @@ function subCategoryDisplayName(raw: unknown): string {
       ""
   ).trim();
   if (name && !MONGO_OBJECT_ID.test(name)) return name;
-  const id = String(
-    rec._id ?? rec.id ?? rec.subcategory_id ?? rec.sub_category_id ?? ""
-  ).trim();
-  if (!id) return "";
-  return PARTNER_SUB_CATEGORY_LABELS[id] ?? "";
+  return "";
 }
 
 function uniqueSubCategoryLabels(values: string[]): string[] {

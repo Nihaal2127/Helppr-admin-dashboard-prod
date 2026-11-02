@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Form } from "react-bootstrap";
 import { useForm, UseFormRegister } from "react-hook-form";
 import CustomDatePicker from "../../components/CustomDatePicker";
@@ -6,10 +6,12 @@ import CustomHeader from "../../components/CustomHeader";
 import CustomTable from "../../components/CustomTable";
 import CustomUtilityBox from "../../components/CustomUtilityBox";
 import { formatDate } from "../../helper/utility";
+import { apiRequest } from "../../lib/global/remote/apiHelper";
 import { toIsoCalendarDate } from "../../lib/quote/quoteHelpers";
 
 type AuditLogRow = {
   id: string;
+  sNo: number;
   createdDate: string;
   module: string;
   action: string;
@@ -20,7 +22,51 @@ type AuditLogRow = {
   status: string;
 };
 
-const AUDIT_LOGS: AuditLogRow[] = [];
+function displayText(value: unknown): string {
+  const text = value == null ? "" : String(value).trim();
+  return text || "—";
+}
+
+function mapAuditLogRow(raw: Record<string, unknown>, index: number): AuditLogRow {
+  const sNo = Number(raw.s_no);
+  return {
+    id: String(raw._id ?? index),
+    sNo: Number.isFinite(sNo) && sNo > 0 ? sNo : index + 1,
+    createdDate: String(raw.created_at ?? ""),
+    module: displayText(raw.module),
+    action: displayText(raw.action),
+    reference: displayText(raw.reference),
+    description: displayText(raw.description),
+    performedBy: displayText(raw.performed_by_name),
+    franchise: displayText(raw.franchise_name),
+    status: displayText(raw.status),
+  };
+}
+
+function parseAuditLogList(payload: Record<string, unknown> | undefined): {
+  records: AuditLogRow[];
+  totalPages: number;
+} {
+  const root = payload ?? {};
+  const inner =
+    root.data != null && typeof root.data === "object" && !Array.isArray(root.data)
+      ? (root.data as Record<string, unknown>)
+      : null;
+  const recordsRaw = (inner?.records ?? root.records ?? []) as unknown[];
+  const records = Array.isArray(recordsRaw)
+    ? recordsRaw
+        .filter(
+          (row): row is Record<string, unknown> =>
+            row != null && typeof row === "object" && !Array.isArray(row)
+        )
+        .map(mapAuditLogRow)
+    : [];
+  const totalPagesVal = Number(inner?.totalPages ?? root.totalPages ?? 0);
+  return {
+    records,
+    totalPages: Number.isFinite(totalPagesVal) ? totalPagesVal : 0,
+  };
+}
 
 const AUDIT_LOGS_PAGE_STYLES = `
   .audit-logs-page .custom-page-header {
@@ -137,110 +183,6 @@ const AUDIT_LOGS_PAGE_STYLES = `
     opacity: 0.55;
   }
 
-  .audit-logs-page .custom-table-wrapper,
-  .audit-logs-page .custom-table-wrapper--scroll {
-    border-radius: 12px;
-    border: 1px solid #740909;
-    background: #fff;
-    overflow-x: scroll !important;
-    overflow-y: auto !important;
-    scrollbar-gutter: stable;
-    scrollbar-width: auto;
-    scrollbar-color: #740909 #c45a5a;
-  }
-
-  .audit-logs-page .custom-table-wrapper::-webkit-scrollbar,
-  .audit-logs-page .custom-table-wrapper--scroll::-webkit-scrollbar {
-    height: 12px;
-    width: 12px;
-    display: block;
-  }
-
-  .audit-logs-page .custom-table-wrapper::-webkit-scrollbar-track,
-  .audit-logs-page .custom-table-wrapper--scroll::-webkit-scrollbar-track {
-    background: #c45a5a;
-    border-bottom-left-radius: 11px;
-    border-bottom-right-radius: 11px;
-  }
-
-  .audit-logs-page .custom-table-wrapper::-webkit-scrollbar-thumb,
-  .audit-logs-page .custom-table-wrapper--scroll::-webkit-scrollbar-thumb {
-    background: #740909;
-    border-radius: 10px;
-    min-width: 48px;
-  }
-
-  .audit-logs-page .custom-table-wrapper::-webkit-scrollbar-thumb:hover,
-  .audit-logs-page .custom-table-wrapper--scroll::-webkit-scrollbar-thumb:hover {
-    background: #5c0707;
-  }
-
-  .audit-logs-page .custom-table-wrapper::-webkit-scrollbar-corner,
-  .audit-logs-page .custom-table-wrapper--scroll::-webkit-scrollbar-corner {
-    background: #740909;
-  }
-
-  .audit-logs-page #pagination_container {
-    box-shadow: none;
-  }
-
-  .audit-logs-page .audit-logs-table {
-    margin-bottom: 0 !important;
-    border: none !important;
-    border-collapse: separate !important;
-    border-spacing: 0 !important;
-    background: #fff;
-  }
-
-  .audit-logs-page .audit-logs-table thead th {
-    background-color: #740909 !important;
-    color: #f7f7f7 !important;
-    border: none !important;
-    border-right: 1px solid rgba(255, 255, 255, 0.28) !important;
-    font-weight: 600 !important;
-    font-size: 13px !important;
-    padding: 12px 10px !important;
-    position: sticky;
-    top: 0;
-    z-index: 2;
-  }
-
-  .audit-logs-page .audit-logs-table thead th:last-child {
-    border-right: none !important;
-  }
-
-  .audit-logs-page .audit-logs-table thead th:first-child {
-    border-top-left-radius: 11px;
-  }
-
-  .audit-logs-page .audit-logs-table thead th:last-child {
-    border-top-right-radius: 11px;
-  }
-
-  .audit-logs-page .audit-logs-table tbody td {
-    background-color: #ffffff !important;
-    border: none !important;
-    border-right: 1px solid #f0f0f0 !important;
-    color: #1a1a1a !important;
-    font-size: 13px !important;
-    padding: 14px 10px !important;
-  }
-
-  .audit-logs-page .audit-logs-table tbody td:last-child {
-    border-right: none !important;
-  }
-
-  .audit-logs-page .audit-logs-table tbody tr:hover td {
-    background-color: #ffffff !important;
-  }
-
-  .audit-logs-page .audit-logs-table tbody td.text-center {
-    font-weight: 600;
-    color: #1a1a1a !important;
-    padding: 28px 10px !important;
-    border-right: none !important;
-  }
-
   @media (max-width: 991.98px) {
     .audit-logs-page .audit-logs-tools {
       justify-content: flex-end !important;
@@ -269,90 +211,99 @@ const AuditLogsPage = () => {
   const [toDate, setToDate] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [logs, setLogs] = useState<AuditLogRow[]>([]);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loading, setLoading] = useState(true);
 
-  const filteredLogs = useMemo(() => {
-    const query = keyword.trim().toLowerCase();
-    return AUDIT_LOGS.filter((row) => {
-      if (fromDate && row.createdDate < fromDate) return false;
-      if (toDate && row.createdDate > toDate) return false;
-      if (!query) return true;
-      const haystack = [
-        row.module,
-        row.action,
-        row.reference,
-        row.description,
-        row.performedBy,
-        row.franchise,
-        row.status,
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [keyword, fromDate, toDate]);
+  const loadAuditLogs = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("page", String(currentPage));
+      params.set("limit", String(pageSize));
+      if (fromDate) params.set("from_date", fromDate);
+      if (toDate) params.set("to_date", toDate);
+      const search = keyword.trim();
+      if (search) params.set("search", search);
 
-  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / pageSize));
+      const res = await apiRequest(
+        `/audit-log/getAll?${params.toString()}`,
+        "GET",
+        undefined,
+        false,
+        true,
+        false,
+        false,
+        signal
+      );
+
+      if (signal?.aborted) return;
+
+      if (!res.success) {
+        if ((res as { aborted?: boolean }).aborted) return;
+        setLogs([]);
+        setTotalPages(0);
+        return;
+      }
+
+      const parsed = parseAuditLogList(
+        res.data as Record<string, unknown> | undefined
+      );
+      setLogs(parsed.records);
+      setTotalPages(parsed.totalPages);
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [currentPage, pageSize, keyword, fromDate, toDate]);
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [keyword, fromDate, toDate, pageSize]);
-
-  const pageRows = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredLogs.slice(start, start + pageSize);
-  }, [filteredLogs, currentPage, pageSize]);
+    const controller = new AbortController();
+    void loadAuditLogs(controller.signal);
+    return () => controller.abort();
+  }, [loadAuditLogs]);
 
   const columns = useMemo(
     () => [
       {
         Header: "S.No",
         id: "serial_no",
-        width: 72,
-        Cell: ({ row }: { row: { index: number } }) =>
-          (currentPage - 1) * pageSize + row.index + 1,
-      },
-      {
-        Header: "Create Date",
-        accessor: "createdDate",
-        width: 130,
-        Cell: ({ row }: { row: { original: AuditLogRow } }) =>
-          formatDate(row.original.createdDate),
-      },
-      {
-        Header: "Module",
-        accessor: "module",
-        width: 170,
-      },
-      {
-        Header: "Action",
-        accessor: "action",
-        width: 150,
-      },
-      {
-        Header: "Reference",
-        accessor: "reference",
-        width: 140,
-      },
-      {
-        Header: "Description",
-        accessor: "description",
-        width: 280,
-      },
-      {
-        Header: "Performed By",
-        accessor: "performedBy",
-        width: 150,
+        Cell: ({ row }: { row: { original: AuditLogRow; index: number } }) =>
+          row.original.sNo || (currentPage - 1) * pageSize + row.index + 1,
       },
       {
         Header: "Franchise",
         accessor: "franchise",
-        width: 160,
       },
       {
-        Header: "Status",
-        accessor: "status",
-        width: 120,
+        Header: "Module",
+        accessor: "module",
       },
+      {
+        Header: "Action",
+        accessor: "action",
+      },
+      // {
+      //   Header: "Reference",
+      //   accessor: "reference",
+      // },
+      {
+        Header: "Description",
+        accessor: "description",
+      },
+      {
+        Header: "Performed By",
+        accessor: "performedBy",
+      },
+      {
+        Header: "Create Date",
+        accessor: "createdDate",
+        Cell: ({ row }: { row: { original: AuditLogRow } }) =>
+          formatDate(row.original.createdDate),
+      },
+      // {
+      //   Header: "Status",
+      //   accessor: "status",
+      // },
     ],
     [currentPage, pageSize]
   );
@@ -398,6 +349,7 @@ const AuditLogsPage = () => {
                 selectedDate={fromDate || null}
                 onChange={(date) => {
                   setFromDate(toIsoCalendarDate(date) ?? "");
+                  setCurrentPage(1);
                 }}
                 register={register as unknown as UseFormRegister<any>}
                 setValue={setValue}
@@ -415,6 +367,7 @@ const AuditLogsPage = () => {
                 selectedDate={toDate || null}
                 onChange={(date) => {
                   setToDate(toIsoCalendarDate(date) ?? "");
+                  setCurrentPage(1);
                 }}
                 register={register as unknown as UseFormRegister<any>}
                 setValue={setValue}
@@ -441,6 +394,7 @@ const AuditLogsPage = () => {
         onSearch={(value) => {
           setKeyword(value);
           setSearchDraft(value);
+          setCurrentPage(1);
         }}
         onSearchInputChange={setSearchDraft}
         syncKeyword={keyword}
@@ -449,22 +403,18 @@ const AuditLogsPage = () => {
 
       <CustomTable
         columns={columns}
-        data={pageRows}
+        data={logs}
         pageSize={pageSize}
         currentPage={currentPage}
-        totalPages={filteredLogs.length === 0 ? 0 : totalPages}
+        totalPages={logs.length === 0 ? 0 : totalPages}
         onPageChange={(page: number) => setCurrentPage(page)}
         onLimitChange={(updatedPageSize: number) => {
           setPageSize(updatedPageSize);
           setCurrentPage(1);
         }}
-        theadClass="audit-logs-thead"
-        tableClass="audit-logs-table"
-        isPagination={filteredLogs.length > 0}
-        horizontalScroll
-        layoutFixed
-        dynamicRowBackground={false}
-        tableMinWidthPx={1400}
+        theadClass="table-light"
+        isPagination={logs.length > 0}
+        isLoading={loading}
       />
     </div>
   );
