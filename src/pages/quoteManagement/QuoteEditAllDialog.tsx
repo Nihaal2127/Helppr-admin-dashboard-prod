@@ -68,6 +68,18 @@ import {
 } from "../../lib/form/missingRequiredFields";
 import type { MissingRequiredField } from "../../lib/form/missingRequiredFields";
 
+function catalogPartnerMatchesId(
+  partner: Record<string, unknown> | null | undefined,
+  pid: string
+): boolean {
+  const want = String(pid ?? "").trim();
+  if (!partner || !want) return false;
+  const ids = [partner.partner_id, partner._id, partner.user_id, partner.id]
+    .map((x) => String(x ?? "").trim())
+    .filter(Boolean);
+  return ids.includes(want);
+}
+
 /** Sub Category options from related-catalog `partners[].active_subcategories_providing`. */
 function subCategoryOptionsFromPartnerCatalog(
   partner: Record<string, unknown> | null | undefined,
@@ -111,6 +123,90 @@ function subCategoryOptionsFromPartnerCatalog(
   }
 
   return options.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** Related subcategories for the selected category from the franchise catalog. */
+function subCategoryOptionsForCategoryFromCatalog(
+  partners: Record<string, unknown>[],
+  categoryId: string,
+  preferredPartner?: Record<string, unknown> | null
+): OptionType[] {
+  const cid = String(categoryId ?? "").trim();
+  if (!cid) return [];
+  const fromPreferred = preferredPartner
+    ? subCategoryOptionsFromPartnerCatalog(preferredPartner, cid)
+    : [];
+  if (fromPreferred.length) return fromPreferred;
+  const seen = new Set<string>();
+  const options: OptionType[] = [];
+  for (const partner of partners) {
+    for (const opt of subCategoryOptionsFromPartnerCatalog(partner, cid)) {
+      if (seen.has(opt.value)) continue;
+      seen.add(opt.value);
+      options.push(opt);
+    }
+  }
+  return options.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function allowedServiceIdsForPartnerSubCategory(
+  partner: Record<string, unknown> | null | undefined,
+  subcategoryId: string
+): Set<string> | null {
+  const sid = String(subcategoryId ?? "").trim();
+  if (!partner || !sid) return null;
+  const providing = partner.active_subcategories_providing;
+  const rows = Array.isArray(providing) ? providing : [];
+  for (const item of rows) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, any>;
+    const subcategory = row.subcategory;
+    const value = String(
+      subcategory?._id ?? subcategory?.id ?? row.subcategory_id ?? ""
+    ).trim();
+    if (value !== sid) continue;
+    const out = new Set<string>();
+    const services = Array.isArray(row.services) ? row.services : [];
+    for (const x of services) {
+      const id =
+        typeof x === "string" || typeof x === "number"
+          ? String(x).trim()
+          : x && typeof x === "object"
+            ? String(
+                (x as Record<string, unknown>)._id ??
+                  (x as Record<string, unknown>).id ??
+                  (x as Record<string, unknown>).service_id ??
+                  ""
+              ).trim()
+            : "";
+      if (id) out.add(id);
+    }
+    return out;
+  }
+  return null;
+}
+
+function allowedServiceIdsForSubCategory(
+  partners: Record<string, unknown>[],
+  subcategoryId: string,
+  preferredPartner?: Record<string, unknown> | null
+): Set<string> | null {
+  const sid = String(subcategoryId ?? "").trim();
+  if (!sid) return null;
+  const fromPreferred = allowedServiceIdsForPartnerSubCategory(
+    preferredPartner,
+    sid
+  );
+  if (fromPreferred != null) return fromPreferred;
+  const out = new Set<string>();
+  let found = false;
+  for (const partner of partners) {
+    const allowed = allowedServiceIdsForPartnerSubCategory(partner, sid);
+    if (allowed == null) continue;
+    found = true;
+    for (const id of allowed) out.add(id);
+  }
+  return found ? out : null;
 }
 
 function quoteSubCategoryName(
@@ -602,11 +698,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     const pid = String(form.requested_partner ?? "").trim();
     if (!pid) return null;
     return (
-      catalogPartnerRecords.find(
-        (p) =>
-          String(p.partner_id ?? p._id ?? p.user_id ?? p.id ?? "").trim() ===
-          pid
-      ) ?? null
+      catalogPartnerRecords.find((p) => catalogPartnerMatchesId(p, pid)) ??
+      null
     );
   }, [form.requested_partner, catalogPartnerRecords]);
 
@@ -641,12 +734,22 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     [quoteCategoryOptions, quoteCatalogServices, selectedPartnerCatalogRecord]
   );
 
-  const editSubCategoryOptions = useMemo(() => {
+  const relatedCatalogSubCategoryOptions = useMemo(() => {
     const cid = String(form.category_id ?? quoteRow?.category_id ?? "").trim();
-    const options = subCategoryOptionsFromPartnerCatalog(
-      selectedPartnerCatalogRecord,
-      cid
+    return subCategoryOptionsForCategoryFromCatalog(
+      catalogPartnerRecords,
+      cid,
+      selectedPartnerCatalogRecord
     );
+  }, [
+    catalogPartnerRecords,
+    selectedPartnerCatalogRecord,
+    form.category_id,
+    quoteRow?.category_id,
+  ]);
+
+  const editSubCategoryOptions = useMemo(() => {
+    const options = relatedCatalogSubCategoryOptions;
     const id = String(
       form.subcategory_id ?? quoteRow?.subcategory_id ?? ""
     ).trim();
@@ -654,10 +757,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     const savedName = String(quoteRow?.subcategory_name ?? "").trim();
     return [{ value: id, label: savedName || id }, ...options];
   }, [
-    selectedPartnerCatalogRecord,
-    form.category_id,
+    relatedCatalogSubCategoryOptions,
     form.subcategory_id,
-    quoteRow?.category_id,
     quoteRow?.subcategory_id,
     quoteRow?.subcategory_name,
   ]);
@@ -683,13 +784,34 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
   const { quoteServiceOptionsForCategory, scheduleMode } = useMemo(() => {
     const cid = String(form.category_id ?? "").trim();
-    const quoteServiceOptionsForCategory = !cid
+    const subId = String(form.subcategory_id ?? "").trim();
+    const hasRelatedSubs = relatedCatalogSubCategoryOptions.length > 0;
+    const source = selectedPartnerCatalogRecord
+      ? quoteCatalogServicesForPartner
+      : quoteCatalogServices;
+    let quoteServiceOptionsForCategory = !cid
       ? []
       : filterPartnerServicesForCategory(
-          quoteCatalogServicesForPartner,
+          source,
           selectedPartnerCatalogRecord,
           cid
         );
+    if (hasRelatedSubs && !subId) {
+      quoteServiceOptionsForCategory = [];
+    } else if (subId) {
+      const allowed = allowedServiceIdsForSubCategory(
+        catalogPartnerRecords,
+        subId,
+        selectedPartnerCatalogRecord
+      );
+      if (allowed != null) {
+        quoteServiceOptionsForCategory = allowed.size
+          ? quoteServiceOptionsForCategory.filter((o) =>
+              allowed.has(String(o.value))
+            )
+          : [];
+      }
+    }
     const sid = String(form.requested_services ?? "").trim();
     const opt = quoteServiceOptionsForCategory.find((o) => o.value === sid);
     return {
@@ -702,14 +824,20 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     };
   }, [
     form.category_id,
+    form.subcategory_id,
     form.requested_services,
+    quoteCatalogServices,
     quoteCatalogServicesForPartner,
     selectedPartnerCatalogRecord,
+    catalogPartnerRecords,
+    relatedCatalogSubCategoryOptions,
   ]);
 
   const editServiceOptions = useMemo(() => {
     if (isNewTabQuoteEdit || isCatalogLockedQuoteEdit) {
       const cid = String(form.category_id ?? quoteRow?.category_id ?? "").trim();
+      const subId = String(form.subcategory_id ?? "").trim();
+      const hasRelatedSubs = relatedCatalogSubCategoryOptions.length > 0;
       const prefilled = buildQuotePrefilledServiceOptions(
         quoteCatalogServices,
         String(
@@ -719,18 +847,19 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
         cid,
         [quoteRow?.services, apiServiceFees?.label]
       );
-      const base =
-        partnerSelected && quoteServiceOptionsForCategory.length > 0
-          ? quoteServiceOptionsForCategory
-          : cid
-            ? quoteCatalogServices.filter(
-                (o) => String(o.category_id ?? "").trim() === cid
-              )
-            : [];
+      let base = quoteServiceOptionsForCategory;
+      if (!hasRelatedSubs && !subId && base.length === 0 && cid) {
+        base = quoteCatalogServices.filter(
+          (o) => String(o.category_id ?? "").trim() === cid
+        );
+      }
       const merged = [...base];
-      for (const opt of prefilled) {
-        if (!merged.some((o) => String(o.value) === String(opt.value))) {
-          merged.unshift(opt);
+      const keepPrefilled = !hasRelatedSubs || Boolean(subId);
+      if (keepPrefilled) {
+        for (const opt of prefilled) {
+          if (!merged.some((o) => String(o.value) === String(opt.value))) {
+            merged.unshift(opt);
+          }
         }
       }
       return merged;
@@ -739,10 +868,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   }, [
     isNewTabQuoteEdit,
     isCatalogLockedQuoteEdit,
-    partnerSelected,
     quoteServiceOptionsForCategory,
     quoteCatalogServices,
+    relatedCatalogSubCategoryOptions,
     form.requested_services,
+    form.subcategory_id,
     resolvedQuoteServiceId,
     form.category_id,
     quoteRow?.service_id,
@@ -758,10 +888,8 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       const sid = String(form.requested_services ?? quoteRow?.service_id ?? "").trim();
       if (!sid) return quotePartnerOptions;
       return quotePartnerOptions.map((o) => {
-        const rec = catalogPartnerRecords.find(
-          (p) =>
-            String(p.partner_id ?? p._id ?? p.user_id ?? p.id ?? "").trim() ===
-            o.value
+        const rec = catalogPartnerRecords.find((p) =>
+          catalogPartnerMatchesId(p, o.value)
         );
         return partnerServiceInactiveForQuote(rec, sid)
           ? { ...o, label: `${o.label}${QUOTE_PARTNER_INACTIVE_SERVICE_SUFFIX}` }
@@ -1177,6 +1305,22 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       isNewTabQuoteEdit,
       setValue,
     ]
+  );
+
+  const handleSubCategorySelectChange = useCallback(
+    (name: string, value: unknown) => {
+      if (name === "subcategory_id") {
+        const prev = getValues("subcategory_id");
+        applySelectFieldValue("subcategory_id", value);
+        if (String(value ?? "") !== String(prev ?? "")) {
+          setValue("requested_services", "", { shouldValidate: false });
+          clearScheduleAndPriceFields();
+        }
+        return;
+      }
+      applySelectFieldValue(name as keyof EditQuoteFormValues, value);
+    },
+    [applySelectFieldValue, clearScheduleAndPriceFields, getValues, setValue]
   );
 
   const onSubmit = async (data: EditQuoteFormValues) => {
@@ -1617,10 +1761,18 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   const quoteStatusLocked = lockedFields || isTerminalQuoteStatus;
   const categoryFieldDisabled =
     lockedFields || (!isNewTabQuoteEdit && !partnerSelected);
+  const hasRelatedCatalogSubCategories =
+    relatedCatalogSubCategoryOptions.length > 0;
+  const subCategorySelected = Boolean(
+    String(form.subcategory_id ?? "").trim()
+  );
   const serviceFieldDisabled =
     lockedFields ||
     (!isNewTabQuoteEdit &&
-      (!partnerSelected || !String(form.category_id ?? "").trim()));
+      (!partnerSelected || !String(form.category_id ?? "").trim())) ||
+    (hasRelatedCatalogSubCategories &&
+      !subCategorySelected &&
+      !isCatalogFieldsReadOnly);
 
   return (
     <Modal
@@ -1824,9 +1976,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         fieldName="subcategory_id"
                         error={errors.subcategory_id}
                         defaultValue={form.subcategory_id}
-                        setValue={setValue as (name: string, value: unknown) => void}
+                        setValue={handleSubCategorySelectChange}
                         placeholder={
-                          !partnerSelected || !String(form.category_id ?? "").trim()
+                          !String(form.category_id ?? "").trim()
                             ? "Select category first"
                             : "Select sub category"
                         }
@@ -1842,7 +1994,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                   <Row className="gy-4 gx-md-5 align-items-start">
                   <Col xs={12} md={6}>
                       <CustomTextFieldSelect
-                        key={`edit-quote-svc-${form.category_id || "none"}-${quoteRow?.service_name || form.requested_services || ""}`}
+                        key={`edit-quote-svc-${form.category_id || "none"}-${form.subcategory_id || "none"}-${quoteRow?.service_name || form.requested_services || ""}`}
                         label="Service"
                         controlId="edit-quote-service"
                         asCol={false}
@@ -1875,12 +2027,16 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         }}
                         placeholder={
                           isNewTabQuoteEdit
-                            ? "Service from customer request"
+                            ? hasRelatedCatalogSubCategories && !subCategorySelected
+                              ? "Select sub category first"
+                              : "Service from customer request"
                             : !partnerSelected
                               ? "Select partner first"
                               : !form.category_id
                                 ? "Select category first"
-                                : "Search service name"
+                                : hasRelatedCatalogSubCategories && !subCategorySelected
+                                  ? "Select sub category first"
+                                  : "Search service name"
                         }
                         menuPortal
                         isClearable={!serviceFieldDisabled}
@@ -2038,9 +2194,9 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                       fieldName="subcategory_id"
                       error={errors.subcategory_id}
                       defaultValue={form.subcategory_id}
-                      setValue={setValue as (name: string, value: unknown) => void}
+                      setValue={handleSubCategorySelectChange}
                       placeholder={
-                        !partnerSelected || !String(form.category_id ?? "").trim()
+                        !String(form.category_id ?? "").trim()
                           ? "Select category first"
                           : "Select sub category"
                       }
@@ -2056,7 +2212,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                 <Row className="gy-4 gx-md-5 align-items-start">
                   <Col xs={12} md={6}>
                     <CustomTextFieldSelect
-                      key={`edit-quote-svc-${form.category_id || "none"}-${quoteRow?.service_name || form.requested_services || ""}`}
+                      key={`edit-quote-svc-${form.category_id || "none"}-${form.subcategory_id || "none"}-${quoteRow?.service_name || form.requested_services || ""}`}
                       label="Service"
                       controlId="edit-quote-service"
                       asCol={false}
@@ -2089,12 +2245,16 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                       }}
                       placeholder={
                         isNewTabQuoteEdit
-                          ? "Service from customer request"
+                          ? hasRelatedCatalogSubCategories && !subCategorySelected
+                            ? "Select sub category first"
+                            : "Service from customer request"
                           : !partnerSelected
                             ? "Select partner first"
                             : !form.category_id
                               ? "Select category first"
-                              : "Search service name"
+                              : hasRelatedCatalogSubCategories && !subCategorySelected
+                                ? "Select sub category first"
+                                : "Search service name"
                       }
                       menuPortal
                       isClearable={!serviceFieldDisabled}

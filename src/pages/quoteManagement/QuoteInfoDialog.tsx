@@ -157,13 +157,31 @@ const QuoteInfoDialog: React.FC<QuoteInfoDialogProps> & {
     ]
   );
 
-  const subCategoryLabel = useMemo(() => {
-    const name = String(displayQuote.subcategory_name ?? "").trim();
-    if (name) return name;
-    const id = String(displayQuote.subcategory_id ?? "").trim();
-    if (!id) return "-";
-    return id;
-  }, [displayQuote.subcategory_id, displayQuote.subcategory_name]);
+  
+const subCategoryLabel = useMemo(() => {
+  const service = (displayQuote as any).service_id;
+
+  // 1. Use the subcategory name if already available
+  const name = String(
+    (displayQuote as any).subcategory_name ??
+    service?.subcategory_name ??
+    (typeof service?.subcategory_id === "object"
+      ? service.subcategory_id?.name
+      : "") ??
+    ""
+  ).trim();
+
+  if (name) return name;
+
+  // 2. Read the subcategory ID from the correct location
+  const id =
+    (displayQuote as any).subcategory_id ??
+    service?.subcategory_id?._id ??
+    service?.subcategory_id;
+
+  return String(id ?? "").trim() || "-";
+}, [displayQuote]);
+
 
   const serviceLabel = useMemo(() => {
     const candidates = [

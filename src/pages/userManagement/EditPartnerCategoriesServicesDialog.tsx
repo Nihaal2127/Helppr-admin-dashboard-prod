@@ -93,7 +93,7 @@ function syncBlockServiceRowsFromSubs(
     ).map(normalizePartnerServiceRow);
     return {
       id: String(sub?.id ?? "").trim() || newPartnerCatalogRowId(),
-      subcategoryId: String(sub?.subcategoryId ?? ""),
+      subcategoryId: partnerCatalogRefId(sub?.subcategoryId),
       is_active: sub?.is_active !== false,
       serviceRows,
     };
@@ -152,7 +152,7 @@ function ensurePartnerCatalogBlocks(
             : [emptyPartnerServiceRow()];
       return {
         id: String(r?.id ?? "").trim() || newPartnerCatalogRowId(),
-        subcategoryId: String(r?.subcategoryId ?? ""),
+        subcategoryId: partnerCatalogRefId(r?.subcategoryId),
         is_active: r?.is_active !== false,
         serviceRows,
       };
@@ -198,14 +198,13 @@ function extractSubCategoryOptionsFromGetAll(
       item && typeof item === "object"
         ? (item as Record<string, unknown>)
         : {};
-    const value = String(
+    const value = partnerCatalogRefId(
       row._id ??
         row.id ??
         row.subcategory_id ??
         row.sub_category_id ??
-        row.value ??
-        ""
-    ).trim();
+        row.value
+    );
     if (!value || seen.has(value)) continue;
     const label =
       String(row.name ?? row.label ?? row.subcategory_name ?? "").trim() ||
@@ -522,6 +521,22 @@ function partnerServiceRefId(
   return String(ref).trim();
 }
 
+/** Catalog query id — never `[object Object]` from a populated ref. */
+function partnerCatalogRefId(value: unknown): string {
+  const id = partnerServiceRefId(
+    value as string | { _id?: string; name?: string } | null | undefined
+  );
+  if (
+    !id ||
+    id === "[object Object]" ||
+    id === "undefined" ||
+    id === "null"
+  ) {
+    return "";
+  }
+  return id;
+}
+
 function partnerServiceRefName(
   ref: string | { _id?: string; name?: string } | null | undefined,
   fallbackId: string
@@ -665,7 +680,7 @@ function buildBlocksFromPartnerServices(
         );
         if (!subId) {
           const hit = allServices.find((s) => String(s._id) === String(sid));
-          subId = String(hit?.subcategory_id ?? "").trim();
+          subId = partnerCatalogRefId(hit?.subcategory_id);
         }
         pushServiceIntoBlocks(
           blocks,
@@ -709,7 +724,7 @@ function buildBlocksFromPartnerServices(
         );
         if (!subId) {
           const hit = allServices.find((s) => String(s._id) === String(sid));
-          subId = String(hit?.subcategory_id ?? "").trim();
+          subId = partnerCatalogRefId(hit?.subcategory_id);
         }
         pushServiceIntoBlocks(
           blocks,
@@ -747,7 +762,7 @@ function buildBlocksFromPartnerServices(
     );
     if (!subId && sid) {
       const hit = allServices.find((s) => String(s._id) === String(sid));
-      subId = String(hit?.subcategory_id ?? "").trim();
+      subId = partnerCatalogRefId(hit?.subcategory_id);
     }
     const categoryActive = resolveActiveFlag(
       rowRecord.category_is_active ?? rowRecord.is_active,
@@ -815,7 +830,9 @@ function EditPartnerCategoriesServicesDialogView({
   const loadedServiceCategoryIdsRef = useRef<Set<string>>(new Set());
   const loadingServiceCategoryIdsRef = useRef<Set<string>>(new Set());
   const subCategoriesLoadingRef = useRef<Set<string>>(new Set());
+  const subCategoriesLoadedRef = useRef<Set<string>>(new Set());
   const servicesBySubLoadingRef = useRef<Set<string>>(new Set());
+  const servicesBySubLoadedRef = useRef<Set<string>>(new Set());
 
   const safeBlocks = useMemo(
     () => ensurePartnerCatalogBlocks(blocks),
@@ -905,11 +922,10 @@ function EditPartnerCategoriesServicesDialogView({
               category_name: (s as { category_name?: string }).category_name
                 ? String((s as { category_name?: string }).category_name)
                 : undefined,
-              subcategory_id: String(
-                (s as { subcategory_id?: string }).subcategory_id ??
-                  (s as { sub_category_id?: string }).sub_category_id ??
-                  ""
-              ).trim(),
+              subcategory_id: partnerCatalogRefId(
+                (s as { subcategory_id?: unknown }).subcategory_id ??
+                  (s as { sub_category_id?: unknown }).sub_category_id
+              ),
               price: Number.isFinite(priceNum) ? priceNum : undefined,
               payment_type: (s as { payment_type?: string }).payment_type
                 ? String((s as { payment_type?: string }).payment_type)
@@ -977,6 +993,10 @@ function EditPartnerCategoriesServicesDialogView({
   useEffect(() => {
     loadedServiceCategoryIdsRef.current.clear();
     loadingServiceCategoryIdsRef.current.clear();
+    subCategoriesLoadedRef.current.clear();
+    subCategoriesLoadingRef.current.clear();
+    servicesBySubLoadedRef.current.clear();
+    servicesBySubLoadingRef.current.clear();
   }, [catalogFranchiseApiId, cityId, stateId]);
 
   const partnerCategoryLabelById = useMemo(() => {
@@ -1260,10 +1280,14 @@ function EditPartnerCategoriesServicesDialogView({
 
   const loadSubCategoriesForCategory = useCallback(
     async (categoryId: string) => {
-      const cid = String(categoryId ?? "").trim();
+      const cid = partnerCatalogRefId(categoryId);
       if (!cid || catalogLocked) return;
-      if ((subCategoriesByCategoryId[cid] ?? []).length > 0) return;
-      if (subCategoriesLoadingRef.current.has(cid)) return;
+      if (
+        subCategoriesLoadedRef.current.has(cid) ||
+        subCategoriesLoadingRef.current.has(cid)
+      ) {
+        return;
+      }
       subCategoriesLoadingRef.current.add(cid);
       try {
         const params = new URLSearchParams({ category_id: cid });
@@ -1272,32 +1296,39 @@ function EditPartnerCategoriesServicesDialogView({
           "GET",
           undefined,
           false,
+          true,
           true
         );
         const options = res.success
           ? extractSubCategoryOptionsFromGetAll(res.data)
           : [];
+        subCategoriesLoadedRef.current.add(cid);
         setSubCategoriesByCategoryId((prev) => ({
           ...prev,
           [cid]: options,
         }));
       } catch {
+        subCategoriesLoadedRef.current.add(cid);
         setSubCategoriesByCategoryId((prev) => ({ ...prev, [cid]: [] }));
       } finally {
         subCategoriesLoadingRef.current.delete(cid);
       }
     },
-    [catalogLocked, subCategoriesByCategoryId]
+    [catalogLocked]
   );
 
   const loadServicesForSubCategory = useCallback(
     async (subcategoryId: string, categoryId?: string) => {
-      const sid = String(subcategoryId ?? "").trim();
+      const sid = partnerCatalogRefId(subcategoryId);
       if (!sid || catalogLocked) return;
-      if ((servicesBySubCategoryId[sid] ?? []).length > 0) return;
-      if (servicesBySubLoadingRef.current.has(sid)) return;
+      if (
+        servicesBySubLoadedRef.current.has(sid) ||
+        servicesBySubLoadingRef.current.has(sid)
+      ) {
+        return;
+      }
       servicesBySubLoadingRef.current.add(sid);
-      const cid = String(categoryId ?? "").trim();
+      const cid = partnerCatalogRefId(categoryId);
       try {
         const params = new URLSearchParams({ subcategory_id: sid });
         const res = await apiRequest(
@@ -1305,6 +1336,7 @@ function EditPartnerCategoriesServicesDialogView({
           "GET",
           undefined,
           false,
+          true,
           true
         );
         const mapped = res.success
@@ -1313,17 +1345,19 @@ function EditPartnerCategoriesServicesDialogView({
               category_id: cid || s.category_id,
             }))
           : [];
+        servicesBySubLoadedRef.current.add(sid);
         setServicesBySubCategoryId((prev) => ({
           ...prev,
           [sid]: mapped,
         }));
       } catch {
+        servicesBySubLoadedRef.current.add(sid);
         setServicesBySubCategoryId((prev) => ({ ...prev, [sid]: [] }));
       } finally {
         servicesBySubLoadingRef.current.delete(sid);
       }
     },
-    [catalogLocked, servicesBySubCategoryId]
+    [catalogLocked]
   );
 
   useEffect(() => {
@@ -1401,7 +1435,7 @@ function EditPartnerCategoriesServicesDialogView({
             const sid = String(row.serviceId ?? "").trim();
             if (!sid) continue;
             const svc = allServices.find((s) => String(s._id) === sid);
-            const subId = String(svc?.subcategory_id ?? "").trim();
+            const subId = partnerCatalogRefId(svc?.subcategory_id);
             if (subId) {
               changed = true;
               return { ...sub, subcategoryId: subId };
@@ -1423,7 +1457,7 @@ function EditPartnerCategoriesServicesDialogView({
 
   const loadServicesForCategory = useCallback(
     async (categoryId: string, options?: { force?: boolean }) => {
-      const cid = String(categoryId ?? "").trim();
+      const cid = partnerCatalogRefId(categoryId);
       if (!cid || catalogLocked) return;
       if (
         !options?.force &&
@@ -1501,7 +1535,7 @@ function EditPartnerCategoriesServicesDialogView({
     if (catalogLocked) return;
     for (const block of safeBlocks) {
       for (const sub of block.subCategoryRows ?? []) {
-        const subId = String(sub.subcategoryId ?? "").trim();
+        const subId = partnerCatalogRefId(sub.subcategoryId);
         if (!subId) continue;
         void loadServicesForSubCategory(subId, block.categoryId);
       }
@@ -1616,7 +1650,7 @@ function EditPartnerCategoriesServicesDialogView({
               })
         )
       );
-      const subId = String(patch.subcategoryId ?? "").trim();
+      const subId = partnerCatalogRefId(patch.subcategoryId);
       if (subId) {
         const block = safeBlocks.find((b) => b.id === blockId);
         void loadServicesForSubCategory(subId, block?.categoryId);
