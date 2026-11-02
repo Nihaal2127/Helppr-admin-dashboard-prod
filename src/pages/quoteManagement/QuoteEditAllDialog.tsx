@@ -204,7 +204,9 @@ function allowedServiceIdsForSubCategory(
     const allowed = allowedServiceIdsForPartnerSubCategory(partner, sid);
     if (allowed == null) continue;
     found = true;
-    for (const id of allowed) out.add(id);
+    allowed.forEach((id) => {
+      out.add(id);
+    });
   }
   return found ? out : null;
 }
