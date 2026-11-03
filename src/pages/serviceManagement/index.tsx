@@ -189,6 +189,157 @@ function extractSubCategoryPage(
   };
 }
 
+function extractCategoryIdLabels(data: unknown): { id: string; name: string }[] {
+  const root =
+    data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const nested =
+    root.data && typeof root.data === "object" && !Array.isArray(root.data)
+      ? (root.data as Record<string, unknown>)
+      : null;
+  const raw = Array.isArray(root.records)
+    ? root.records
+    : Array.isArray(root.categories)
+    ? root.categories
+    : Array.isArray(nested?.records)
+    ? (nested?.records as unknown[])
+    : Array.isArray(nested?.categories)
+    ? (nested?.categories as unknown[])
+    : Array.isArray(data)
+    ? data
+    : [];
+  const out: { id: string; name: string }[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const id = String(row._id ?? row.id ?? row.category_id ?? "").trim();
+    const name = String(row.name ?? row.label ?? row.category_name ?? "").trim();
+    if (id) out.push({ id, name });
+  }
+  return out;
+}
+
+/**
+ * Sub Category tab search: backend match on sub category name (`keyword`) plus
+ * sub categories under categories whose name matches (via `category_id`).
+ */
+async function fetchSubCategorySearchPage(opts: {
+  page: number;
+  pageSize: number;
+  keyword: string;
+  franchiseId?: string;
+  isRequest?: boolean;
+  status?: string;
+}): Promise<{ records: SubCategoryRow[]; totalPages: number; totalItems: number }> {
+  const keyword = String(opts.keyword ?? "").trim();
+  const pageSize = opts.pageSize > 0 ? opts.pageSize : 10;
+  const page = opts.page > 0 ? opts.page : 1;
+  const franchiseId = String(opts.franchiseId ?? "").trim();
+  const byId = new Map<string, SubCategoryRow>();
+
+  const applyCommon = (params: URLSearchParams) => {
+    if (opts.isRequest) params.set("is_request", "true");
+    if (opts.status === "true") {
+      params.set("is_active", "true");
+      params.set("status", "active");
+    } else if (opts.status === "false") {
+      params.set("is_active", "false");
+      params.set("status", "inactive");
+    }
+    if (franchiseId) params.set("franchise_id", franchiseId);
+  };
+
+  const mergePage = (data: unknown) => {
+    const pageData = extractSubCategoryPage(data, 200);
+    for (const row of pageData.records) {
+      const id = String(row._id ?? "").trim();
+      if (id && !byId.has(id)) byId.set(id, row);
+    }
+  };
+
+  // 1) Backend search by sub category name.
+  {
+    const params = new URLSearchParams({
+      page: "1",
+      limit: "200",
+      keyword,
+      search: keyword,
+      q: keyword,
+      name: keyword,
+    });
+    applyCommon(params);
+    const res = await apiRequest(
+      `/subcategory/getAll?${params.toString()}`,
+      "GET",
+      undefined,
+      false,
+      true
+    );
+    if (res.success) mergePage(res.data);
+  }
+
+  // 2) Categories matching keyword → their sub categories.
+  {
+    const catParams = new URLSearchParams({
+      page: "1",
+      limit: "50",
+      keyword,
+      search: keyword,
+      q: keyword,
+    });
+    if (franchiseId) catParams.set("franchise_id", franchiseId);
+    const catRes = await apiRequest(
+      `/category/getAll?${catParams.toString()}`,
+      "GET",
+      undefined,
+      false,
+      true
+    );
+    if (catRes.success) {
+      const needle = keyword.toLowerCase();
+      const categories = extractCategoryIdLabels(catRes.data);
+      const matched = categories.filter((c) =>
+        c.name.toLowerCase().includes(needle)
+      );
+      // If API already filtered by keyword, labels may be empty — use returned ids.
+      const catsToUse =
+        matched.length > 0
+          ? matched
+          : categories.filter((c) => Boolean(c.id)).slice(0, 20);
+      await Promise.all(
+        catsToUse.map(async (cat) => {
+          const params = new URLSearchParams({
+            page: "1",
+            limit: "200",
+            category_id: cat.id,
+          });
+          applyCommon(params);
+          const res = await apiRequest(
+            `/subcategory/getAll?${params.toString()}`,
+            "GET",
+            undefined,
+            false,
+            true
+          );
+          if (res.success) mergePage(res.data);
+        })
+      );
+    }
+  }
+
+  const all = Array.from(byId.values()).sort((a, b) =>
+    String(a.name ?? "").localeCompare(String(b.name ?? ""))
+  );
+  const totalItems = all.length;
+  const totalPages =
+    totalItems === 0 ? 0 : Math.ceil(totalItems / pageSize);
+  const start = (page - 1) * pageSize;
+  return {
+    records: all.slice(start, start + pageSize),
+    totalPages,
+    totalItems,
+  };
+}
+
 function humanCatalogName(value: unknown): string {
   const s = textField(value);
   if (!s || /^[a-f0-9]{24}$/i.test(s)) return "";
@@ -803,17 +954,57 @@ const ServiceManagement = () => {
           }
         } else if (selected === "box-subcategory") {
           const franchiseId = String(catalogFranchiseId ?? "").trim();
-          if (showRequestedSubCategory) {
+          const keyword = String(filters.keyword ?? "").trim();
+          if (keyword) {
+            const page = await fetchSubCategorySearchPage({
+              page: currentPage,
+              pageSize,
+              keyword,
+              franchiseId: franchiseId || undefined,
+              isRequest: showRequestedSubCategory || undefined,
+              status: String(filters.status ?? "").trim() || undefined,
+            });
+            if (generation !== fetchGenerationRef.current) return;
+            setSubCategoryList(page.records);
+            setTotalPages(page.totalPages);
+            if (showRequestedSubCategory) {
+              setSubCategoryData((prev) => ({
+                ...prev,
+                requested_subcategory: page.totalItems,
+              }));
+            } else {
+              setSubCategoryData((prev) => {
+                if (filters.status === "true") {
+                  const nextActive = page.totalItems;
+                  const nextInactive = Number(prev.Inactive ?? 0);
+                  const prevTotal = Number(prev.Total ?? 0);
+                  return {
+                    ...prev,
+                    Active: nextActive,
+                    Total:
+                      prevTotal > 0 ? prevTotal : nextActive + nextInactive,
+                  };
+                }
+                if (filters.status === "false") {
+                  const nextInactive = page.totalItems;
+                  const nextActive = Number(prev.Active ?? 0);
+                  const prevTotal = Number(prev.Total ?? 0);
+                  return {
+                    ...prev,
+                    Inactive: nextInactive,
+                    Total:
+                      prevTotal > 0 ? prevTotal : nextActive + nextInactive,
+                  };
+                }
+                return prev;
+              });
+            }
+          } else if (showRequestedSubCategory) {
             const params = new URLSearchParams({
               page: String(currentPage),
               limit: String(pageSize),
               is_request: "true",
             });
-            const keyword = String(filters.keyword ?? "").trim();
-            if (keyword) {
-              params.set("search", keyword);
-              params.set("keyword", keyword);
-            }
             if (franchiseId) params.set("franchise_id", franchiseId);
             const response = await apiRequest(
               `/subcategory/getAll?${params.toString()}`,
@@ -833,10 +1024,6 @@ const ServiceManagement = () => {
               page: String(currentPage),
               limit: String(pageSize),
             });
-            const keyword = String(filters.keyword ?? "").trim();
-            if (keyword) {
-              params.set("keyword", keyword);
-            }
             if (filters.status === "true") {
               params.set("is_active", "true");
               params.set("status", "active");
@@ -914,17 +1101,9 @@ const ServiceManagement = () => {
   );
 
   const filteredSubCategoryList = React.useMemo(() => {
+    // Keyword search is handled by GET /subcategory/getAll (name + category_name).
+    // Do not re-filter by subcategory name only — that drops category-name matches.
     let rows = [...subCategoryList];
-    const keyword = String(activeFilters.keyword ?? "")
-      .trim()
-      .toLowerCase();
-    if (keyword) {
-      rows = rows.filter((r) =>
-        String(r.name ?? "")
-          .toLowerCase()
-          .includes(keyword)
-      );
-    }
     const primary = sortBy[0];
     if (primary?.id === "name") {
       rows.sort((a, b) => {
@@ -933,11 +1112,7 @@ const ServiceManagement = () => {
       });
     }
     return rows;
-  }, [
-    subCategoryList,
-    activeFilters.keyword,
-    sortBy,
-  ]);
+  }, [subCategoryList, sortBy]);
 
   const refreshData = useCallback(
     async (selected: string) => {
@@ -1940,7 +2115,7 @@ const setSubCategoryActive = useCallback(
           }
           searchHint={
             showRequestedSubCategory
-              ? "Search Sub Category name"
+              ? "Search Sub Category name, Category"
               : showRequestedCategory
               ? "Search Category name"
               : showRequestedService
@@ -1948,7 +2123,7 @@ const setSubCategoryActive = useCallback(
               : selectedBox === "box-category"
               ? "Search Category name"
               : selectedBox === "box-subcategory"
-              ? "Search Sub Category name"
+              ? "Search Sub Category name, Category"
               : "Search Service name, Category, Sub Category"
           }
           onSearch={(value) => {

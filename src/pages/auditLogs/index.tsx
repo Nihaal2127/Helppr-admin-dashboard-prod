@@ -27,6 +27,20 @@ function displayText(value: unknown): string {
   return text || "—";
 }
 
+/** Time only from `created_at`, e.g. `6:30 PM`. */
+function formatAuditTime(isoString: string): string {
+  const raw = String(isoString ?? "").trim();
+  if (!raw) return "—";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "—";
+  let hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const period = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12;
+  if (hours === 0) hours = 12;
+  return `${hours}:${minutes} ${period}`;
+}
+
 function mapAuditLogRow(raw: Record<string, unknown>, index: number): AuditLogRow {
   const sNo = Number(raw.s_no);
   return {
@@ -299,6 +313,12 @@ const AuditLogsPage = () => {
         accessor: "createdDate",
         Cell: ({ row }: { row: { original: AuditLogRow } }) =>
           formatDate(row.original.createdDate),
+      },
+      {
+        Header: "Time",
+        id: "createdTime",
+        Cell: ({ row }: { row: { original: AuditLogRow } }) =>
+          formatAuditTime(row.original.createdDate),
       },
       // {
       //   Header: "Status",

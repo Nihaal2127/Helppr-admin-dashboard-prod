@@ -39,6 +39,7 @@ import {
   normalizeQuoteApiStatus,
   resolveEditQuoteServiceId,
   resolveFranchiseIdForQuoteForm,
+  resolveQuoteUpdateServiceId,
   updateQuote,
 } from "../../services/quoteService";
 import type { ServiceDropDownOption } from "../../services/servicesService";
@@ -222,6 +223,30 @@ function quoteSubCategoryName(
     options.find((option) => option.value === value)?.label ??
     String(savedName ?? "").trim()
   );
+}
+
+/** Accept only catalogue Mongo ids for PUT /quote/update `service_id`. */
+function isQuoteServiceMongoId(value: string): boolean {
+  return /^[a-f\d]{24}$/i.test(String(value ?? "").trim());
+}
+
+/**
+ * Resolve service id for Update even when the Service dropdown was cleared
+ * (no Sub Category selected in UI). Prefer form → resolved → saved quote id.
+ */
+function pickEditQuoteServiceIdForUpdate(
+  formServiceId: unknown,
+  resolvedServiceId: string,
+  savedServiceId: string
+): string {
+  for (const candidate of [
+    String(formServiceId ?? "").trim(),
+    String(resolvedServiceId ?? "").trim(),
+    String(savedServiceId ?? "").trim(),
+  ]) {
+    if (candidate && isQuoteServiceMongoId(candidate)) return candidate;
+  }
+  return "";
 }
 
 const toTimeStorageFromDate = (date: Date | null): string =>
@@ -607,13 +632,15 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       quoteCatalogServices
     );
     const seededServiceId = sid || seeded.requested_services;
+    const seededSubCategoryId = String(seeded.subcategory_id ?? "").trim();
     originalSelectionRef.current = {
       partner: String(seeded.requested_partner ?? "").trim(),
       service: String(seededServiceId ?? "").trim(),
     };
     reset({
       ...seeded,
-      requested_services: seededServiceId,
+      // Don't show Service until Sub Category is selected.
+      requested_services: seededSubCategoryId ? seededServiceId : "",
     });
     const t = window.setTimeout(() => {
       skipAutoPriceRef.current = false;
@@ -632,6 +659,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   /** Keep service id on locked edits when the select cannot resolve catalog options. */
   useEffect(() => {
     if (!quoteRow || isNewTabQuoteEdit) return;
+    if (!String(form.subcategory_id ?? "").trim()) return;
     const sid = resolveEditQuoteServiceId(
       quoteRow,
       apiServiceFees,
@@ -647,6 +675,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     apiServiceFees,
     quoteCatalogServices,
     form.requested_services,
+    form.subcategory_id,
     setValue,
   ]);
 
@@ -787,7 +816,6 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   const { quoteServiceOptionsForCategory, scheduleMode } = useMemo(() => {
     const cid = String(form.category_id ?? "").trim();
     const subId = String(form.subcategory_id ?? "").trim();
-    const hasRelatedSubs = relatedCatalogSubCategoryOptions.length > 0;
     const source = selectedPartnerCatalogRecord
       ? quoteCatalogServicesForPartner
       : quoteCatalogServices;
@@ -798,9 +826,10 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
           selectedPartnerCatalogRecord,
           cid
         );
-    if (hasRelatedSubs && !subId) {
+    // No Sub Category selected → no Service options / names.
+    if (!subId) {
       quoteServiceOptionsForCategory = [];
-    } else if (subId) {
+    } else {
       const allowed = allowedServiceIdsForSubCategory(
         catalogPartnerRecords,
         subId,
@@ -832,14 +861,13 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     quoteCatalogServicesForPartner,
     selectedPartnerCatalogRecord,
     catalogPartnerRecords,
-    relatedCatalogSubCategoryOptions,
   ]);
 
   const editServiceOptions = useMemo(() => {
+    const subId = String(form.subcategory_id ?? "").trim();
+    if (!subId) return [];
     if (isNewTabQuoteEdit || isCatalogLockedQuoteEdit) {
       const cid = String(form.category_id ?? quoteRow?.category_id ?? "").trim();
-      const subId = String(form.subcategory_id ?? "").trim();
-      const hasRelatedSubs = relatedCatalogSubCategoryOptions.length > 0;
       const prefilled = buildQuotePrefilledServiceOptions(
         quoteCatalogServices,
         String(
@@ -849,19 +877,10 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
         cid,
         [quoteRow?.services, apiServiceFees?.label]
       );
-      let base = quoteServiceOptionsForCategory;
-      if (!hasRelatedSubs && !subId && base.length === 0 && cid) {
-        base = quoteCatalogServices.filter(
-          (o) => String(o.category_id ?? "").trim() === cid
-        );
-      }
-      const merged = [...base];
-      const keepPrefilled = !hasRelatedSubs || Boolean(subId);
-      if (keepPrefilled) {
-        for (const opt of prefilled) {
-          if (!merged.some((o) => String(o.value) === String(opt.value))) {
-            merged.unshift(opt);
-          }
+      const merged = [...quoteServiceOptionsForCategory];
+      for (const opt of prefilled) {
+        if (!merged.some((o) => String(o.value) === String(opt.value))) {
+          merged.unshift(opt);
         }
       }
       return merged;
@@ -872,7 +891,6 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     isCatalogLockedQuoteEdit,
     quoteServiceOptionsForCategory,
     quoteCatalogServices,
-    relatedCatalogSubCategoryOptions,
     form.requested_services,
     form.subcategory_id,
     resolvedQuoteServiceId,
@@ -1332,12 +1350,25 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       return;
     }
 
+    const savedServiceId = String(
+      originalSelectionRef.current.service || quoteRow?.service_id || ""
+    ).trim();
+    // Prefer catalog-validated id; fall back to saved quote service so Update
+    // still works when Service UI was cleared pending Sub Category selection.
+    const serviceIdForPayload =
+      resolveQuoteUpdateServiceId(
+        data.requested_services,
+        resolvedQuoteServiceId,
+        quoteCatalogServices
+      ) ||
+      pickEditQuoteServiceIdForUpdate(
+        data.requested_services,
+        resolvedQuoteServiceId,
+        savedServiceId
+      );
     const formData: EditQuoteFormValues = {
       ...data,
-      requested_services:
-        String(data.requested_services ?? "").trim() ||
-        resolvedQuoteServiceId ||
-        data.requested_services,
+      requested_services: serviceIdForPayload,
     };
 
     const nextStatus = normalizeQuoteApiStatus(formData.quote_status);
@@ -1413,6 +1444,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       return;
     }
 
+    if (!serviceIdForPayload) {
+      showErrorAlert("Please select a valid service.");
+      return;
+    }
+
     if (activeScheduleMode === "range") {
       const cmp = compareIsoDateOnlyAsc(
         String(formData.requested_date ?? "").trim(),
@@ -1445,18 +1481,13 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
 
     // New-tab Update: catalog / partner / schedule / address / notes / service_price.
     // Status still goes through Update & Send.
+    // Backend rejects `subcategory_name` on update — send `subcategory_id` only.
     const patch: Record<string, unknown> = isNewTabQuoteEdit
       ? {
           category_id: String(formData.category_id ?? "").trim(),
           subcategory_id:
             String(formData.subcategory_id ?? "").trim() || undefined,
-          subcategory_name:
-            quoteSubCategoryName(
-              String(formData.subcategory_id ?? ""),
-              editSubCategoryOptions,
-              quoteRow?.subcategory_name
-            ) || undefined,
-          service_id: String(formData.requested_services ?? "").trim(),
+          service_id: serviceIdForPayload,
           partner_id: String(formData.requested_partner ?? "").trim() || undefined,
           employee_id: String(formData.employee_id ?? "").trim() || undefined,
           address_id: selectedAddressId.trim(),
@@ -1478,13 +1509,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
           category_id: String(formData.category_id ?? "").trim(),
           subcategory_id:
             String(formData.subcategory_id ?? "").trim() || undefined,
-          subcategory_name:
-            quoteSubCategoryName(
-              String(formData.subcategory_id ?? ""),
-              editSubCategoryOptions,
-              quoteRow?.subcategory_name
-            ) || undefined,
-          service_id: String(formData.requested_services ?? "").trim(),
+          service_id: serviceIdForPayload,
           partner_id: String(formData.requested_partner ?? "").trim() || undefined,
           employee_id: String(formData.employee_id ?? "").trim() || undefined,
           address_id: selectedAddressId.trim(),
@@ -1543,12 +1568,23 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
         return;
       }
 
+      const savedServiceId = String(
+        originalSelectionRef.current.service || quoteRow?.service_id || ""
+      ).trim();
+      const serviceIdForPayload =
+        resolveQuoteUpdateServiceId(
+          data.requested_services,
+          resolvedQuoteServiceId,
+          quoteCatalogServices
+        ) ||
+        pickEditQuoteServiceIdForUpdate(
+          data.requested_services,
+          resolvedQuoteServiceId,
+          savedServiceId
+        );
       const formData: EditQuoteFormValues = {
         ...data,
-        requested_services:
-          String(data.requested_services ?? "").trim() ||
-          resolvedQuoteServiceId ||
-          data.requested_services,
+        requested_services: serviceIdForPayload,
       };
 
       if (String(formData.user_id ?? "").trim() && !addressUi.ready) {
@@ -1579,6 +1615,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
           setError(field as never, error);
         });
         showErrorAlert(formatMissingRequiredFieldsAlert(missingRequired));
+        return;
+      }
+
+      if (!serviceIdForPayload) {
+        showErrorAlert("Please select a valid service.");
         return;
       }
 
@@ -1616,7 +1657,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
       const partnerId = String(formData.requested_partner ?? "").trim();
       const ok = await updateQuote(id, {
         category_id: String(formData.category_id ?? "").trim(),
-        service_id: String(formData.requested_services ?? "").trim(),
+        service_id: serviceIdForPayload,
         partner_id: partnerId,
         employee_id: String(formData.employee_id ?? "").trim() || undefined,
         address_id: selectedAddressId.trim(),
@@ -1763,8 +1804,6 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
   const quoteStatusLocked = lockedFields || isTerminalQuoteStatus;
   const categoryFieldDisabled =
     lockedFields || (!isNewTabQuoteEdit && !partnerSelected);
-  const hasRelatedCatalogSubCategories =
-    relatedCatalogSubCategoryOptions.length > 0;
   const subCategorySelected = Boolean(
     String(form.subcategory_id ?? "").trim()
   );
@@ -1772,9 +1811,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
     lockedFields ||
     (!isNewTabQuoteEdit &&
       (!partnerSelected || !String(form.category_id ?? "").trim())) ||
-    (hasRelatedCatalogSubCategories &&
-      !subCategorySelected &&
-      !isCatalogFieldsReadOnly);
+    (!subCategorySelected && !isCatalogFieldsReadOnly);
 
   return (
     <Modal
@@ -2010,7 +2047,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                             ? "Please select a service"
                             : undefined
                         }
-                        defaultValue={serviceId || form.requested_services}
+                        defaultValue={
+                          subCategorySelected
+                            ? serviceId || form.requested_services
+                            : ""
+                        }
                         setValue={(name, value) => {
                           if (name === "requested_services") {
                             const prev = getValues("requested_services");
@@ -2029,16 +2070,14 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                           );
                         }}
                         placeholder={
-                          isNewTabQuoteEdit
-                            ? hasRelatedCatalogSubCategories && !subCategorySelected
-                              ? "Select sub category first"
-                              : "Service from customer request"
-                            : !partnerSelected
-                              ? "Select partner first"
-                              : !form.category_id
-                                ? "Select category first"
-                                : hasRelatedCatalogSubCategories && !subCategorySelected
-                                  ? "Select sub category first"
+                          !subCategorySelected
+                            ? "Select sub category first"
+                            : isNewTabQuoteEdit
+                              ? "Service from customer request"
+                              : !partnerSelected
+                                ? "Select partner first"
+                                : !form.category_id
+                                  ? "Select category first"
                                   : "Search service name"
                         }
                         menuPortal
@@ -2228,7 +2267,11 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                           ? "Please select a service"
                           : undefined
                       }
-                      defaultValue={serviceId || form.requested_services}
+                      defaultValue={
+                        subCategorySelected
+                          ? serviceId || form.requested_services
+                          : ""
+                      }
                       setValue={(name, value) => {
                         if (name === "requested_services") {
                           const prev = getValues("requested_services");
@@ -2247,16 +2290,14 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         );
                       }}
                       placeholder={
-                        isNewTabQuoteEdit
-                          ? hasRelatedCatalogSubCategories && !subCategorySelected
-                            ? "Select sub category first"
-                            : "Service from customer request"
-                          : !partnerSelected
-                            ? "Select partner first"
-                            : !form.category_id
-                              ? "Select category first"
-                              : hasRelatedCatalogSubCategories && !subCategorySelected
-                                ? "Select sub category first"
+                        !subCategorySelected
+                          ? "Select sub category first"
+                          : isNewTabQuoteEdit
+                            ? "Service from customer request"
+                            : !partnerSelected
+                              ? "Select partner first"
+                              : !form.category_id
+                                ? "Select category first"
                                 : "Search service name"
                       }
                       menuPortal

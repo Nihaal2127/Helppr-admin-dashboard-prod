@@ -1318,22 +1318,40 @@ export function buildQuotePrefilledServiceOptions(
   ];
 }
 
-/** Resolve catalogue / partner-providing service id for quote edit forms. */
+function isQuoteCatalogMongoId(value: string): boolean {
+  return /^[a-f\d]{24}$/i.test(String(value ?? "").trim());
+}
+
+/**
+ * Resolve catalogue service id for quote edit forms / update payload.
+ * Prefer row/fees/catalog matches; never invent a non-catalogue id.
+ */
 export function resolveEditQuoteServiceId(
   row: QuoteRow | null | undefined,
   fees: ServiceDropDownOption | undefined,
   catalogServices: ServiceDropDownOption[] = []
 ): string {
+  const catalogIds = new Set(
+    catalogServices
+      .map((o) => String(o.value ?? "").trim())
+      .filter((id) => isQuoteCatalogMongoId(id))
+  );
+
   const fromRow = String(row?.service_id ?? "").trim();
-  if (fromRow) return fromRow;
+  if (fromRow && isQuoteCatalogMongoId(fromRow)) {
+    if (catalogIds.size === 0 || catalogIds.has(fromRow)) return fromRow;
+  }
+
   const fromFees = String(fees?.value ?? "").trim();
-  if (fromFees) return fromFees;
+  if (fromFees && isQuoteCatalogMongoId(fromFees)) {
+    if (catalogIds.size === 0 || catalogIds.has(fromFees)) return fromFees;
+  }
 
   const name = pickHumanQuoteServiceLabel(
     [row?.service_name, row?.requested_services, row?.services],
     ""
   );
-  if (!name) return "";
+  if (!name) return fromRow && isQuoteCatalogMongoId(fromRow) ? fromRow : "";
 
   const cid = String(row?.category_id ?? "").trim();
   const lower = name.toLowerCase();
@@ -1343,16 +1361,34 @@ export function resolveEditQuoteServiceId(
     if (!cid) return true;
     return String(o.category_id ?? "") === cid;
   });
-  if (withCategory.length === 1) {
-    return String(withCategory[0].value ?? "").trim();
-  }
-  if (withCategory.length > 1) {
+  if (withCategory.length >= 1) {
     return String(withCategory[0].value ?? "").trim();
   }
   const anyMatch = catalogServices.find(
     (o) => String(o.label ?? "").trim().toLowerCase() === lower
   );
-  return anyMatch ? String(anyMatch.value ?? "").trim() : "";
+  if (anyMatch) return String(anyMatch.value ?? "").trim();
+  return fromRow && isQuoteCatalogMongoId(fromRow) ? fromRow : "";
+}
+
+/** Service id safe to send on `PUT /quote/update/:id` (`service_id`). */
+export function resolveQuoteUpdateServiceId(
+  formServiceId: string | undefined | null,
+  resolvedServiceId: string | undefined | null,
+  catalogServices: ServiceDropDownOption[] = []
+): string {
+  const formId = String(formServiceId ?? "").trim();
+  if (formId && isQuoteCatalogMongoId(formId)) return formId;
+
+  const resolved = String(resolvedServiceId ?? "").trim();
+  if (!resolved || !isQuoteCatalogMongoId(resolved)) return "";
+
+  const inCatalog = catalogServices.some(
+    (o) => String(o.value ?? "").trim() === resolved
+  );
+  // When catalog is loaded, require a known catalogue id (blocks partner-package ids).
+  if (catalogServices.length > 0 && !inCatalog) return "";
+  return resolved;
 }
 
 function applyQuoteServiceNameFromFees(
@@ -2080,20 +2116,41 @@ function refId(v: unknown): string {
 /**
  * Catalog service id for quote add/edit dropdowns.
  * GET /quote/get may return `service_id` as a partner-providing row with nested `service_id.service`.
+ * Never returns the partner-providing package `_id` (that is not a catalogue service id).
  */
 export function resolveQuoteCatalogServiceId(
   r: Record<string, unknown>
 ): string {
   const servicePackageRef = nestedObj(r.service_id);
+  const packageId = servicePackageRef ? refId(servicePackageRef) : "";
+
   const innerCatalogService = servicePackageRef
     ? nestedObj(servicePackageRef.service_id)
     : undefined;
-
   const fromInner = refId(innerCatalogService);
-  if (fromInner) return fromInner;
+  if (fromInner && fromInner !== packageId) return fromInner;
 
-  const fromPackageServiceField = normalizeMongoRef(servicePackageRef?.service_id);
-  if (fromPackageServiceField) return fromPackageServiceField;
+  const rawPackageServiceField = servicePackageRef?.service_id;
+  if (
+    typeof rawPackageServiceField === "string" ||
+    typeof rawPackageServiceField === "number"
+  ) {
+    const sid = str(rawPackageServiceField);
+    if (sid && sid !== packageId) return sid;
+  } else {
+    const fromPackageServiceField = normalizeMongoRef(rawPackageServiceField);
+    if (fromPackageServiceField && fromPackageServiceField !== packageId) {
+      return fromPackageServiceField;
+    }
+  }
+
+  const nestedService = servicePackageRef
+    ? nestedObj(servicePackageRef.service)
+    : undefined;
+  const fromNestedService = refId(nestedService);
+  if (fromNestedService && fromNestedService !== packageId) {
+    return fromNestedService;
+  }
 
   if (typeof r.service_id === "string" || typeof r.service_id === "number") {
     return str(r.service_id);
@@ -2102,7 +2159,7 @@ export function resolveQuoteCatalogServiceId(
   const flatService = nestedObj(r.service);
   if (flatService) return refId(flatService);
 
-  return refId(servicePackageRef);
+  return "";
 }
 
 function nestedObj(v: unknown): Record<string, unknown> | undefined {
@@ -2675,8 +2732,7 @@ export function mapServerQuoteRecord(r: Record<string, unknown>): QuoteRow {
     state: state || undefined,
     address_line: address_line || undefined,
     pincode: pincode || undefined,
-    service_id:
-      catalogServiceId || refId(servicePackageRef) || undefined,
+    service_id: catalogServiceId || undefined,
     partner_id: refId(r.partner_id) || refId(partnerRef) || undefined,
     partner_user_id:
       str(r.partner_user_id ?? partnerRef?.user_id) || undefined,
