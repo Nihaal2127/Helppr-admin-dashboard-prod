@@ -907,18 +907,68 @@ function resolveFranchiseServiceListIndex(
   for (const item of map.all_services ?? []) {
     if (!item || typeof item !== "object") continue;
     const doc = item as Record<string, unknown>;
-    const mongo =
-      apiDocumentId(doc._id) ||
-      apiDocumentId(doc) ||
-      String(doc._id ?? "").trim();
-    const altSvc = String(doc.service_id ?? "").trim();
-    if (!idsLooselyEqual(mongo, id) && !idsLooselyEqual(altSvc, id)) continue;
-    for (const cand of [mongo, altSvc].filter((x) => String(x ?? "").trim())) {
-      idx = findFranchiseServiceListIndex(map.services_list, String(cand));
+    const cands = catalogueServiceDocIdCandidates(doc);
+    if (!cands.some((c) => idsLooselyEqual(c, id))) continue;
+    for (const cand of cands) {
+      idx = findFranchiseServiceListIndex(map.services_list, cand);
       if (idx >= 0) return idx;
     }
   }
   return -1;
+}
+
+/** Prefer Mongo `_id` when the toggled id matches any catalogue doc key. */
+function resolveCanonicalFranchiseServiceId(
+  map: FranchiseServiceMapCache,
+  catalogueMongoOrServiceId: string
+): string {
+  const id = String(catalogueMongoOrServiceId ?? "").trim();
+  if (!id) return id;
+  for (const item of map.all_services ?? []) {
+    if (!item || typeof item !== "object") continue;
+    const doc = item as Record<string, unknown>;
+    const cands = catalogueServiceDocIdCandidates(doc);
+    if (!cands.some((c) => idsLooselyEqual(c, id))) continue;
+    return (
+      apiDocumentId(doc._id) ||
+      apiDocumentId(doc) ||
+      cands[0] ||
+      id
+    );
+  }
+  return id;
+}
+
+function syncFranchiseServiceActiveInactiveArrays(
+  map: FranchiseServiceMapCache,
+  serviceId: string,
+  is_active: boolean
+): Pick<FranchiseServiceMapCache, "active_services" | "inactive_services"> {
+  const sid = String(serviceId ?? "").trim();
+  const out: Pick<
+    FranchiseServiceMapCache,
+    "active_services" | "inactive_services"
+  > = {};
+  const strip = (arr: string[]) =>
+    arr.filter((x) => !idsLooselyEqual(String(x), sid));
+
+  if (Array.isArray(map.active_services)) {
+    const next = strip(map.active_services.map(String));
+    if (is_active) next.push(sid);
+    out.active_services = next;
+  } else if (typeof map.active_services === "boolean") {
+    out.active_services = map.active_services;
+  }
+
+  if (Array.isArray(map.inactive_services)) {
+    const next = strip(map.inactive_services.map(String));
+    if (!is_active) next.push(sid);
+    out.inactive_services = next;
+  } else if (typeof map.inactive_services === "boolean") {
+    out.inactive_services = map.inactive_services;
+  }
+
+  return out;
 }
 
 function findFranchiseCategoryListIndex(
@@ -2001,105 +2051,114 @@ export async function setServiceActive(
   if (!catalogueId) return false;
 
   const map = await ensureFranchiseServiceMapLoaded(franchiseIdOverride);
-  if (map?.mapId && map.services_list.length) {
-    const idx = resolveFranchiseServiceListIndex(map, catalogueId);
-    if (idx >= 0) {
-      const services_list = map.services_list.map((s, i) =>
-        i === idx ? { service_id: s.service_id, is_active } : { ...s }
-      );
-      const body: Record<string, unknown> = {
-        services_list,
-        franchise_id: map.franchise_id,
-      };
-      if (map.active_services !== undefined && typeof map.active_services === "boolean") {
-        body.active_services = map.active_services;
-      }
-      if (
-        map.inactive_services !== undefined &&
-        typeof map.inactive_services === "boolean"
-      ) {
-        body.inactive_services = map.inactive_services;
-      }
-      if (map.order_number !== undefined) {
-        body.order_number = map.order_number;
-      }
-      const response = await apiRequest(
-        ApiPaths.UPDATE_FRANCHISE_SERVICE(map.mapId),
-        "PUT",
-        body,
-        false,
-        false,
-        false,
-        true
-      );
-      if (!response.success) return false;
-      const rec = recordFromUpdateResponse(response.data);
-      const hintPatch = {
-        ...buildServiceCatalogHintsFromServiceDocArray(map.all_services ?? []),
-        ...(rec
-          ? buildServiceCatalogHintsFromRawList(rec.services_list)
-          : {}),
-      };
-      if (rec) {
-        const recObj = rec as Record<string, unknown>;
-        const fromNorm = normalizeFranchiseServiceList(rec.services_list);
-        const fromRec = hydrateFranchiseServiceListFromActiveInactiveArrays(
-          fromNorm,
-          recObj.active_services,
-          recObj.inactive_services
-        );
-        const baseList = fromRec.length ? fromRec : services_list;
-        const nextRaw = mergeFranchiseServiceListFromAllServices(
-          baseList,
-          map.all_services,
-          rec.services_order
-        );
-        const next = hydrateFranchiseServiceListFromActiveInactiveArrays(
-          nextRaw,
-          recObj.active_services,
-          recObj.inactive_services
-        );
-        const snap = franchiseServiceActiveInactiveSnapshotFromRecord(recObj);
-        cachedFranchiseServiceMap = {
-          ...map,
-          services_list: next.length ? next : baseList,
-          ...(map.all_services?.length ? { all_services: map.all_services } : {}),
-          serviceCatalogHints: {
-            ...(map.serviceCatalogHints ?? {}),
-            ...hintPatch,
-          },
-          ...snap,
-          order_number:
-            typeof rec.order_number === "number"
-              ? rec.order_number
-              : map.order_number,
-        };
-      } else {
-        const all_services = Array.isArray(map.all_services)
-          ? map.all_services.map((item) => {
-              if (!item || typeof item !== "object") return item;
-              const o = item as Record<string, unknown>;
-              const id =
-                apiDocumentId(o._id) || String(o._id ?? "").trim();
-              if (!idsLooselyEqual(id, catalogueId)) return item;
-              return {
-                ...o,
-                franchise_active: is_active,
-                franchise_enabled: is_active,
-              };
-            })
-          : map.all_services;
-        cachedFranchiseServiceMap = {
-          ...map,
-          services_list,
-          ...(all_services ? { all_services } : {}),
-        };
-      }
-      return true;
-    }
+  if (!map?.mapId || !map.services_list.length) return false;
+
+  let workingList = map.services_list.map((s) => ({ ...s }));
+  let idx = resolveFranchiseServiceListIndex(
+    { ...map, services_list: workingList },
+    catalogueId
+  );
+
+  // Service can appear in the UI catalogue but be missing from mapping list
+  // (id mismatch / stale cache). Append canonical id so Inactive → Active works.
+  if (idx < 0) {
+    const canonical = resolveCanonicalFranchiseServiceId(map, catalogueId);
+    workingList = [
+      ...workingList,
+      { service_id: canonical, is_active },
+    ];
+    idx = workingList.length - 1;
   }
 
-  return false;
+  const services_list = workingList.map((s, i) =>
+    i === idx ? { service_id: s.service_id, is_active } : { ...s }
+  );
+  const toggledId = String(services_list[idx]?.service_id ?? catalogueId).trim();
+  const activeInactivePatch = syncFranchiseServiceActiveInactiveArrays(
+    map,
+    toggledId,
+    is_active
+  );
+
+  const body: Record<string, unknown> = {
+    services_list,
+    franchise_id: map.franchise_id,
+    ...activeInactivePatch,
+  };
+  if (map.order_number !== undefined) {
+    body.order_number = map.order_number;
+  }
+  const response = await apiRequest(
+    ApiPaths.UPDATE_FRANCHISE_SERVICE(map.mapId),
+    "PUT",
+    body,
+    false,
+    false,
+    false,
+    true
+  );
+  if (!response.success) return false;
+  const rec = recordFromUpdateResponse(response.data);
+  const hintPatch = {
+    ...buildServiceCatalogHintsFromServiceDocArray(map.all_services ?? []),
+    ...(rec ? buildServiceCatalogHintsFromRawList(rec.services_list) : {}),
+  };
+  if (rec) {
+    const recObj = rec as Record<string, unknown>;
+    const fromNorm = normalizeFranchiseServiceList(rec.services_list);
+    const fromRec = hydrateFranchiseServiceListFromActiveInactiveArrays(
+      fromNorm,
+      recObj.active_services,
+      recObj.inactive_services
+    );
+    const baseList = fromRec.length ? fromRec : services_list;
+    const nextRaw = mergeFranchiseServiceListFromAllServices(
+      baseList,
+      map.all_services,
+      rec.services_order
+    );
+    const next = hydrateFranchiseServiceListFromActiveInactiveArrays(
+      nextRaw,
+      recObj.active_services,
+      recObj.inactive_services
+    );
+    const snap = franchiseServiceActiveInactiveSnapshotFromRecord(recObj);
+    cachedFranchiseServiceMap = {
+      ...map,
+      services_list: next.length ? next : baseList,
+      ...(map.all_services?.length ? { all_services: map.all_services } : {}),
+      serviceCatalogHints: {
+        ...(map.serviceCatalogHints ?? {}),
+        ...hintPatch,
+      },
+      ...snap,
+      order_number:
+        typeof rec.order_number === "number"
+          ? rec.order_number
+          : map.order_number,
+    };
+  } else {
+    const all_services = Array.isArray(map.all_services)
+      ? map.all_services.map((item) => {
+          if (!item || typeof item !== "object") return item;
+          const o = item as Record<string, unknown>;
+          const cands = catalogueServiceDocIdCandidates(o);
+          if (!cands.some((c) => idsLooselyEqual(c, catalogueId))) return item;
+          return {
+            ...o,
+            franchise_active: is_active,
+            franchise_enabled: is_active,
+          };
+        })
+      : map.all_services;
+    cachedFranchiseServiceMap = {
+      ...map,
+      services_list,
+      ...activeInactivePatch,
+      ...(all_services ? { all_services } : {}),
+    };
+  }
+  return true;
 }
 
 /**

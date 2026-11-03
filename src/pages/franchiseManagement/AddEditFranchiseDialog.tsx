@@ -1010,13 +1010,22 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
     };
   }, [selectedState, needsEditFormData]);
 
-  const serviceOptions = useMemo(
-    () => [
-      { value: "select-all", label: "Select All" },
-      ...allServices.map((s) => ({ value: s._id, label: s.name })),
-    ],
-    [allServices]
-  );
+  /** Services dropdown: only backend services for the selected sub categories. */
+  const serviceOptions = useMemo(() => {
+    const selectedSubs = new Set(
+      subCategoryIds.map((id) => String(id).trim()).filter(Boolean)
+    );
+    if (selectedSubs.size === 0) return [];
+    const rows = allServices
+      .filter((s) => {
+        const subId = String(s.subcategory_id ?? "").trim();
+        return Boolean(subId && selectedSubs.has(subId));
+      })
+      .map((s) => ({ value: s._id, label: s.name }));
+    return rows.length > 0
+      ? [{ value: "select-all", label: "Select All" }, ...rows]
+      : [];
+  }, [allServices, subCategoryIds]);
 
   const selectedCategoryOptions = useMemo(
     () => categoryOptions.filter((c) => categoryIds.includes(c.value)),
@@ -1702,48 +1711,31 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
   const handleCategorySelection = (selectedOptions: OptionType[]) => {
     catalogSelectionTouchedRef.current = true;
     const selectedIds = parseMultiSelectIds(selectedOptions, categoryOptions);
-    const removedCategoryIds = categoryIds.filter(
-      (id) => !selectedIds.includes(id)
-    );
     setCategoryIds(selectedIds);
-    setSubCategoryIds((prev) =>
-      prev.filter((id) => {
-        const opt = subCategoryOptions.find((o) => String(o.value) === String(id));
-        if (!opt) return false;
-        const parentId = resolveSubcategoryParentCategoryId(
-          opt,
-          allServices,
-          serviceIds,
-          categoryOptions
-        );
-        return Boolean(parentId && selectedIds.includes(String(parentId)));
+
+    const nextSubCategoryIds = subCategoryIds.filter((id) => {
+      const opt = subCategoryOptions.find((o) => String(o.value) === String(id));
+      if (!opt) return false;
+      const parentId = resolveSubcategoryParentCategoryId(
+        opt,
+        allServices,
+        serviceIds,
+        categoryOptions
+      );
+      return Boolean(parentId && selectedIds.includes(String(parentId)));
+    });
+    setSubCategoryIds(nextSubCategoryIds);
+
+    // Services stay empty until sub categories are chosen; prune orphans.
+    const nextSubSet = new Set(nextSubCategoryIds.map(String));
+    setServiceIds((prev) =>
+      prev.filter((sid) => {
+        const svc = allServices.find((x) => String(x._id) === String(sid));
+        if (!svc) return false;
+        const subId = String(svc.subcategory_id ?? "").trim();
+        return Boolean(subId && nextSubSet.has(subId));
       })
     );
-
-    const auto = allServices
-      .filter((svc) => selectedIds.includes(String(svc.category_id)))
-      .map((svc) => String(svc._id));
-
-    setServiceIds((prev) => {
-      const withoutDeselectedCategories = prev.filter((sid) => {
-        const svc = allServices.find((x) => String(x._id) === String(sid));
-        if (!svc) return true;
-        return !removedCategoryIds.includes(String(svc.category_id));
-      });
-      const manual = withoutDeselectedCategories.filter((sid) => {
-        const svc = allServices.find((x) => String(x._id) === String(sid));
-        if (!svc) return true;
-        if (selectedIds.length === 0) return true;
-        return !selectedIds.includes(String(svc.category_id));
-      });
-      const merged = auto.concat(manual);
-      const uniq: string[] = [];
-      for (let i = 0; i < merged.length; i++) {
-        const id = merged[i];
-        if (uniq.indexOf(id) === -1) uniq.push(id);
-      }
-      return uniq;
-    });
   };
 
   const handleSubCategorySelection = (selectedOptions: OptionType[]) => {
@@ -1753,6 +1745,16 @@ const AddEditFranchiseDialog: React.FC<AddEditFranchiseDialogProps> & {
       subCategorySelectOptions
     );
     setSubCategoryIds(selectedIds);
+
+    const nextSubSet = new Set(selectedIds.map(String));
+    setServiceIds((prev) =>
+      prev.filter((sid) => {
+        const svc = allServices.find((x) => String(x._id) === String(sid));
+        if (!svc) return false;
+        const subId = String(svc.subcategory_id ?? "").trim();
+        return Boolean(subId && nextSubSet.has(subId));
+      })
+    );
   };
 
   const handleServiceSelection = (selectedOptions: OptionType[]) => {

@@ -90,6 +90,14 @@ function orderSubCategoryId(order?: OrderModel | null): string {
   return String(ref ?? "").trim();
 }
 
+function nestedSubCategoryName(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const rec = value as Record<string, unknown>;
+  return String(
+    rec.name ?? rec.label ?? rec.subcategory_name ?? rec.sub_category_name ?? ""
+  ).trim();
+}
+
 function subCategoryOptionsFromPartnerCatalog(
   partner: Record<string, unknown> | null | undefined,
   categoryId: string
@@ -146,6 +154,16 @@ function orderSubCategoryName(
       rec?.subcategory_name ?? rec?.sub_category_name ?? ""
     ).trim();
     if (saved) return saved;
+    // GET /order/get/:id often returns the name on subcategory_info only.
+    const fromInfo = nestedSubCategoryName(
+      rec?.subcategory_info ?? rec?.sub_category_info
+    );
+    if (fromInfo) return fromInfo;
+    const ref = rec?.subcategory_id ?? rec?.sub_category_id;
+    if (ref && typeof ref === "object") {
+      const nested = nestedSubCategoryName(ref);
+      if (nested) return nested;
+    }
   }
   return value;
 }

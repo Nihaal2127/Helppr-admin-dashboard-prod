@@ -1897,9 +1897,25 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
       </div>
 
       <style>{`
+        .custom-utilty-tools-inline.custom-utilty-tools-inline--quotes-wide-search.quote-mgmt-search-compact {
+          width: 100%;
+          justify-content: flex-end !important;
+          flex-wrap: nowrap !important;
+          align-items: flex-end;
+        }
+        .custom-utilty-tools-inline.custom-utilty-tools-inline--quotes-wide-search.quote-mgmt-search-compact .custom-utility-control-slot {
+          flex: 0 0 auto !important;
+          flex-wrap: nowrap !important;
+          margin-left: 0;
+        }
         .custom-utilty-tools-inline.custom-utilty-tools-inline--quotes-wide-search.quote-mgmt-search-compact > .d-flex.flex-column {
           max-width: 22rem;
-          flex: 0 1 20rem;
+          flex: 0 1 20rem !important;
+          min-width: 12rem;
+          margin-left: 0;
+        }
+        .custom-utilty-tools-inline.custom-utilty-tools-inline--quotes-wide-search.quote-mgmt-search-compact > .d-flex.align-items-end {
+          flex: 0 0 auto;
         }
       `}</style>
       <CustomUtilityBox
