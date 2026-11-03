@@ -1977,6 +1977,7 @@ const QuoteEditAllDialog: React.FC<QuoteEditAllDialogProps> & {
                         register={register as unknown as UseFormRegister<AddQuoteFormValues>}
                         fieldName="subcategory_id"
                         error={errors.subcategory_id}
+                        showRequiredMark
                         defaultValue={form.subcategory_id}
                         setValue={handleSubCategorySelectChange}
                         placeholder={

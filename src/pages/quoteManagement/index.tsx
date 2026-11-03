@@ -2509,6 +2509,7 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
                           }
                           fieldName="subcategory_id"
                           error={addQuoteErrors.subcategory_id}
+                          showRequiredMark
                           requiredMessage={
                             quoteSubCategoryOptions.length
                               ? "Please select a sub category"
@@ -2788,6 +2789,7 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
                           }
                           fieldName="subcategory_id"
                           error={addQuoteErrors.subcategory_id}
+                          showRequiredMark
                           requiredMessage={
                             quoteSubCategoryOptions.length
                               ? "Please select a sub category"
