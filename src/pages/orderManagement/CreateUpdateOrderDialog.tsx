@@ -207,6 +207,44 @@ function subCategoryOptionsFromPartnerCatalog(
   return options.sort((a, b) => a.label.localeCompare(b.label));
 }
 
+/** Service IDs linked to a partner subcategory in related-catalog rows. */
+function allowedServiceIdsForPartnerSubCategory(
+  partner: Record<string, unknown> | null | undefined,
+  subcategoryId: string
+): Set<string> | null {
+  const sid = String(subcategoryId ?? "").trim();
+  if (!partner || !sid) return null;
+  const providing = partner.active_subcategories_providing;
+  const rows = Array.isArray(providing) ? providing : [];
+  for (const item of rows) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, any>;
+    const subcategory = row.subcategory;
+    const value = String(
+      subcategory?._id ?? subcategory?.id ?? row.subcategory_id ?? ""
+    ).trim();
+    if (value !== sid) continue;
+    const out = new Set<string>();
+    const services = Array.isArray(row.services) ? row.services : [];
+    for (const x of services) {
+      const id =
+        typeof x === "string" || typeof x === "number"
+          ? String(x).trim()
+          : x && typeof x === "object"
+            ? String(
+                (x as Record<string, unknown>)._id ??
+                  (x as Record<string, unknown>).id ??
+                  (x as Record<string, unknown>).service_id ??
+                  ""
+              ).trim()
+            : "";
+      if (id) out.add(id);
+    }
+    return out;
+  }
+  return null;
+}
+
 const sanId = (id: string) => String(id).replace(/[^a-zA-Z0-9_]/g, "_");
 const fieldState = (cardId: string) => `addrCard_${sanId(cardId)}_state`;
 const fieldCity = (cardId: string) => `addrCard_${sanId(cardId)}_city`;
@@ -1727,6 +1765,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
   const createCustomerIdWatch = watch("customer_user_id") as string | undefined;
   const createPartnerIdWatch = watch("requested_partner") as string | undefined;
   const createCategoryIdWatch = watch("category_id") as string | undefined;
+  const createSubCategoryIdWatch = watch("subcategory_id") as string | undefined;
   const createServiceIdWatch = watch("requested_services") as string | undefined;
   const createServicePriceWatch = watch("create_service_price") as
     | string
@@ -1988,13 +2027,28 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
 
   const { quoteServiceOptionsForCategory, scheduleMode } = useMemo(() => {
     const cid = String(createCategoryIdWatch ?? "").trim();
-    const quoteServiceOptionsForCategory = !cid
-      ? []
-      : filterPartnerServicesForCategory(
-          quoteCatalogServicesForPartner,
-          selectedPartnerCatalogRecord,
-          cid
-        );
+    const subId = String(createSubCategoryIdWatch ?? "").trim();
+    // No Sub Category selected → no Service options.
+    let quoteServiceOptionsForCategory: typeof quoteCatalogServicesForPartner =
+      [];
+    if (cid && subId) {
+      quoteServiceOptionsForCategory = filterPartnerServicesForCategory(
+        quoteCatalogServicesForPartner,
+        selectedPartnerCatalogRecord,
+        cid
+      );
+      const allowed = allowedServiceIdsForPartnerSubCategory(
+        selectedPartnerCatalogRecord,
+        subId
+      );
+      if (allowed != null) {
+        quoteServiceOptionsForCategory = allowed.size
+          ? quoteServiceOptionsForCategory.filter((o) =>
+              allowed.has(String(o.value))
+            )
+          : [];
+      }
+    }
     const sid = String(createServiceIdWatch ?? "").trim();
     const opt = quoteServiceOptionsForCategory.find((o) => o.value === sid);
     return {
@@ -2007,6 +2061,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
     };
   }, [
     createCategoryIdWatch,
+    createSubCategoryIdWatch,
     createServiceIdWatch,
     quoteCatalogServicesForPartner,
     selectedPartnerCatalogRecord,
@@ -3868,9 +3923,26 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                             fieldName="subcategory_id"
                             error={errors.subcategory_id}
                             defaultValue={getValues("subcategory_id")}
-                            setValue={
-                              setValue as (name: string, value: any) => void
-                            }
+                            setValue={(name: string, value: any) => {
+                              setValue(name, value, {
+                                shouldValidate: createFormSubmitted,
+                              });
+                              if (name === "subcategory_id") {
+                                setValue("requested_services", "", {
+                                  shouldValidate: false,
+                                });
+                                patchCreateScheduleField("service_date", "");
+                                patchCreateScheduleField("service_date_to", "");
+                                patchCreateScheduleField("service_from_time", "");
+                                patchCreateScheduleField("service_to_time", "");
+                                setValue("service_schedule_duration", "", {
+                                  shouldValidate: false,
+                                });
+                                setValue("create_service_price", "", {
+                                  shouldValidate: false,
+                                });
+                              }
+                            }}
                             placeholder={
                               !createOrderPartnerSelected
                                 ? "Select partner first"
@@ -3893,7 +3965,7 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                     <Row className="gy-3 gx-md-4 align-items-start">
                         <Col xs={12} md={6}>
                         <CustomTextFieldSelect
-                            key={`create-order-svc-${createCategoryIdWatch || "none"}`}
+                            key={`create-order-svc-${createCategoryIdWatch || "none"}-${createSubCategoryIdWatch || "none"}`}
                             label="Requested Services"
                             controlId="create-order-service"
                             asCol={false}
@@ -3939,14 +4011,17 @@ const CreateUpdateOrderDialog: React.FC<CreateUpdateOrderDialogProps> & {
                                 ? "Select partner first"
                                 : !String(createCategoryIdWatch ?? "").trim()
                                 ? "Select category first"
-                                : "Select service"
+                                : !String(createSubCategoryIdWatch ?? "").trim()
+                                  ? "Select sub category first"
+                                  : "Select service"
                           }
                           menuPortal
                             isClearable
                             isDisabled={
                               createOrderFieldsLocked ||
                               !createOrderPartnerSelected ||
-                              !String(createCategoryIdWatch ?? "").trim()
+                              !String(createCategoryIdWatch ?? "").trim() ||
+                              !String(createSubCategoryIdWatch ?? "").trim()
                             }
                         />
                       </Col>

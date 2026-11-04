@@ -571,15 +571,16 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
 
   const { quoteServiceOptionsForCategory, scheduleMode } = useMemo(() => {
     const cid = String(addQuote.category_id ?? "").trim();
-    let quoteServiceOptionsForCategory = !cid
-      ? []
-      : filterPartnerServicesForCategory(
-          quoteCatalogServicesForPartner,
-          selectedPartnerCatalogRecord,
-          cid
-        );
     const subId = String(addQuote.subcategory_id ?? "").trim();
-    if (subId) {
+    // No Sub Category selected → no Service options.
+    let quoteServiceOptionsForCategory: typeof quoteCatalogServicesForPartner =
+      [];
+    if (cid && subId) {
+      quoteServiceOptionsForCategory = filterPartnerServicesForCategory(
+        quoteCatalogServicesForPartner,
+        selectedPartnerCatalogRecord,
+        cid
+      );
       const allowed = allowedServiceIdsForPartnerSubCategory(
         selectedPartnerCatalogRecord,
         subId
@@ -2582,7 +2583,9 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
                           fieldName="requested_services"
                           error={addQuoteErrors.requested_services}
                           requiredMessage={
-                            addQuote.category_id && addQuotePartnerSelected
+                            addQuote.category_id &&
+                            addQuote.subcategory_id &&
+                            addQuotePartnerSelected
                               ? "Please select a service"
                               : undefined
                           }
@@ -2628,14 +2631,17 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
                               ? "Select partner first"
                               : !addQuote.category_id
                               ? "Select category first"
-                              : "Search service name"
+                              : !addQuote.subcategory_id
+                                ? "Select sub category first"
+                                : "Search service name"
                           }
                           menuPortal
                           isClearable
                           isDisabled={
                             addQuoteFieldsLocked ||
                             !addQuotePartnerSelected ||
-                            !String(addQuote.category_id ?? "").trim()
+                            !String(addQuote.category_id ?? "").trim() ||
+                            !String(addQuote.subcategory_id ?? "").trim()
                           }
                         />
                       </Col>
@@ -2862,7 +2868,9 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
                           fieldName="requested_services"
                           error={addQuoteErrors.requested_services}
                           requiredMessage={
-                            addQuote.category_id && addQuotePartnerSelected
+                            addQuote.category_id &&
+                            addQuote.subcategory_id &&
+                            addQuotePartnerSelected
                               ? "Please select a service"
                               : undefined
                           }
@@ -2908,14 +2916,17 @@ const [isServiceFilterLoading, setIsServiceFilterLoading] = useState(false);
                               ? "Select partner first"
                               : !addQuote.category_id
                               ? "Select category first"
-                              : "Search service name"
+                              : !addQuote.subcategory_id
+                                ? "Select sub category first"
+                                : "Search service name"
                           }
                           menuPortal
                           isClearable
                           isDisabled={
                             addQuoteFieldsLocked ||
                             !addQuotePartnerSelected ||
-                            !String(addQuote.category_id ?? "").trim()
+                            !String(addQuote.category_id ?? "").trim() ||
+                            !String(addQuote.subcategory_id ?? "").trim()
                           }
                         />
                       </Col>
