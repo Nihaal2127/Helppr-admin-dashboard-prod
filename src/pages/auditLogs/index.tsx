@@ -443,7 +443,7 @@ const AuditLogsPage = () => {
 
       <CustomUtilityBox
         key={`audit-logs-utility-${utilitySearchKey}`}
-        searchHint="Search module, reference, action, user"
+        searchHint="Search module, franchise, performed by, action"
         hideMoreIcon
         toolsInlineRow
         toolsInlineClassName="audit-logs-tools"
