@@ -17,6 +17,7 @@ type AuditLogRow = {
   action: string;
   reference: string;
   description: string;
+  role: string;
   performedBy: string;
   franchise: string;
   status: string;
@@ -25,6 +26,84 @@ type AuditLogRow = {
 function displayText(value: unknown): string {
   const text = value == null ? "" : String(value).trim();
   return text || "—";
+}
+
+function rawText(value: unknown): string {
+  return value == null ? "" : String(value).trim();
+}
+
+/** Role from `performed_by_role` on `GET /audit-log/getAll`. */
+function rawAuditRole(raw: Record<string, unknown>): unknown {
+  const performedByRole = raw.performed_by_role;
+  if (performedByRole && typeof performedByRole === "object" && !Array.isArray(performedByRole)) {
+    const row = performedByRole as Record<string, unknown>;
+    const nested = row.name ?? row.label ?? row.role ?? row.role_name;
+    if (rawText(nested)) return nested;
+  }
+  if (rawText(performedByRole)) return performedByRole;
+
+  const direct = [
+    raw.role,
+    raw.performed_by_role_name,
+    raw.user_role,
+    raw.role_name,
+    raw.actor_role,
+    raw.performed_by_type,
+    raw.user_type,
+  ].find((value) => rawText(value));
+  if (direct != null) return direct;
+
+  const actor = raw.performed_by;
+  if (actor && typeof actor === "object" && !Array.isArray(actor)) {
+    const row = actor as Record<string, unknown>;
+    return (
+      row.role ??
+      row.role_name ??
+      row.user_role ??
+      row.type ??
+      row.user_type
+    );
+  }
+  return undefined;
+}
+
+/** Dashboard role codes and user-type numbers as readable labels. */
+function formatAuditRole(value: unknown): string {
+  const text = rawText(value);
+  if (!text) return "—";
+  const key = text.toLowerCase().replace(/[\s-]+/g, "_");
+  const labels: Record<string, string> = {
+    "5": "Super Admin",
+    admin: "Super Admin",
+    super_admin: "Super Admin",
+    superadmin: "Super Admin",
+    "1": "Franchise Admin",
+    franchise_admin: "Franchise Admin",
+    "3": "Employee",
+    employee: "Employee",
+    franchise_employee: "Employee",
+    "6": "Staff",
+    staff: "Staff",
+    "2": "Partner",
+    partner: "Partner",
+    "4": "Customer",
+    customer: "Customer",
+    user: "Customer",
+  };
+  return labels[key] ?? text;
+}
+
+function isSuperAdminRole(value: unknown): boolean {
+  return formatAuditRole(value) === "Super Admin";
+}
+
+/** Franchise name, except a super admin action shows Super Admin instead of a hyphen or franchise name. */
+function formatAuditFranchise(
+  franchiseName: unknown,
+  role: unknown
+): string {
+  if (isSuperAdminRole(role)) return "Super Admin";
+  return displayText(franchiseName);
 }
 
 /** Time only from `created_at`, e.g. `6:30 PM`. */
@@ -43,6 +122,7 @@ function formatAuditTime(isoString: string): string {
 
 function mapAuditLogRow(raw: Record<string, unknown>, index: number): AuditLogRow {
   const sNo = Number(raw.s_no);
+  const role = rawAuditRole(raw);
   return {
     id: String(raw._id ?? index),
     sNo: Number.isFinite(sNo) && sNo > 0 ? sNo : index + 1,
@@ -51,8 +131,9 @@ function mapAuditLogRow(raw: Record<string, unknown>, index: number): AuditLogRo
     action: displayText(raw.action),
     reference: displayText(raw.reference),
     description: displayText(raw.description),
+    role: formatAuditRole(role),
     performedBy: displayText(raw.performed_by_name),
-    franchise: displayText(raw.franchise_name),
+    franchise: formatAuditFranchise(raw.franchise_name, role),
     status: displayText(raw.status),
   };
 }
@@ -91,12 +172,16 @@ const AUDIT_LOGS_PAGE_STYLES = `
     justify-content: flex-end !important;
     align-items: flex-end !important;
     margin-top: 0 !important;
-    margin-bottom: 16px !important;
+    margin-bottom: 28px !important;
     width: 100%;
   }
 
   .audit-logs-page .custom-utilty-box-title {
     display: none !important;
+  }
+
+  .audit-logs-page .custom-table-wrapper {
+    margin-top: 12px !important;
   }
 
   .audit-logs-page .audit-logs-tools {
@@ -303,6 +388,10 @@ const AuditLogsPage = () => {
       {
         Header: "Description",
         accessor: "description",
+      },
+      {
+        Header: "Role",
+        accessor: "role",
       },
       {
         Header: "Performed By",
